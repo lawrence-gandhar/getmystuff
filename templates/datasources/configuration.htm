@@ -1,0 +1,296 @@
+{% extends "base/layout.htm" %}
+{% block title %}Configuration — {{ table_name }} | GetMyStuff{% endblock %}
+
+{% block content %}
+<div class="container-fluid mt-4">
+
+    <!-- HEADER -->
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h4 class="mb-0 fw-semibold">
+                <i class="las la-sliders-h text-primary"></i>
+                Configuration — <span class="text-primary">{{ table_name }}</span>
+            </h4>
+        </div>
+
+        <div class="d-flex gap-2">
+            <button
+                class="btn btn-primary btn-sm"
+                type="button"
+                data-bs-toggle="offcanvas"
+                data-bs-target="#toolConfigOffcanvas"
+            >
+                <i class="las la-plus"></i> New Tool Config
+            </button>
+            <button
+                class="btn btn-outline-secondary btn-sm"
+                type="button"
+                data-bs-toggle="offcanvas"
+                data-bs-target="#agentConfigOffcanvas"
+            >
+                <i class="las la-robot"></i> New Agent Config
+            </button>
+        </div>
+    </div>
+
+    <!-- RESPONSE TOAST -->
+    <div id="config-response" class="mb-3"></div>
+
+    <!-- COLUMN SUMMARY CARD -->
+    <div class="card shadow-sm mb-4">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <span class="fw-semibold">
+                <i class="las la-table text-primary"></i> Column Summary
+            </span>
+            {% if config.column_count %}
+                <span class="badge bg-primary">{{ config.column_count }} columns</span>
+            {% endif %}
+        </div>
+        <div class="card-body p-0">
+            {% if config and config.column_data %}
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>#</th>
+                                <th>Column Name</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for col_name, col in config.column_data.items() %}
+                                <tr>
+                                    <td class="text-muted small">{{ loop.index }}</td>
+                                    <td>{{ col.column_name }}</td>
+                                    <td>
+                                        {% if col.status == "active" %}
+                                            <span class="badge bg-success">Active</span>
+                                        {% else %}
+                                            <span class="badge bg-secondary">Inactive</span>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            {% else %}
+                <div class="p-4 text-muted text-center">
+                    <i class="las la-info-circle"></i> No column data available.
+                </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- TOOL BASE CONFIGURATIONS CARD -->
+    <div class="card shadow-sm mb-4">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <span class="fw-semibold">
+                <i class="las la-tools text-warning"></i> Tool Base Configurations
+            </span>
+            <button
+                class="btn btn-primary btn-sm"
+                type="button"
+                data-bs-toggle="offcanvas"
+                data-bs-target="#toolConfigOffcanvas"
+            >
+                <i class="las la-plus"></i> Add
+            </button>
+        </div>
+        <div class="card-body" id="tool-config-list">
+            <div class="text-muted text-center py-3">
+                <i class="las la-inbox"></i> No tool configurations yet.
+            </div>
+        </div>
+    </div>
+
+    <!-- AGENT CONFIGURATIONS CARD -->
+    <div class="card shadow-sm mb-4">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <span class="fw-semibold">
+                <i class="las la-robot text-info"></i> Agent Configurations
+            </span>
+            <button
+                class="btn btn-outline-secondary btn-sm"
+                type="button"
+                data-bs-toggle="offcanvas"
+                data-bs-target="#agentConfigOffcanvas"
+            >
+                <i class="las la-plus"></i> Add
+            </button>
+        </div>
+        <div class="card-body" id="agent-config-list">
+            <div class="text-muted text-center py-3">
+                <i class="las la-inbox"></i> No agent configurations yet.
+            </div>
+        </div>
+    </div>
+
+</div>
+
+
+<!-- ============================================
+     OFFCANVAS 1 — CREATE TOOL BASE CONFIG
+     ============================================ -->
+<div
+    class="offcanvas offcanvas-end"
+    tabindex="-1"
+    id="toolConfigOffcanvas"
+    aria-labelledby="toolConfigOffcanvasLabel"
+    style="width: 40vw;"
+>
+    <div class="offcanvas-header border-bottom">
+        <h5 class="offcanvas-title" id="toolConfigOffcanvasLabel">
+            <i class="las la-tools text-warning"></i> New Tool Base Config
+        </h5>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+    </div>
+
+    <div class="offcanvas-body">
+
+        <p class="text-muted small mb-4">
+            Define a base configuration for a tool against the
+            <strong>{{ table_name }}</strong> datasource object.
+        </p>
+
+        <form
+            hx-post="/datasource/{{ datasource_id }}/config/create"
+            hx-target="#config-response"
+            hx-swap="innerHTML"
+            hx-on::after-request="if(event.detail.successful){ this.reset(); bootstrap.Offcanvas.getInstance(document.getElementById('toolConfigOffcanvas')).hide(); }"
+        >
+
+            <!-- TOOL NAME -->
+            <div class="mb-3">
+                <label class="form-label fw-semibold">
+                    Tool Name <span class="text-danger">*</span>
+                </label>
+                <input
+                    type="text"
+                    name="tool_name"
+                    class="form-control"
+                    placeholder="e.g. sql_query_tool"
+                    required
+                >
+                <div class="form-text">Unique identifier for this tool within the datasource.</div>
+            </div>
+
+            <!-- BASE CONFIG JSON -->
+            <div class="mb-4">
+                <label class="form-label fw-semibold">Base Config</label>
+                <textarea
+                    name="base_config"
+                    class="form-control font-monospace"
+                    rows="10"
+                    placeholder='{
+  "max_rows": 100,
+  "timeout": 30
+}'
+                >{}</textarea>
+                <div class="form-text">JSON object. Leave as <code>{}</code> for defaults.</div>
+            </div>
+
+            <div class="d-flex gap-2">
+                <button type="submit" class="btn btn-primary">
+                    <i class="las la-save"></i> Save Config
+                </button>
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="offcanvas">
+                    Cancel
+                </button>
+            </div>
+
+        </form>
+    </div>
+</div>
+
+
+<!-- ============================================
+     OFFCANVAS 2 — CREATE AGENT CONFIG
+     ============================================ -->
+<div
+    class="offcanvas offcanvas-end"
+    tabindex="-1"
+    id="agentConfigOffcanvas"
+    aria-labelledby="agentConfigOffcanvasLabel"
+    style="width: 40vw;"
+>
+    <div class="offcanvas-header border-bottom">
+        <h5 class="offcanvas-title" id="agentConfigOffcanvasLabel">
+            <i class="las la-robot text-info"></i> New Agent Config
+        </h5>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+    </div>
+
+    <div class="offcanvas-body">
+
+        <p class="text-muted small mb-4">
+            Override tool behaviour for a specific agent against
+            <strong>{{ table_name }}</strong>.
+        </p>
+
+        <form
+            hx-post="/datasource/{{ datasource_id }}/agent-config/create"
+            hx-target="#config-response"
+            hx-swap="innerHTML"
+            hx-on::after-request="if(event.detail.successful){ this.reset(); bootstrap.Offcanvas.getInstance(document.getElementById('agentConfigOffcanvas')).hide(); }"
+        >
+
+            <!-- BASE CONFIG ID -->
+            <div class="mb-3">
+                <label class="form-label fw-semibold">
+                    Tool Base Config <span class="text-danger">*</span>
+                </label>
+                <input
+                    type="text"
+                    name="datasource_base_config_id"
+                    class="form-control font-monospace"
+                    placeholder="UUID of the base config"
+                    required
+                >
+                <div class="form-text">The tool base config this agent override applies to.</div>
+            </div>
+
+            <!-- AGENT NAME -->
+            <div class="mb-3">
+                <label class="form-label fw-semibold">
+                    Agent Name <span class="text-danger">*</span>
+                </label>
+                <input
+                    type="text"
+                    name="agent_name"
+                    class="form-control"
+                    placeholder="e.g. reporting_agent"
+                    required
+                >
+                <div class="form-text">Unique agent identifier within this base config.</div>
+            </div>
+
+            <!-- POLICY JSON -->
+            <div class="mb-4">
+                <label class="form-label fw-semibold">Policy JSON</label>
+                <textarea
+                    name="policy_json"
+                    class="form-control font-monospace"
+                    rows="10"
+                    placeholder='{
+  "allowed_tables": ["orders"],
+  "read_only": true
+}'
+                >{}</textarea>
+                <div class="form-text">JSON policy object for this agent's access rules.</div>
+            </div>
+
+            <div class="d-flex gap-2">
+                <button type="submit" class="btn btn-info text-white">
+                    <i class="las la-save"></i> Save Agent Config
+                </button>
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="offcanvas">
+                    Cancel
+                </button>
+            </div>
+
+        </form>
+    </div>
+</div>
+
+{% endblock %}

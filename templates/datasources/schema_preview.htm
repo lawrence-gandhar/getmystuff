@@ -61,7 +61,7 @@
                 <th>#</th>
                 <th>Table/Collection Name</th>
                 <th width="220">Status</th>
-                <th width="220">Action</th>
+                <th  width="280" class="text-nowrap">Action</th>
             </tr>
         </thead>
         <tbody>
@@ -100,6 +100,13 @@
                         >
                             Deactivate
                         </button>
+                        <!-- CONFIG BUTTON (ONLY WHEN INACTIVE) -->
+                        <a 
+                            href="/datasource/{{ datasource_id }}/{{ obj }}/configuration"
+                            class="btn btn-sm btn-outline-secondary"
+                        >
+                            Config
+                        </a>
                     {% else %}
                         <button 
                             class="btn btn-sm btn-outline-success"

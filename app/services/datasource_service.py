@@ -179,6 +179,30 @@ async def get_user_datasources(
     )
 
 
+async def get_tables_columns(datasource, table_name):
+    schema = await get_table_schema(datasource, table_name)
+
+    column_data = {}
+    configuration_data = {}
+
+    for column in schema:
+        column_name = column.get("column") or column.get("column_name")
+
+        column_data[column_name] = {
+            "column_name": column_name,
+            "status": "active",      # default
+        }
+
+    configuration_data = {
+        "table_name": table_name,
+        "column_count": len(column_data),
+        "column_data": column_data,
+        "status": "active"
+    }
+
+    return configuration_data
+
+
 async def collect_datasource_metadata(datasource):
 
     """
@@ -197,28 +221,8 @@ async def collect_datasource_metadata(datasource):
 
         # Loop tables
         for table_name in tables:
-
-            schema = await get_table_schema(datasource, table_name)
-
-            column_data = {}
-
-            for column in schema:
-                column_name = column.get("column") or column.get("column_name")
-
-                column_data[column_name] = {
-                    "column_name": column_name,
-                    "status": "active",      # default
-                }
-
-            configuration_data[table_name] = {
-                "table_name": table_name,
-                "column_count": len(column_data),
-                "column_data": column_data,
-                "status": "active"
-            }
-
-        return configuration_data
-
+            configuration_data[table_name] = await get_tables_columns(datasource, table_name)
+        
     except Exception as e:
         return False
     

@@ -15,6 +15,7 @@ from litestar.connection import Request
 from app.routes.base_routes import AuthController
 from app.routes.dashboard_routes import DashboardController
 from app.routes.datasource_routes import DataSourceController
+from app.routes.datasource_config_routes import DataSourceConfigurations
 
 from app.db.db_sessions import get_db
 from app.db.base import Base
@@ -92,7 +93,8 @@ app = Litestar(
         root,
         AuthController,
         DashboardController,
-        DataSourceController
+        DataSourceController,
+        DataSourceConfigurations
     ],
     debug=True,
     request_class=HTMXRequest,
