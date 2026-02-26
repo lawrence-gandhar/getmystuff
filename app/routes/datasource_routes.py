@@ -13,7 +13,9 @@ from app.services.datasource_service import (
     create_datasource,
     get_datasource_objects,
     get_user_datasources,
-    toggle_column_status_service
+    toggle_column_status_service,
+    toggle_table_status_service,
+    search_sort_tables
 )
 from app.db.auth import require_auth
 
@@ -85,7 +87,8 @@ class DataSourceController(Controller):
             template_name="datasources/schema_preview.htm",
             context={
                 "objects": data["objects"],
-                "datasource_id":datasource_id
+                "datasource_id":datasource_id,
+                "configuration_data": data["configuration_data"]
             },
         )
 
@@ -176,4 +179,71 @@ class DataSourceController(Controller):
                 "datasource_id": str(datasource_id),
                 "table_name": table_name,
             },
+        )
+
+    @post("/{datasource_id:uuid}/table/{table_name:str}/toggle-status")
+    async def toggle_table_status(
+        self,
+        datasource_id: uuid.UUID,
+        table_name: str,
+        request: Request,
+        db: AsyncSession,
+        user: User,
+    ) -> Template:
+
+        form = await request.form()
+        new_status = form.get("status")
+
+        if new_status not in {"active", "inactive"}:
+            raise HTTPException(status_code=400)
+
+        datasource = await toggle_table_status_service(
+            db=db,
+            datasource_id=datasource_id,
+            user_id=user.id,
+            table_name=table_name,
+            new_status=new_status,
+        )
+
+        if not datasource:
+            raise HTTPException(status_code=404)
+
+        return Template(
+            template_name="datasources/table_row.htm",
+            context={
+                "datasource": datasource,
+                "datasource_id": str(datasource_id),
+                "table_name": table_name
+            },
+        )
+    
+    @get("/{datasource_id:uuid}/tables")
+    async def list_tables(
+        self,
+        datasource_id: uuid.UUID,
+        request: Request,
+        db: AsyncSession,
+        user: User,
+    ) -> Template:
+        search = request.query_params.get("search", "").lower()
+        status_filter = request.query_params.get("status_filter", "all")
+        sort_by = request.query_params.get("sort_by", "az")
+
+        tables = await search_sort_tables(
+            db=db,
+            datasource_id=datasource_id,
+            user_id=user.id,
+            search=search,
+            status_filter=status_filter,
+            sort_by=sort_by
+        )
+
+        print(tables)
+
+        return Template(
+            template_name="datasources/table_list.htm",
+            context={
+                "objects": tables,
+                "datasource_id": datasource_id,
+            }
         )

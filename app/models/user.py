@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Mapped, mapped_column
-from sqlalchemy import String, Boolean, DateTime, func
+from sqlalchemy import String, Boolean, DateTime, func, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID
 import uuid
 
@@ -26,7 +26,8 @@ class User(Base):
     # Hashed password
     password: Mapped[str] = mapped_column(
         String(255),
-        nullable=False
+        nullable=False,
+        index=True
     )
 
     # Optional role (admin, user, etc.)
@@ -44,11 +45,57 @@ class User(Base):
     # Timestamps
     created_at: Mapped[DateTime] = mapped_column(
         DateTime(timezone=True),
-        server_default=func.now()
+        server_default=func.now(),
+        index=True
     )
 
     updated_at: Mapped[DateTime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
-        onupdate=func.now()
+        onupdate=func.now(),
+        index=True
     )
+
+class UserSubscription(Base):
+    __tablename__ = "user_subscriptions"
+
+    # UUID primary key (real UUID type)
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4
+    )
+
+    subscription_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        default=uuid.uuid4,
+        index=True
+    )
+
+    is_active: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True
+    )
+
+    created_at: Mapped[DateTime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        index=True
+    )
+
+    updated_at: Mapped[DateTime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        index=True
+    )
+
+    expiry_date: Mapped[DateTime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        index=True
+    )
+
+    
+

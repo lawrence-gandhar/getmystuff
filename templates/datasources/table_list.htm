@@ -1,0 +1,77 @@
+{% if objects %}
+<div id="tableContainer">
+    <div class="mb-2 text-muted small">
+        Showing {{ objects|length }} tables
+    </div>
+
+    <div class="table-responsive">
+        <table class="table table-hover align-middle">
+            <thead class="table-light">
+                <tr>
+                    <th>#</th>
+                    <th>Table/Collection Name</th>
+                    <th width="220">Status</th>
+                    <th width="220">Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for obj in objects %}
+                <tr id="row-{{ obj['table_name'] }}">
+                    <td>{{ loop.index }}</td>
+                    <td>{{ obj["table_name"] }} </td>
+
+                    <td>
+                        {% if obj["status"] == "active" %}
+                            <span class="badge bg-success">Active</span>
+                        {% else %}
+                            <span class="badge bg-secondary">Inactive</span>
+                        {% endif %}
+                    </td>
+
+                    <td>
+                        <button 
+                            class="btn btn-sm btn-outline-primary"
+                            hx-get="/datasource/{{ datasource_id }}/table/{{ obj['table_name'] }}/view"
+                            hx-target="#viewModalContent"
+                            hx-swap="innerHTML"
+                            data-bs-toggle="modal"
+                            data-bs-target="#viewModal"
+                        >
+                            View
+                        </button>
+
+                        {% if obj["status"] == "active" %}
+                            <button 
+                                class="btn btn-sm btn-outline-danger"
+                                hx-post="/datasource/{{ datasource_id }}/table/{{ obj['table_name'] }}/toggle-status"
+                                hx-vals='{"status": "inactive"}'
+                                hx-target="#row-{{ obj['table_name'] }}"
+                                hx-swap="outerHTML"
+                            >
+                                Deactivate
+                            </button>
+                        {% else %}
+                            <button 
+                                class="btn btn-sm btn-outline-success"
+                                hx-post="/datasource/{{ datasource_id }}/table/{{ obj['table_name'] }}/toggle-status"
+                                hx-vals='{"status": "active"}'
+                                hx-target="#row-{{ obj['table_name'] }}"
+                                hx-swap="outerHTML"
+                            >
+                                Activate
+                            </button>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% else %}
+<div id="tableContainer">
+    <div class="text-muted">
+        No objects found.
+    </div>
+</div>
+{% endif %}

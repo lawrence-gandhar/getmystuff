@@ -1,0 +1,54 @@
+<tr id='row-{{ table_name }}'>
+    <td>{{ datasource.get("index") or '' }}</td>
+
+    <td>
+        {{ table_name }}
+    </td>
+
+    <td>
+        {% if datasource["status"] == "active" %}
+            <span class="badge bg-success">Active</span>
+        {% else %}
+            <span class="badge bg-secondary">Inactive</span>
+        {% endif %}
+    </td>
+
+    <td>
+
+        <!-- VIEW BUTTON -->
+        <button
+            class="btn btn-sm btn-outline-primary"
+            hx-get="/datasource/{{ datasource_id }}/table/{{ table_name }}/view"
+            hx-target="#viewModalContent"
+            hx-swap="innerHTML"
+            data-bs-toggle="modal"
+            data-bs-target="#viewModal"
+        >
+            View
+        </button>
+
+        <!-- TOGGLE BUTTON -->
+        {% if datasource["status"] == "active" %}
+            <button 
+                class="btn btn-sm btn-outline-danger"
+                hx-post="/datasource/{{ datasource_id }}/table/{{ table_name }}/toggle-status"
+                hx-vals='{"status": "inactive"}'
+                hx-target="#row-{{ table_name }}"
+                hx-swap="outerHTML"
+            >
+                Deactivate
+            </button>
+        {% else %}
+            <button 
+                class="btn btn-sm btn-outline-success"
+                hx-post="/datasource/{{ datasource_id }}/table/{{ table_name }}/toggle-status"
+                hx-vals='{"status": "active"}'
+                hx-target="#row-{{ table_name }}"
+                hx-swap="outerHTML"
+            >
+                Activate
+            </button>
+        {% endif %}
+
+    </td>
+</tr>

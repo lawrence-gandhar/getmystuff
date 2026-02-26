@@ -19,6 +19,8 @@ from app.db.db_utils import (
     test_mongo_connection
 )
 
+from typing import Optional
+
 
 datasource_crud = CRUDQueryBuilder(DataSource)
 
@@ -243,9 +245,6 @@ async def toggle_column_status_service(
         return None
 
     configuration[table_name]["column_data"][column_name]["status"] = new_status
-    configuration[table_name]["column_data"][column_name]["enabled"] = (
-        True if new_status == "active" else False
-    )
 
     datasource.configuration_data = configuration
     flag_modified(datasource, "configuration_data")
@@ -255,3 +254,78 @@ async def toggle_column_status_service(
 
     # Return updated column as dict
     return configuration[table_name]["column_data"][column_name]
+
+
+async def toggle_table_status_service(
+    db: AsyncSession,
+    datasource_id: uuid.UUID,
+    user_id: uuid.UUID,
+    table_name: str,
+    new_status: str,
+):
+
+    datasource = await db.get(DataSource, datasource_id)
+
+    if not datasource or datasource.user_id != user_id:
+        return None
+
+    configuration = datasource.configuration_data or {}
+
+    if table_name not in configuration:
+        return None
+
+    configuration[table_name]["status"] = new_status
+
+    datasource.configuration_data = configuration
+    flag_modified(datasource, "configuration_data")
+
+    await db.commit()
+    await db.refresh(datasource)
+
+    # Return updated column as dict
+    return configuration[table_name]
+
+async def search_sort_tables(
+    db: AsyncSession,
+    datasource_id: uuid.UUID,
+    user_id: uuid.UUID,
+    search: Optional[str]=None,
+    status_filter: Optional[str]=None,
+    sort_by: Optional[str]=None
+):
+    datasource = await db.get(DataSource, datasource_id)
+
+    if not datasource or datasource.user_id != user_id:
+        return None
+
+    configuration = datasource.configuration_data or {}
+
+    tables = list(configuration.keys())
+
+    # print("Tables", tables)
+
+    # SEARCH
+    if search:
+        tables = [t for t in tables if search in t.lower()]
+
+    # FILTER
+    if status_filter != "all":
+        tables = [
+            t for t in tables
+            if configuration[t]["status"] == status_filter
+        ]
+
+    # SORT
+    reverse = True if sort_by == "za" else False
+    tables.sort(reverse=reverse)
+
+    # Return list of table configuration objects with table_name included
+    result = []
+    for table_name in tables:
+        table_config = configuration[table_name].copy()
+        table_config["table_name"] = table_name
+        table_config.pop("column_data")
+        table_config.pop("column_count")
+        result.append(table_config)
+
+    return result
