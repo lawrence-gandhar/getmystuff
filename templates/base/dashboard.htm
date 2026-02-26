@@ -1,0 +1,149 @@
+{% extends "base/layout.htm" %}
+{% block title %}
+Dashboard | GetMyStuff
+{% endblock %}
+
+
+{% block content %}
+<!-- DASHBOARD CONTENT -->
+<div class="container dashboard-container">
+
+    <div class="row g-4">
+
+        <div class="col-md-4">
+            <div class="dashboard-card">
+                <div class="card-icon mb-3">
+                    <i class="las la-chart-line"></i>
+                </div>
+                <h5>Analytics</h5>
+                <p class="text-muted">View performance metrics and reports.</p>
+            </div>
+        </div>
+
+        <div class="col-md-4">
+            <div class="dashboard-card">
+                <div class="card-icon mb-3">
+                    <i class="las la-box"></i>
+                </div>
+                <h5>My Items</h5>
+                <p class="text-muted">Manage and track your stored items.</p>
+            </div>
+        </div>
+
+        <div class="col-md-4">
+            <div class="dashboard-card" role="button"
+                data-bs-toggle="offcanvas"
+                data-bs-target="#settingsOffcanvas">
+                <div class="card-icon mb-3">
+                    <i class="las la-cog"></i>
+                </div>
+                <h5>Settings</h5>
+                <p class="text-muted">Add and manage data sources.</p>
+            </div>
+        </div>
+
+    </div>
+
+</div>
+
+<!-- OFFCANVAS SETTINGS PANEL -->
+<div class="offcanvas offcanvas-end" tabindex="-1" id="settingsOffcanvas">
+    <div class="offcanvas-header">
+        <h5 class="offcanvas-title">
+            <i class="las la-database"></i> Add Data Source
+        </h5>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+    </div>
+
+    <div class="offcanvas-body">
+
+        <div id="datasource-message"></div>
+
+        <div id="loading-spinner" class="htmx-indicator text-center mt-2">
+            <div class="spinner-border text-primary"></div>
+        </div>
+
+        <form 
+            hx-post="/datasource/create"
+            hx-target="#datasource-message"
+            hx-swap="innerHTML"
+            hx-indicator="#loading-spinner"
+        >
+
+            <!-- Database Type -->
+            <div class="mb-3">
+                <label class="form-label">Database Type</label>
+                <select class="form-select" name="db_type" required>
+                    <option value="">Select Database</option>
+                    <option value="postgres">PostgreSQL</option>
+                    <option value="mysql">MySQL</option>
+                    <option value="mongodb">MongoDB</option>
+                    <option value="sqlite">SQLite</option>
+                    <option value="oracle">Oracle</option>
+                </select>
+            </div>
+
+            <!-- Host -->
+            <div class="mb-3">
+                <label class="form-label">Host</label>
+                <input type="text" class="form-control" name="host" placeholder="localhost">
+            </div>
+
+            <!-- Port -->
+            <div class="mb-3">
+                <label class="form-label">Port</label>
+                <input type="number" class="form-control" name="port" placeholder="5432">
+            </div>
+
+            <!-- Database Name -->
+            <div class="mb-3">
+                <label class="form-label">Database Name</label>
+                <input type="text" class="form-control" name="database_name">
+            </div>
+
+            <!-- Username -->
+            <div class="mb-3">
+                <label class="form-label">Username</label>
+                <input type="text" class="form-control" name="username">
+            </div>
+
+            <!-- Password -->
+            <div class="mb-3">
+                <label class="form-label">Password</label>
+                <input type="password" class="form-control" name="password">
+            </div>
+
+            <!-- Submit -->
+            <div class="d-grid mt-4">
+                <button type="submit" class="btn btn-primary">
+                    <i class="las la-plus-circle"></i> Add Data Source
+                </button>
+            </div>
+
+        </form>
+
+    </div>
+</div>
+
+<script src="https://unpkg.com/htmx.org@1.9.10"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+
+<script>
+document.querySelector("select[name='db_type']")
+.addEventListener("change", function() {
+
+    const db = this.value;
+    const hostField = document.querySelector("input[name='host']").closest(".mb-3");
+    const portField = document.querySelector("input[name='port']").closest(".mb-3");
+
+    if (db === "sqlite") {
+        hostField.style.display = "none";
+        portField.style.display = "none";
+    } else {
+        hostField.style.display = "block";
+        portField.style.display = "block";
+    }
+});
+</script>
+
+{% endblock %}

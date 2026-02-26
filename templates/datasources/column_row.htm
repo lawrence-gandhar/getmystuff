@@ -1,0 +1,28 @@
+<tr id="column-row-{{ col.column_name }}">
+    <td>-</td>
+    <td>{{ col.column_name }}</td>
+
+    <td>
+        {% if col.status == "active" %}
+            <span class="badge bg-success">Active</span>
+        {% else %}
+            <span class="badge bg-secondary">Inactive</span>
+        {% endif %}
+    </td>
+
+    <td>
+        {% set next_status = "inactive" if col.status == "active" else "active" %}
+        {% set btn_class = "btn-outline-danger" if col.status == "active" else "btn-outline-success" %}
+        {% set btn_label = "Deactivate" if col.status == "active" else "Activate" %}
+
+        <button 
+            class="btn btn-sm {{ btn_class }}"
+            hx-post="/datasource/{{ datasource_id }}/table/{{ table_name }}/column/{{ col.column_name }}/toggle"
+            hx-vals='{"status":"{{ next_status }}"}'
+            hx-target="#column-row-{{ col.column_name }}"
+            hx-swap="outerHTML"
+        >
+            {{ btn_label }}
+        </button>
+    </td>
+</tr>

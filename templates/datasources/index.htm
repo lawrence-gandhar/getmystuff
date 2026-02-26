@@ -1,0 +1,106 @@
+{% extends "base/layout.htm" %}
+{% block title %}
+Datasources | GetMyStuff
+{% endblock %}
+
+
+{% block content %}
+    <div class="container mt-4" style="max-width: 100%;">
+    <!-- Bootstrap Table -->
+    <div class="card shadow-sm">
+        <div class="card-body">
+
+            <table class="table table-hover align-middle">
+                <thead class="table-light">
+                    <tr>
+                        <th>#</th>
+                        <th>Host</th>
+                        <th>Source Type</th>
+                        <th>Port</th>
+                        <th>Name</th>
+                        <th width="150">Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+
+                    {% for datasource in datasources %}
+                    <tr>
+                        <td>{{ loop.index }}</td>
+                        <td>
+                            <i class="las la-table text-primary"></i>
+                            {{ datasource.host }}
+                        </td>
+                        <td>
+                            <i class="las la-table text-primary"></i>
+                            {{ datasource.db_type }}
+                        </td>
+                        <td>
+                            <i class="las la-table text-primary"></i>
+                            {{ datasource.port }}
+                        </td>
+                        <td>
+                            <i class="las la-table text-primary"></i>
+                            {{ datasource.database_name }}
+                        </td>
+                        <td>
+                            <button 
+                                class="btn btn-sm btn-outline-primary"
+                                hx-get="/datasource/{{ datasource.id }}"
+                                hx-target="#preview-container"
+                                hx-swap="innerHTML"
+                                hx-on="htmx:afterOnLoad: bootstrap.Offcanvas.getOrCreateInstance(document.getElementById('previewOffcanvas')).show()"
+                            >
+                                Preview
+                            </button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+
+                </tbody>
+            </table>
+
+        </div>
+    </div>
+
+    <!-- Preview Area -->
+    <!-- Offcanvas Preview -->
+    <div 
+        class="offcanvas offcanvas-end" 
+        tabindex="-1" 
+        id="previewOffcanvas"
+        aria-labelledby="previewOffcanvasLabel"
+        style="width: 80vw;"
+    >
+        <div class="offcanvas-header">
+            <h5 id="previewOffcanvasLabel">Datasource Preview</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+        </div>
+
+        <div class="offcanvas-body" id="preview-container">
+            <!-- HTMX will inject preview here -->
+        </div>
+    </div>
+
+    <!-- View Table Schema Modal -->
+    <div class="modal fade" id="viewModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-xl modal-dialog-scrollable">
+            <div class="modal-content">
+
+                <div class="modal-header">
+                    <h5 class="modal-title">Table Details</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+
+                <!-- THIS is where HTMX injects -->
+                <div class="modal-body" id="viewModalContent">
+                    <div class="text-center p-4">
+                        <div class="spinner-border text-primary"></div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </div>
+
+</div>
+{% endblock %}

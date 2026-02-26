@@ -1,0 +1,71 @@
+{% if objects %}
+
+<div class="table-responsive">
+    <table class="table table-hover align-middle">
+        <thead class="table-light">
+            <tr>
+                <th>#</th>
+                <th>Table/Collection Name</th>
+                <th width="220">Status</th>
+                <th width="220">Action</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for obj in objects %}
+            <tr id="row-{{ obj }}">
+                <td>{{ loop.index }}</td>
+                <td>{{ obj }}</td>
+                <td>
+                    {% if obj %}
+                        <span class="badge bg-success">Active</span>
+                    {% else %}
+                        <span class="badge bg-secondary">Inactive</span>
+                    {% endif %}
+                </td>
+                <td>
+
+                    <!-- VIEW BUTTON -->
+                    <button 
+                        class="btn btn-sm btn-outline-primary"
+                        hx-get="/datasource/{{ datasource_id }}/table/{{ obj }}/view"
+                        hx-target="#viewModalContent"
+                        hx-swap="innerHTML"
+                        data-bs-toggle="modal"
+                        data-bs-target="#viewModal"
+                    >
+                        View
+                    </button>
+
+                    <!-- ACTIVATE / DEACTIVATE -->
+                    {% if obj %}
+                        <button 
+                            class="btn btn-sm btn-outline-danger"
+                            hx-post="/datasource/{{ datasource_id }}/table/{{ obj }}/deactivate"
+                            hx-target="#row-{{ obj }}"
+                            hx-swap="outerHTML"
+                        >
+                            Deactivate
+                        </button>
+                    {% else %}
+                        <button 
+                            class="btn btn-sm btn-outline-success"
+                            hx-post="/datasource/{{ datasource_id }}/table/{{ obj }}/activate"
+                            hx-target="#row-{{ obj }}"
+                            hx-swap="outerHTML"
+                        >
+                            Activate
+                        </button>
+                    {% endif %}
+
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+{% else %}
+    <div class="text-muted">
+        No objects found.
+    </div>
+{% endif %}

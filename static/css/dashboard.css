@@ -1,0 +1,58 @@
+body {
+    font-family: 'Poppins', sans-serif;
+    background-color: #f8f9fc;
+}
+
+/* Navbar */
+.navbar-custom {
+    background: linear-gradient(90deg, #4e73df, #1cc88a);
+    padding: 0.8rem 1.5rem;
+}
+
+.navbar-brand {
+    font-weight: 600;
+    font-size: 20px;
+    color: #fff !important;
+}
+
+.navbar-brand span {
+    color: #fff;
+}
+
+.user-info {
+    color: #fff;
+    font-weight: 500;
+}
+
+.logout-btn {
+    color: #fff;
+    font-size: 20px;
+    margin-left: 15px;
+    transition: 0.3s;
+}
+
+.logout-btn:hover {
+    color: #ffd43b;
+}
+
+/* Dashboard cards */
+.dashboard-container {
+    padding: 40px 20px;
+}
+
+.dashboard-card {
+    background: #fff;
+    border-radius: 15px;
+    padding: 25px;
+    box-shadow: 0 10px 25px rgba(0,0,0,0.05);
+    transition: 0.3s;
+}
+
+.dashboard-card:hover {
+    transform: translateY(-5px);
+}
+
+.card-icon {
+    font-size: 30px;
+    color: #4e73df;
+}

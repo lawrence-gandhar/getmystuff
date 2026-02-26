@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{% block title %}GetMyStuff{% endblock %}</title>
+
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+<link href="https://cdnjs.cloudflare.com/ajax/libs/line-awesome/1.3.0/line-awesome/css/line-awesome.min.css" rel="stylesheet">
+
+
+<link href="/static/css/dashboard.css" rel="stylesheet">
+
+
+<style>
+body {
+    font-family: 'Poppins', sans-serif;
+    overflow-x: hidden;
+}
+
+/* Layout */
+.wrapper {
+    display: flex;
+    min-height: 100vh;
+}
+
+/* Sidebar */
+.sidebar {
+    width: 250px;
+    background: #111827;
+    color: #fff;
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    padding-top: 70px;
+    overflow-y: auto;
+    transition: all 0.3s ease;
+}
+
+.sidebar::-webkit-scrollbar {
+    width: 6px;
+}
+.sidebar::-webkit-scrollbar-thumb {
+    background: #374151;
+    border-radius: 3px;
+}
+
+.sidebar a {
+    display: flex;
+    align-items: center;
+    padding: 12px 20px;
+    color: #d1d5db;
+    text-decoration: none;
+    font-size: 14px;
+    transition: all 0.2s ease;
+}
+
+.sidebar a i {
+    margin-right: 10px;
+    font-size: 16px;
+}
+
+/* Hover */
+.sidebar a:hover {
+    background: #1f2937;
+    color: #ffffff;
+}
+
+/* Active */
+.sidebar a.active {
+    background: #2563eb;
+    color: white;
+    border-left: 4px solid #60a5fa;
+}
+
+/* Main content */
+.main-content {
+    margin-left: 250px;
+    flex: 1;
+    padding-top: 70px;
+}
+
+/* Navbar */
+.navbar-custom {
+    position: fixed;
+    width: 100%;
+    z-index: 1000;
+    /* background: #ffffff; */
+    border-bottom: 1px solid #e5e7eb;
+}
+
+.navbar-brand span {
+    color: #2563eb;
+    font-weight: 600;
+}
+
+.user-info {
+    font-size: 14px;
+    color: #374151;
+}
+
+.logout-btn {
+    color: #ef4444;
+    font-size: 18px;
+}
+
+/* Responsive */
+@media (max-width: 992px) {
+    .sidebar {
+        width: 0;
+        overflow: hidden;
+    }
+    .main-content {
+        margin-left: 0;
+    }
+}
+
+.container{
+    
+}
+
+</style>
+
+{% block extra_css %}{% endblock %}
+</head>
+<body>
+
+<!-- 🔷 NAVBAR -->
+<nav class="navbar navbar-expand-lg navbar-custom">
+    <div class="container-fluid">
+        <a class="navbar-brand" href="#">
+            <i class="las la-box-open"></i> Get<span style="color:#ffd43b">MyStuff</span>
+        </a>
+
+        <div class="d-flex align-items-center ms-auto">
+            <div class="user-info">
+                <i class="las la-user-circle"></i>
+                {{ user.email }}
+            </div>
+
+            <form method="post" action="/auth/logout" class="ms-3">
+                <button type="submit" class="btn p-0 logout-btn">
+                    <i class="las la-sign-out-alt"></i>
+                </button>
+            </form>
+        </div>
+    </div>
+</nav>
+
+<div class="wrapper">
+
+    <!-- SIDEBAR -->
+    <div class="sidebar">
+
+        <a href="/user/dashboard" class="{% if active == 'dashboard' %}active{% endif %}">
+            <i class="las la-home"></i> Dashboard
+        </a>
+
+        <a href="/datasource" class="{% if active == 'datasource' %}active{% endif %}">
+            <i class="las la-database"></i> Data Sources
+        </a>
+
+        <a href="#" class="{% if active == 'queries' %}active{% endif %}">
+            <i class="las la-code"></i> Query Runner
+        </a>
+
+        <a href="#" class="{% if active == 'settings' %}active{% endif %}">
+            <i class="las la-cog"></i> Settings
+        </a>
+
+        <a href="#" class="{% if active == 'logs' %}active{% endif %}">
+            <i class="las la-file-alt"></i> Logs
+        </a>
+
+    </div>
+
+    <!-- 🔷 MAIN CONTENT -->
+    <div class="main-content container-fluid">
+        {% block content %}{% endblock %}
+    </div>
+
+</div>
+
+<!-- FOOTER -->
+<footer class="text-center py-3 border-top text-muted small">
+    © GetMyStuff — All rights reserved.
+</footer>
+
+<script src="https://unpkg.com/htmx.org@1.9.10"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+
+{% block extra_js %}{% endblock %}
+
+</body>
+</html>
