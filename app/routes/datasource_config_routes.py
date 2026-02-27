@@ -11,6 +11,10 @@ from app.db.auth import require_auth
 from app.models.user import User
 from app.services.datasource_config_service import create_config
 
+from app.services.datasource_service import (
+    get_datasource_table_schema
+)
+
 
 class DataSourceConfigurations(Controller):
     path = "/datasource"
@@ -29,7 +33,9 @@ class DataSourceConfigurations(Controller):
         Render configuration page for a specific table/collection.
         """
 
-        
+        config = get_datasource_table_schema(
+            
+        )
 
         return Template(
             template_name="datasources/configuration.htm",
