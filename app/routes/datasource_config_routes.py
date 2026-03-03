@@ -12,7 +12,9 @@ from app.models.user import User
 from app.services.datasource_config_service import create_config
 
 from app.services.datasource_service import (
-    get_datasource_table_schema
+    get_datasource_table_schema,
+    get_user_datasources,
+    get_datasource_objects
 )
 
 
@@ -20,8 +22,52 @@ class DataSourceConfigurations(Controller):
     path = "/datasource"
     dependencies = {"user": require_auth}
 
+    @get("/configurations")
+    async def get_all_configuration(
+        self,
+        db: AsyncSession,
+        request: Request,
+        user: User,
+    ) -> Template:
+        
+        datasources = await get_user_datasources(
+            db=db,
+            user_id=user.id,
+        )
+        
+        return Template(
+            template_name="datasources/configuration.htm",
+            context={
+                "request": request,
+                "datasources": datasources,
+                "table_name": "",
+                "config":{},
+                "user": user,
+            },
+        )
+    
+    @get("/{datasource_id:str}/details")
+    async def get_datasource_details(
+        self,
+        db: AsyncSession,
+        request: Request,
+        user: User,
+        datasource_id: str
+    ) -> dict:
+        
+        data = await get_datasource_objects(
+            db=db,
+            datasource_id=datasource_id,
+            user_id=user.id,
+        )
+        
+        return {
+            "datasource_details": data
+        }
+        
+
     @get("/{datasource_id:str}/{table_name:str}/configuration")
-    async def get_configuration(
+    async def get_table_configuration(
         self,
         request: Request,
         datasource_id: str,
@@ -34,7 +80,10 @@ class DataSourceConfigurations(Controller):
         """
 
         config = get_datasource_table_schema(
-            
+            db,
+            datasource_id = datasource_id,
+            user_id = user.id,
+            table_name = table_name,
         )
 
         return Template(
@@ -43,7 +92,7 @@ class DataSourceConfigurations(Controller):
                 "request": request,
                 "datasource_id": datasource_id,
                 "table_name": table_name,
-                "config": {},
+                "config":config,
                 "user": user,
             },
         )

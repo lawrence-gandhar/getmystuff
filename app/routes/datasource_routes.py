@@ -238,8 +238,6 @@ class DataSourceController(Controller):
             sort_by=sort_by
         )
 
-        print(tables)
-
         return Template(
             template_name="datasources/table_list.htm",
             context={

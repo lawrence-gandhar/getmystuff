@@ -1,7 +1,21 @@
 {% extends "base/layout.htm" %}
-{% block title %}Configuration — {{ table_name }} | GetMyStuff{% endblock %}
+{% block title %}Configuration | GetMyStuff{% endblock %}
 
 {% block content %}
+<style>
+
+    .custom_table_header th{
+        background-color: #0d6efd;
+        color:#fff;
+    }
+
+    .tdClass{
+        background-color: #ff0000 !important;
+        color: #ffffff !important;
+    }
+
+</style>
+
 <div class="container-fluid mt-4">
 
     <!-- HEADER -->
@@ -9,7 +23,7 @@
         <div>
             <h4 class="mb-0 fw-semibold">
                 <i class="las la-sliders-h text-primary"></i>
-                Configuration — <span class="text-primary">{{ table_name }}</span>
+                Configuration
             </h4>
         </div>
 
@@ -40,30 +54,32 @@
     <div class="card shadow-sm mb-4">
         <div class="card-header d-flex justify-content-between align-items-center">
             <span class="fw-semibold">
-                <i class="las la-table text-primary"></i> Column Summary
+                <i class="las la-table text-primary"></i> Data Sources Summary
             </span>
-            {% if config.column_count %}
-                <span class="badge bg-primary">{{ config.column_count }} columns</span>
-            {% endif %}
         </div>
         <div class="card-body p-0">
-            {% if config and config.column_data %}
+            {% if datasources %}
                 <div class="table-responsive">
                     <table class="table table-hover align-middle mb-0">
                         <thead class="table-light">
                             <tr>
                                 <th>#</th>
-                                <th>Column Name</th>
+                                <th>Data Source Name</th>
                                 <th>Status</th>
                             </tr>
                         </thead>
                         <tbody>
-                            {% for col_name, col in config.column_data.items() %}
-                                <tr>
+                            {% for datasource in datasources %}
+                                <tr 
+                                    id="{{ datasource.id }}" 
+                                    class="datasource-row" 
+                                    data-id="{{ datasource.id }}"
+                                    style="cursor: pointer;"
+                                >
                                     <td class="text-muted small">{{ loop.index }}</td>
-                                    <td>{{ col.column_name }}</td>
+                                    <td>{{ datasource.host }}</td>
                                     <td>
-                                        {% if col.status == "active" %}
+                                        {% if datasource.status == "active" %}
                                             <span class="badge bg-success">Active</span>
                                         {% else %}
                                             <span class="badge bg-secondary">Inactive</span>
@@ -111,7 +127,7 @@
                 <i class="las la-robot text-info"></i> Agent Configurations
             </span>
             <button
-                class="btn btn-outline-secondary btn-sm"
+                class="btn btn-primary btn-sm"
                 type="button"
                 data-bs-toggle="offcanvas"
                 data-bs-target="#agentConfigOffcanvas"
@@ -128,16 +144,47 @@
 
 </div>
 
+<!-- ============================================
+     OFFCANVAS 1 — DATASOURCE SHOW DETAILS OFFCANVAS
+     ============================================ -->
+
+<div class="offcanvas offcanvas-end" tabindex="-1" id="datasourceCanvas" style="width: 75vw;">
+  <div class="offcanvas-header">
+    <h5 class="offcanvas-title">Datasource Details</h5>
+    <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+  </div>
+  <div class="offcanvas-body" id="offcanvasContent">
+    Loading...
+  </div>
+</div>
 
 <!-- ============================================
-     OFFCANVAS 1 — CREATE TOOL BASE CONFIG
+     OFFCANVAS 1 — TABLE DETAILS OFFCANVAS
+     ============================================ -->
+
+<div class="offcanvas offcanvas-end offcanvas-75"
+     tabindex="-1"
+     id="tableCanvas" style="width: 75vw;">
+
+    <div class="offcanvas-header">
+        <h5 class="offcanvas-title" id="tableCanvasTitle">Table Details</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+    </div>
+
+    <div class="offcanvas-body" id="tableCanvasContent">
+        Loading...
+    </div>
+</div>
+
+<!-- ============================================
+     OFFCANVAS 2 — CREATE TOOL BASE CONFIG
      ============================================ -->
 <div
     class="offcanvas offcanvas-end"
     tabindex="-1"
     id="toolConfigOffcanvas"
     aria-labelledby="toolConfigOffcanvasLabel"
-    style="width: 40vw;"
+    style="width: 75vw;"
 >
     <div class="offcanvas-header border-bottom">
         <h5 class="offcanvas-title" id="toolConfigOffcanvasLabel">
@@ -175,6 +222,58 @@
                 <div class="form-text">Unique identifier for this tool within the datasource.</div>
             </div>
 
+            <div class="mb-4 border rounded p-3 bg-light-subtle">
+
+            <div class="query-builder">
+
+    <!-- AGGREGATIONS -->
+    <div class="card mb-3">
+        <div class="card-header d-flex justify-content-between">
+            <strong>Aggregations</strong>
+            <button class="btn btn-sm btn-outline-primary"
+                    onclick="addAggregation()">
+                + Add Aggregation
+            </button>
+        </div>
+        <div class="card-body" id="aggregationContainer"></div>
+    </div>
+
+    <!-- GROUP BY -->
+    <div class="card mb-3">
+        <div class="card-header d-flex justify-content-between">
+            <strong>Group By</strong>
+            <button class="btn btn-sm btn-outline-primary"
+                    onclick="addGroupBy()">
+                + Add Group
+            </button>
+        </div>
+        <div class="card-body" id="groupByContainer"></div>
+    </div>
+
+    <!-- FILTERS -->
+    <div class="card mb-3">
+        <div class="card-header d-flex justify-content-between">
+            <strong>Filters</strong>
+            <button class="btn btn-sm btn-outline-primary"
+                    onclick="addFilter()">
+                + Add Filter
+            </button>
+        </div>
+        <div class="card-body" id="filterContainer"></div>
+    </div>
+
+    <!-- SQL PREVIEW -->
+    <div class="card">
+        <div class="card-header">
+            <strong>Generated SQL</strong>
+        </div>
+        <div class="card-body bg-dark text-light font-monospace small">
+            <pre id="sqlPreview" class="mb-0"></pre>
+        </div>
+    </div>
+
+</div>
+
             <!-- BASE CONFIG JSON -->
             <div class="mb-4">
                 <label class="form-label fw-semibold">Base Config</label>
@@ -183,9 +282,9 @@
                     class="form-control font-monospace"
                     rows="10"
                     placeholder='{
-  "max_rows": 100,
-  "timeout": 30
-}'
+                        "max_rows": 100,
+                        "timeout": 30
+                        }'
                 >{}</textarea>
                 <div class="form-text">JSON object. Leave as <code>{}</code> for defaults.</div>
             </div>
@@ -292,5 +391,452 @@
         </form>
     </div>
 </div>
+
+<script>
+
+let globalConfigurationData = {};
+let globalDatasourceId = null;
+let currentTableColumns = [];
+currentTableName = null;
+
+let queryState = {
+    table: "",
+    aggregations: [],     // multiple
+    groupBy: [],          // multiple
+    filters: [],          // multiple
+    orderBy: [],
+    limit: null
+};
+
+// =========================================================
+document.addEventListener("DOMContentLoaded", function () {
+
+    const offcanvasElement = document.getElementById("datasourceCanvas");
+    const offcanvas = new bootstrap.Offcanvas(offcanvasElement);
+    const content = document.getElementById("offcanvasContent");
+
+    document.querySelectorAll(".datasource-row").forEach(row => {
+        row.addEventListener("click", function () {
+
+            const datasourceId = this.dataset.id;
+            content.innerHTML = "Loading...";
+
+            fetch(`/datasource/${datasourceId}/details`)
+                .then(response => response.json())
+                .then(data => {
+                    
+                    globalDatasourceId = datasourceId;
+                    globalConfigurationData = data.datasource_details.configuration_data;
+
+                    const config = globalConfigurationData;
+                    const database_name = data.datasource_details.database;
+                    const host = data.datasource_details.host;
+                    const port = data.datasource_details.port;
+                    const user = data.datasource_details.user;
+
+
+                    // Convert object to array for sorting
+                    const tables = Object.entries(config);
+
+                    // Sort by status ascending (active first)
+                    tables.sort((a, b) => {
+                        const statusA = a[1].status === "active" ? 0 : 1;
+                        const statusB = b[1].status === "active" ? 0 : 1;
+                        return statusA - statusB;
+                    });
+
+                    let html = `
+
+                        <div class="table-responsive">
+                            <table class="table table-bordered table-hover align-middle">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th>Database</th>
+                                        <td colspan="6">${database_name}</td>
+                                    </tr>
+                                    <tr>
+                                        <th>Host</th>
+                                        <td colspan="6">${host}</td>
+                                    </tr>
+                                    <tr>
+                                        <th>Port</th>
+                                        <td colspan="6">${port}</td>
+                                    </tr>
+                                    <tr>
+                                        <th>User</th>
+                                        <td colspan="6">${user}</td>
+                                    </tr>
+                                    <tr class="custom_table_header">
+                                        <th>#</th>
+                                        <th>Table Name</th>
+                                        <th>Status</th>
+                                        <th>Total Columns</th>
+                                        <th>Active Columns</th>
+                                        <th>Inactive Columns</th>
+                                        <th class="text-center">Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                    `;
+
+                    let index = 1;
+
+                    tables.forEach(([tableName, tableData]) => {
+
+                        const totalColumns = tableData.column_count;
+
+                        const activeColumns = Object.values(tableData.column_data)
+                            .filter(col => col.status === "active").length;
+
+                        const inactiveColumns = totalColumns - activeColumns;
+
+                        const statusBadge = tableData.status === "active"
+                            ? `<span class="badge bg-success">Active</span>`
+                            : `<span class="badge bg-secondary">Inactive</span>`;
+
+                        const viewButton = tableData.status === "active"
+                            ? `<button class="btn btn-sm btn-outline-primary"
+                                    onclick="openTableCanvas('${tableName}')">
+                                    View
+                            </button>`
+                            : `-`;
+
+                        const rowClass = tableData.status === "active" && activeColumns === 0
+                            ? "table-danger"
+                            : "";
+
+                        html += `
+                            <tr class="${rowClass}" style="font-size:12px;">
+                                <td>${index++}</td>
+                                <td>${tableName}</td>
+                                <td>${statusBadge}</td>
+                                <td>${totalColumns}</td>
+                                <td class="text-success">${activeColumns}</td>
+                                <td class="text-danger">${inactiveColumns}</td>
+                                <td class="text-center">${viewButton}</td>
+                            </tr>
+                        `;
+                    });
+
+                    html += `
+                                </tbody>
+                            </table>
+                        </div>
+                    `;
+
+                    content.innerHTML = html;
+                })
+                .catch(() => {
+                    content.innerHTML = "Failed to load data.";
+                });
+
+            offcanvas.show();
+        });
+    });
+
+    // ===========================================================    
+});
+
+
+document
+    .getElementById("toolConfigOffcanvas")
+    .addEventListener("shown.bs.offcanvas", function () {
+
+        if (!queryState.table) {
+            queryState.table = currentTableName;
+        }
+
+        if (queryState.aggregations.length === 0) {
+            addAggregation();
+        }
+
+        renderAggregations();
+        renderFilters();
+        renderGroupBy();
+        updateSQLPreview();
+    });
+
+
+function updateBaseConfigJSON() {
+
+    const aggregation = document.getElementById("aggregationSelect").value;
+    const aggColumn = document.getElementById("aggregationColumn").value;
+    const groupBy = document.getElementById("groupByColumn").value;
+    const filterColumn = document.getElementById("filterColumn").value;
+    const filterOperator = document.getElementById("filterOperator").value;
+    const filterValue = document.getElementById("filterValue").value;
+
+    const config = {
+        aggregation: aggregation && aggColumn ? {
+            type: aggregation,
+            column: aggColumn
+        } : null,
+        group_by: groupBy || null,
+        filter: filterColumn ? {
+            column: filterColumn,
+            operator: filterOperator,
+            value: filterValue
+        } : null
+    };
+
+    document.querySelector("textarea[name='base_config']")
+        .value = JSON.stringify(config, null, 2);
+}
+
+function renderGroupBy() {
+    const container = document.getElementById("groupByContainer");
+    if (!container) return;
+
+    container.innerHTML = "";
+
+    queryState.groupBy.forEach((column, index) => {
+        container.innerHTML += `
+            <div class="row g-2 mb-2">
+                <div class="col-10">
+                    ${buildColumnDropdown(
+                        column,
+                        `updateGroupBy(${index}, this.value)`
+                    )}
+                </div>
+                <div class="col-2">
+                    <button class="btn btn-sm btn-danger"
+                        onclick="removeGroupBy(${index})">
+                        ✕
+                    </button>
+                </div>
+            </div>
+        `;
+    });
+
+    updateSQLPreview();
+}
+
+
+document.querySelectorAll(
+    "#aggregationSelect, #aggregationColumn, #groupByColumn, #filterColumn, #filterOperator, #filterValue"
+).forEach(el => {
+    el.addEventListener("change", updateBaseConfigJSON);
+});
+
+
+function addAggregation() {
+    queryState.aggregations.push({
+        type: "count",
+        column: currentTableColumns[0] || ""
+    });
+    renderAggregations();
+}
+
+function renderAggregations() {
+    
+    const container = document.getElementById("aggregationContainer");
+
+    if (!container) return;  // ← prevents crash
+
+    container.innerHTML = "";
+
+    queryState.aggregations.forEach((agg, index) => {
+        container.innerHTML += `
+            <div class="row g-2 mb-2">
+                <div class="col-4">
+                    <select class="form-select"
+                        onchange="updateAggregation(${index}, 'type', this.value)">
+                        <option value="count">COUNT</option>
+                        <option value="sum">SUM</option>
+                        <option value="avg">AVG</option>
+                        <option value="min">MIN</option>
+                        <option value="max">MAX</option>
+                    </select>
+                </div>
+                <div class="col-6">
+                    ${buildColumnDropdown(agg.column, `updateAggregation(${index}, 'column', this.value)`)}
+                </div>
+                <div class="col-2">
+                    <button class="btn btn-sm btn-danger"
+                        onclick="removeAggregation(${index})">
+                        ✕
+                    </button>
+                </div>
+            </div>
+        `;
+    });
+
+    updateSQLPreview();
+}
+
+function buildColumnDropdown(selected, onChange) {
+    let options = currentTableColumns
+        .map(col =>
+            `<option value="${col}" ${col === selected ? "selected" : ""}>${col}</option>`
+        ).join("");
+
+    return `
+        <select class="form-select"
+            onchange="${onChange}">
+            ${options}
+        </select>
+    `;
+}
+
+function addFilter() {
+    queryState.filters.push({
+        column: currentTableColumns[0] || "",
+        operator: "=",
+        value: ""
+    });
+    renderFilters();
+}
+
+function renderFilters() {
+    const container = document.getElementById("filterContainer");
+    container.innerHTML = "";
+
+    queryState.filters.forEach((f, index) => {
+        container.innerHTML += `
+            <div class="row g-2 mb-2">
+                <div class="col-4">
+                    ${buildColumnDropdown(f.column,
+                        `updateFilter(${index}, 'column', this.value)`)}
+                </div>
+                <div class="col-3">
+                    <select class="form-select"
+                        onchange="updateFilter(${index}, 'operator', this.value)">
+                        <option>=</option>
+                        <option>!=</option>
+                        <option>&gt;</option>
+                        <option>&lt;</option>
+                        <option>LIKE</option>
+                    </select>
+                </div>
+                <div class="col-4">
+                    <input class="form-control"
+                        value="${f.value}"
+                        onchange="updateFilter(${index}, 'value', this.value)">
+                </div>
+                <div class="col-1">
+                    <button class="btn btn-sm btn-danger"
+                        onclick="removeFilter(${index})">✕</button>
+                </div>
+            </div>
+        `;
+    });
+
+    updateSQLPreview();
+}
+
+function updateSQLPreview() {
+
+    let sql = "SELECT ";
+
+    if (queryState.aggregations.length === 0) {
+        sql += "*";
+    } else {
+        sql += queryState.aggregations
+            .map(a => `${a.type.toUpperCase()}(${a.column})`)
+            .join(", ");
+    }
+
+    sql += `\nFROM ${queryState.table}`;
+
+    if (queryState.filters.length > 0) {
+        sql += "\nWHERE ";
+        sql += queryState.filters
+            .map(f => `${f.column} ${f.operator} '${f.value}'`)
+            .join(" AND ");
+    }
+
+    if (queryState.groupBy.length > 0) {
+        sql += "\nGROUP BY ";
+        sql += queryState.groupBy.join(", ");
+    }
+
+    document.getElementById("sqlPreview").innerText = sql;
+}
+
+
+function openTableCanvas(tableName) {
+
+    const offcanvasElement = document.getElementById("tableCanvas");
+    const tableCanvas = new bootstrap.Offcanvas(offcanvasElement);
+    const content = document.getElementById("tableCanvasContent");
+    const title = document.getElementById("tableCanvasTitle");
+
+    const tableData = globalConfigurationData[tableName];
+
+    currentTableColumns = Object.values(tableData.column_data).map(col => col.column_name);
+
+    if (!tableData) {
+        content.innerHTML = "Table not found.";
+        tableCanvas.show();
+        return;
+    }
+
+    const columns = Object.values(tableData.column_data);
+
+    const rows = columns.map((col, index) => {
+
+        const badge = col.status === "active"
+            ? `<span class="badge bg-success">Active</span>`
+            : `<span class="badge bg-secondary">Inactive</span>`;
+
+        return `
+            <tr>
+                <td>${index + 1}</td>
+                <td>${col.column_name}</td>
+                <td>${badge}</td>
+            </tr>
+        `;
+    }).join("");
+
+    content.innerHTML = `
+        <!-- Header Section -->
+        <div class="d-flex justify-content-between align-items-start mb-3">
+
+            <!-- Left: Table Name + Badge -->
+            <div>
+                <h5 class="mb-1 d-inline-block me-2">
+                    ${tableName}
+                </h5>
+                <span class="badge bg-${tableData.status === "active" ? "success" : "secondary"}">
+                    ${tableData.status}
+                </span>
+            </div>
+
+            <!-- Right: Button -->
+            <div>
+                <button
+                    class="btn btn-primary btn-sm"
+                    type="button"
+                    data-bs-toggle="offcanvas"
+                    data-bs-target="#toolConfigOffcanvas"
+                >
+                    <i class="las la-plus"></i> New Tool Config
+                </button>
+            </div>
+
+        </div>
+
+        <!-- Table Section -->
+        <div class="table-responsive">
+            <table class="table table-bordered table-sm">
+                <thead class="table-light">
+                    <tr>
+                        <th>#</th>
+                        <th>Column Name</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${rows}
+                </tbody>
+            </table>
+        </div>
+    `;
+
+    tableCanvas.show();
+}
+
+
+</script>
 
 {% endblock %}
