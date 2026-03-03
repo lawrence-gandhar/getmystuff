@@ -6,6 +6,25 @@ Datasources | GetMyStuff
 
 {% block content %}
     <div class="container mt-4" style="max-width: 100%;">
+
+    <!-- PAGE HEADER -->
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h5 class="fw-semibold mb-0">
+            <i class="las la-database text-primary"></i> Data Sources
+        </h5>
+        <button
+            class="btn btn-primary btn-sm"
+            type="button"
+            data-bs-toggle="offcanvas"
+            data-bs-target="#createDatasourceOffcanvas"
+        >
+            <i class="las la-plus"></i> Add Datasource
+        </button>
+    </div>
+
+    <!-- RESPONSE AREA (HTMX target for create / rename feedback) -->
+    <div id="datasource-response" class="mb-3"></div>
+
     <!-- Bootstrap Table -->
     <div class="card shadow-sm">
         <div class="card-body">
@@ -14,11 +33,12 @@ Datasources | GetMyStuff
                 <thead class="table-light">
                     <tr>
                         <th>#</th>
-                        <th>Host</th>
+                        <th>Datasource Name</th>
                         <th>Source Type</th>
+                        <th>Host</th>
                         <th>Port</th>
-                        <th>Name</th>
-                        <th width="150">Action</th>
+                        <th>Database</th>
+                        <th width="180">Action</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -27,23 +47,20 @@ Datasources | GetMyStuff
                     <tr>
                         <td>{{ loop.index }}</td>
                         <td>
-                            <i class="las la-table text-primary"></i>
-                            {{ datasource.host }}
+                            <span class="fw-semibold text-primary">
+                                <i class="las la-tag"></i>
+                                {{ datasource.datasource_name }}
+                            </span>
                         </td>
                         <td>
-                            <i class="las la-table text-primary"></i>
+                            <i class="las la-database text-secondary"></i>
                             {{ datasource.db_type }}
                         </td>
+                        <td>{{ datasource.host }}</td>
+                        <td>{{ datasource.port }}</td>
+                        <td>{{ datasource.database_name }}</td>
                         <td>
-                            <i class="las la-table text-primary"></i>
-                            {{ datasource.port }}
-                        </td>
-                        <td>
-                            <i class="las la-table text-primary"></i>
-                            {{ datasource.database_name }}
-                        </td>
-                        <td>
-                            <button 
+                            <button
                                 class="btn btn-sm btn-outline-primary"
                                 hx-get="/datasource/{{ datasource.id }}"
                                 hx-target="#preview-container"
@@ -51,6 +68,12 @@ Datasources | GetMyStuff
                                 hx-on="htmx:afterOnLoad: bootstrap.Offcanvas.getOrCreateInstance(document.getElementById('previewOffcanvas')).show()"
                             >
                                 Preview
+                            </button>
+                            <button
+                                class="btn btn-sm btn-outline-secondary"
+                                onclick="openRenameModal('{{ datasource.id }}', '{{ datasource.datasource_name }}')"
+                            >
+                                Rename
                             </button>
                         </td>
                     </tr>
@@ -64,9 +87,9 @@ Datasources | GetMyStuff
 
     <!-- Preview Area -->
     <!-- Offcanvas Preview -->
-    <div 
-        class="offcanvas offcanvas-end" 
-        tabindex="-1" 
+    <div
+        class="offcanvas offcanvas-end"
+        tabindex="-1"
         id="previewOffcanvas"
         aria-labelledby="previewOffcanvasLabel"
         style="width: 80vw;"
@@ -103,4 +126,231 @@ Datasources | GetMyStuff
     </div>
 
 </div>
+
+<!-- ============================================================
+     OFFCANVAS — CREATE DATASOURCE
+     ============================================================ -->
+<div
+    class="offcanvas offcanvas-end"
+    tabindex="-1"
+    id="createDatasourceOffcanvas"
+    aria-labelledby="createDatasourceOffcanvasLabel"
+    style="width: 40vw;"
+>
+    <div class="offcanvas-header border-bottom">
+        <h5 class="offcanvas-title" id="createDatasourceOffcanvasLabel">
+            <i class="las la-plus-circle text-primary"></i> Add Datasource
+        </h5>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+    </div>
+
+    <div class="offcanvas-body">
+
+        <form
+            hx-post="/datasource/create"
+            hx-target="#datasource-response"
+            hx-swap="innerHTML"
+            hx-on::after-request="if(event.detail.successful && event.detail.xhr.status === 200){ this.reset(); bootstrap.Offcanvas.getInstance(document.getElementById('createDatasourceOffcanvas')).hide(); location.reload(); }"
+        >
+
+            <!-- DATASOURCE NAME (required) -->
+            <div class="mb-3">
+                <label class="form-label fw-semibold">
+                    Datasource Name <span class="text-danger">*</span>
+                </label>
+                <input
+                    type="text"
+                    name="datasource_name"
+                    class="form-control"
+                    placeholder="e.g. sales_db"
+                    required
+                    pattern="[a-z0-9_]+"
+                    title="Lowercase letters, digits, and underscores only"
+                >
+                <div class="form-text">
+                    Unique identifier. Allowed: <code>a–z</code>, <code>0–9</code>, <code>_</code>.
+                    Automatically lowercased.
+                </div>
+            </div>
+
+            <!-- DB TYPE -->
+            <div class="mb-3">
+                <label class="form-label fw-semibold">
+                    Database Type <span class="text-danger">*</span>
+                </label>
+                <select name="db_type" class="form-select" required>
+                    <option value="" disabled selected>— select type —</option>
+                    <option value="postgres">PostgreSQL</option>
+                    <option value="mysql">MySQL</option>
+                    <option value="sqlite">SQLite</option>
+                    <option value="mongodb">MongoDB</option>
+                </select>
+            </div>
+
+            <!-- HOST -->
+            <div class="mb-3">
+                <label class="form-label fw-semibold">Host</label>
+                <input
+                    type="text"
+                    name="host"
+                    class="form-control"
+                    placeholder="localhost"
+                >
+            </div>
+
+            <!-- PORT -->
+            <div class="mb-3">
+                <label class="form-label fw-semibold">Port</label>
+                <input
+                    type="text"
+                    name="port"
+                    class="form-control"
+                    placeholder="5432"
+                >
+            </div>
+
+            <!-- DATABASE NAME -->
+            <div class="mb-3">
+                <label class="form-label fw-semibold">
+                    Database Name <span class="text-danger">*</span>
+                </label>
+                <input
+                    type="text"
+                    name="database_name"
+                    class="form-control"
+                    placeholder="my_database"
+                    required
+                >
+            </div>
+
+            <!-- USERNAME -->
+            <div class="mb-3">
+                <label class="form-label fw-semibold">Username</label>
+                <input
+                    type="text"
+                    name="username"
+                    class="form-control"
+                    placeholder="db_user"
+                    autocomplete="username"
+                >
+            </div>
+
+            <!-- PASSWORD -->
+            <div class="mb-4">
+                <label class="form-label fw-semibold">Password</label>
+                <input
+                    type="password"
+                    name="password"
+                    class="form-control"
+                    placeholder="••••••••"
+                    autocomplete="new-password"
+                >
+            </div>
+
+            <div class="d-flex gap-2">
+                <button type="submit" class="btn btn-primary">
+                    <i class="las la-save"></i> Save &amp; Connect
+                </button>
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="offcanvas">
+                    Cancel
+                </button>
+            </div>
+
+        </form>
+    </div>
+</div>
+
+<!-- ============================================================
+     MODAL — RENAME DATASOURCE
+     ============================================================ -->
+<div class="modal fade" id="renameModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+
+            <div class="modal-header">
+                <h5 class="modal-title">
+                    <i class="las la-edit text-primary"></i> Rename Datasource
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+
+            <form id="renameForm">
+                <div class="modal-body">
+
+                    <div id="rename-response" class="mb-2"></div>
+
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">
+                            New Name <span class="text-danger">*</span>
+                        </label>
+                        <input
+                            type="text"
+                            id="renameInput"
+                            name="datasource_name"
+                            class="form-control"
+                            required
+                            pattern="[a-z0-9_]+"
+                            title="Lowercase letters, digits, and underscores only"
+                        >
+                        <div class="form-text">
+                            Allowed: <code>a–z</code>, <code>0–9</code>, <code>_</code>.
+                        </div>
+                    </div>
+
+                </div>
+
+                <div class="modal-footer">
+                    <button type="submit" class="btn btn-primary btn-sm">
+                        <i class="las la-save"></i> Save
+                    </button>
+                    <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">
+                        Cancel
+                    </button>
+                </div>
+            </form>
+
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+
+{% block extra_js %}
+<script>
+    let _renameDatasourceId = null;
+
+    function openRenameModal(datasourceId, currentName) {
+        _renameDatasourceId = datasourceId;
+        document.getElementById("renameInput").value = currentName;
+        document.getElementById("rename-response").innerHTML = "";
+        new bootstrap.Modal(document.getElementById("renameModal")).show();
+    }
+
+    document.getElementById("renameForm").addEventListener("submit", async function (e) {
+        e.preventDefault();
+        if (!_renameDatasourceId) return;
+
+        const newName = document.getElementById("renameInput").value;
+        const responseEl = document.getElementById("rename-response");
+
+        const formData = new FormData();
+        formData.append("datasource_name", newName);
+
+        const res = await fetch(`/datasource/${_renameDatasourceId}/rename`, {
+            method: "POST",
+            body: formData,
+        });
+
+        const html = await res.text();
+        responseEl.innerHTML = html;
+
+        if (res.ok) {
+            setTimeout(() => {
+                bootstrap.Modal.getInstance(document.getElementById("renameModal")).hide();
+                location.reload();
+            }, 800);
+        }
+    });
+</script>
 {% endblock %}

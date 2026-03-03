@@ -1,0 +1,160 @@
+<!-- FILE UPLOAD WIDGET
+     Injected by HTMX into #datasource-message after a file-type datasource
+     is successfully created.  The datasource_id is embedded as a data
+     attribute so the inline JS can build the correct endpoint URLs.
+-->
+<div
+    class="file-upload-widget"
+    data-datasource-id="{{ datasource_id }}"
+    data-db-type="{{ db_type }}"
+>
+
+    <div class="alert alert-success mb-3">
+        <i class="las la-check-circle"></i>
+        Datasource created!
+        {% if initial_results %}
+            {{ initial_results | length }} file(s) uploaded.
+            Add more below or close this panel.
+        {% else %}
+            Upload your <strong>{{ db_type | upper }}</strong> files below.
+        {% endif %}
+    </div>
+
+    {% if initial_results %}
+    <ul class="list-group list-group-flush mb-3">
+        {% for r in initial_results %}
+        <li class="list-group-item list-group-item-{{ 'success' if r.status == 'ok' else 'danger' }} d-flex align-items-center gap-2 py-1">
+            <i class="las la-{{ 'check-circle' if r.status == 'ok' else 'times-circle' }}"></i>
+            <span class="small text-truncate">
+                <strong>{{ r.original_filename }}</strong>
+                {% if r.status == 'ok' %}
+                    → <code>{{ r.stored_filename }}</code> (v{{ r.version }})
+                {% else %}
+                    — {{ r.message }}
+                {% endif %}
+            </span>
+        </li>
+        {% endfor %}
+    </ul>
+    {% endif %}
+
+    <!-- FILE INPUT -->
+    <div class="mb-3">
+        <label class="form-label fw-semibold">
+            Select Files
+            {% if allowed_ext %}
+            <span class="text-muted fw-normal small">(allowed: {{ allowed_ext }})</span>
+            {% endif %}
+        </label>
+        <input
+            type="file"
+            class="form-control"
+            id="fileInput-{{ datasource_id }}"
+            multiple
+            {% if accept_attr %}accept="{{ accept_attr }}"{% endif %}
+        >
+    </div>
+
+    <!-- PER-FILE CHECK RESULTS (populated by JS) -->
+    <div id="fileCheckResults-{{ datasource_id }}" class="mb-2"></div>
+
+    <!-- OVERRIDE TOGGLE (shown only when a conflict is detected) -->
+    <div id="overrideToggle-{{ datasource_id }}" class="mb-3" style="display:none;">
+        <div class="form-check form-switch">
+            <input
+                class="form-check-input"
+                type="checkbox"
+                id="overrideSwitch-{{ datasource_id }}"
+                value="yes"
+            >
+            <label class="form-check-label small" for="overrideSwitch-{{ datasource_id }}">
+                Overwrite existing files (uncheck to keep both versions)
+            </label>
+        </div>
+    </div>
+
+    <!-- UPLOAD BUTTON -->
+    <div class="d-grid mb-2">
+        <button
+            type="button"
+            class="btn btn-success"
+            id="uploadBtn-{{ datasource_id }}"
+            disabled
+        >
+            <i class="las la-upload"></i> Upload Files
+        </button>
+    </div>
+
+    <!-- UPLOAD RESULTS (populated by JS) -->
+    <div id="uploadResults-{{ datasource_id }}"></div>
+
+</div>
+
+<script>
+(function () {
+    const dsId       = "{{ datasource_id }}";
+    const fileInput  = document.getElementById("fileInput-" + dsId);
+    const checkArea  = document.getElementById("fileCheckResults-" + dsId);
+    const overToggle = document.getElementById("overrideToggle-" + dsId);
+    const overSwitch = document.getElementById("overrideSwitch-" + dsId);
+    const uploadBtn  = document.getElementById("uploadBtn-" + dsId);
+    const uploadRes  = document.getElementById("uploadResults-" + dsId);
+
+    // ── Step 1: check each selected file against the server ──────────────
+    fileInput.addEventListener("change", async function () {
+        const files = Array.from(this.files);
+        if (!files.length) {
+            checkArea.innerHTML = "";
+            overToggle.style.display = "none";
+            uploadBtn.disabled = true;
+            return;
+        }
+
+        checkArea.innerHTML = "<div class='text-muted small'>Checking files\u2026</div>";
+        uploadBtn.disabled = true;
+
+        const fragments = await Promise.all(
+            files.map(f =>
+                fetch("/datasource/" + dsId + "/check-file", {
+                    method: "POST",
+                    body: new URLSearchParams({ filename: f.name }),
+                }).then(r => r.text())
+            )
+        );
+
+        checkArea.innerHTML = fragments.join("");
+
+        const hasConflict = checkArea.querySelector("[data-conflict]") !== null;
+        overToggle.style.display = hasConflict ? "block" : "none";
+        uploadBtn.disabled = false;
+    });
+
+    // ── Step 2: upload ────────────────────────────────────────────────────
+    uploadBtn.addEventListener("click", async function () {
+        const files = Array.from(fileInput.files);
+        if (!files.length) return;
+
+        uploadBtn.disabled = true;
+        uploadRes.innerHTML = "<div class='text-muted small'>Uploading\u2026</div>";
+
+        const fd = new FormData();
+        files.forEach(f => fd.append("files", f));
+        fd.append("override", overSwitch && overSwitch.checked ? "yes" : "no");
+
+        const res = await fetch("/datasource/" + dsId + "/upload-files", {
+            method: "POST",
+            body: fd,
+        });
+
+        uploadRes.innerHTML = await res.text();
+        uploadBtn.disabled = false;
+
+        // Clear file input and check area after a successful upload.
+        if (res.ok) {
+            fileInput.value = "";
+            checkArea.innerHTML = "";
+            overToggle.style.display = "none";
+        }
+    });
+}());
+</script>

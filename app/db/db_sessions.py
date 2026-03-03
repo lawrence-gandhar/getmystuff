@@ -4,7 +4,12 @@ from sqlalchemy.ext.asyncio import (
     AsyncSession,
 )
 
-DATABASE_URL = "postgresql+asyncpg://postgres:1234@localhost:5432/getmystuff"
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 
 # Create async engine

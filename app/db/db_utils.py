@@ -12,6 +12,12 @@ from sqlalchemy.exc import SQLAlchemyError
 from motor.motor_asyncio import AsyncIOMotorClient
 
 
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
+
 T = TypeVar("T")
 
 
@@ -19,9 +25,9 @@ T = TypeVar("T")
 # CONFIG
 # ==========================================================
 
-ENGINE_TTL_SECONDS = 60 * 30        # 30 min inactivity cleanup
-CIRCUIT_FAILURE_LIMIT = 5
-CIRCUIT_RESET_SECONDS = 60
+ENGINE_TTL_SECONDS = os.getenv("ENGINE_TTL_SECONDS")        # 30 min inactivity cleanup
+CIRCUIT_FAILURE_LIMIT = os.getenv("CIRCUIT_FAILURE_LIMIT")
+CIRCUIT_RESET_SECONDS = os.getenv("CIRCUIT_RESET_SECONDS")
 
 
 # ==========================================================
@@ -521,3 +527,628 @@ class CRUDQueryBuilder:
             return {name: None for name in aggregations.keys()}
 
         return {name: value for name, value in zip(aggregations.keys(), row)}
+
+
+# ==============================================================================
+# FILE DATASOURCE
+# — Supports CSV, Excel (xls/xlsx), Parquet, JSON arrays/JSONL, and Avro.
+# — Mirrors the EngineWrapper / MongoWrapper pattern: caching, circuit breaker,
+#   TTL-based cleanup, and async-safe blocking I/O via run_in_executor.
+# ==============================================================================
+
+from pathlib import Path  # noqa: E402  (kept here to isolate the new section)
+
+# ------------------------------------------------------------------------------
+# File-section typed config
+# The module-level CONFIG vars are raw strings (os.getenv).  Cast them to int
+# here so the file circuit-breaker arithmetic is type-safe without touching
+# the original declarations above.
+# ------------------------------------------------------------------------------
+
+_FILE_TTL_SECONDS: int = int(ENGINE_TTL_SECONDS) if ENGINE_TTL_SECONDS else 1800
+_FILE_CIRCUIT_FAILURE_LIMIT: int = int(CIRCUIT_FAILURE_LIMIT) if CIRCUIT_FAILURE_LIMIT else 5
+_FILE_CIRCUIT_RESET_SECONDS: int = int(CIRCUIT_RESET_SECONDS) if CIRCUIT_RESET_SECONDS else 60
+
+# Canonical set of accepted file-type strings (after normalisation).
+_SUPPORTED_FILE_TYPES: frozenset[str] = frozenset(
+    {"csv", "excel", "parquet", "json", "avro"}
+)
+
+
+# ------------------------------------------------------------------------------
+# Wrapper dataclass
+# ------------------------------------------------------------------------------
+
+@dataclass
+class FileDataSourceWrapper:
+    """
+    Tracks circuit-breaker state and last-access time for a cached file
+    datasource.  The file itself is never held open; this wrapper is purely
+    a metadata / state container — mirroring EngineWrapper and MongoWrapper.
+    """
+
+    path: str                            # Resolved absolute path
+    file_type: str                       # Normalised type: csv | excel | parquet | json | avro
+    last_used: float
+    failures: int = 0
+    circuit_open_until: Optional[float] = None
+
+
+# Central cache keyed by resolved absolute path.
+_file_cache: Dict[str, FileDataSourceWrapper] = {}
+
+
+# ------------------------------------------------------------------------------
+# Internal helpers
+# ------------------------------------------------------------------------------
+
+def _resolve_safe_path(raw_path: str) -> str:
+    """
+    Resolve *raw_path* to an absolute path and guard against path-traversal
+    attacks.
+
+    Raises:
+        ValueError:       If the path contains ``..`` traversal components.
+        FileNotFoundError: If the resolved path does not point to a regular file.
+    """
+    parts = Path(raw_path).parts
+    if ".." in parts:
+        raise ValueError(f"Path traversal detected in supplied path: {raw_path!r}")
+
+    resolved = Path(raw_path).resolve()
+
+    if not resolved.is_file():
+        raise FileNotFoundError(
+            f"File not found or is not a regular file: {resolved}"
+        )
+
+    return str(resolved)
+
+
+def _normalise_file_type(file_type: str, path: str) -> str:
+    """
+    Normalise *file_type* to one of the canonical strings in
+    ``_SUPPORTED_FILE_TYPES``.
+
+    Accepts ``"auto"`` as a special value — the type is then inferred from the
+    file extension.  The aliases ``"xls"`` and ``"xlsx"`` are mapped to
+    ``"excel"``.
+
+    Raises:
+        ValueError: If the resolved type is not supported.
+    """
+    ft = file_type.lower().strip()
+
+    if ft == "auto":
+        ft = Path(path).suffix.lstrip(".").lower()
+
+    # Alias xls / xlsx → excel
+    if ft in ("xls", "xlsx"):
+        ft = "excel"
+
+    if ft not in _SUPPORTED_FILE_TYPES:
+        raise ValueError(
+            f"Unsupported file type {file_type!r}. "
+            f"Accepted values: {sorted(_SUPPORTED_FILE_TYPES)}"
+        )
+
+    return ft
+
+
+def _is_jsonl(path: str) -> bool:
+    """
+    Peek at the first non-empty line of *path* to decide whether the file is
+    newline-delimited JSON (JSONL / JSON Lines) rather than a JSON array.
+
+    Returns True when the first content line starts with ``{``.
+    """
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+            for line in fh:
+                stripped = line.strip()
+                if stripped:
+                    return stripped.startswith("{")
+    except OSError:
+        pass
+    return False
+
+
+def _parse_avro_schema(avro_schema: Any) -> List[Dict[str, str]]:
+    """
+    Convert a *fastavro* ``writer_schema`` object into the canonical
+    ``[{"column": ..., "type": ...}]`` format.
+
+    Handles both dict-style schemas (parsed JSON) and fastavro parsed-schema
+    objects.  Union types (e.g. ``["null", "string"]``) are collapsed to the
+    first non-null member.
+    """
+    if avro_schema is None:
+        return []
+
+    # fastavro may return either a plain dict or a parsed schema object.
+    schema_fields: Optional[list] = None
+    if isinstance(avro_schema, dict):
+        schema_fields = avro_schema.get("fields", [])
+    elif hasattr(avro_schema, "fields"):
+        schema_fields = list(avro_schema.fields)
+
+    if not schema_fields:
+        return []
+
+    result: List[Dict[str, str]] = []
+    for field in schema_fields:
+        if isinstance(field, dict):
+            name: str = field.get("name", "unknown")
+            raw_type: Any = field.get("type", "unknown")
+        else:
+            name = getattr(field, "name", "unknown")
+            raw_type = getattr(field, "type", "unknown")
+
+        # Avro union types appear as lists: ["null", "string"]
+        if isinstance(raw_type, list):
+            non_null = [t for t in raw_type if t != "null"]
+            type_str: str = str(non_null[0]) if non_null else "null"
+        elif isinstance(raw_type, dict):
+            type_str = raw_type.get("type", str(raw_type))
+        else:
+            type_str = str(raw_type)
+
+        result.append({"column": name, "type": type_str})
+
+    return result
+
+
+# ------------------------------------------------------------------------------
+# File-specific circuit-breaker helpers
+# (mirrors _register_failure / _register_success but uses type-safe constants)
+# ------------------------------------------------------------------------------
+
+async def _file_register_failure(wrapper: FileDataSourceWrapper) -> None:
+    """
+    Increment the failure counter on *wrapper*.  Open the circuit once the
+    failure threshold is reached, preventing further attempts for
+    ``_FILE_CIRCUIT_RESET_SECONDS``.
+    """
+    wrapper.failures += 1
+    if wrapper.failures >= _FILE_CIRCUIT_FAILURE_LIMIT:
+        wrapper.circuit_open_until = time.time() + _FILE_CIRCUIT_RESET_SECONDS
+        wrapper.failures = 0
+
+
+async def _file_register_success(wrapper: FileDataSourceWrapper) -> None:
+    """Reset failure state on *wrapper* after a successful operation."""
+    wrapper.failures = 0
+    wrapper.circuit_open_until = None
+
+
+# ------------------------------------------------------------------------------
+# Cache manager
+# ------------------------------------------------------------------------------
+
+async def get_file_datasource(path: str, file_type: str) -> FileDataSourceWrapper:
+    """
+    Return a :class:`FileDataSourceWrapper` for *path*, creating and caching
+    one on first access.
+
+    The wrapper tracks circuit-breaker state and last-access time; it does
+    **not** hold the file open.  Subsequent calls with the same resolved path
+    return the cached wrapper and update ``last_used``.
+
+    Args:
+        path:      Absolute or relative path to the file.
+        file_type: One of ``csv``, ``excel``, ``parquet``, ``json``, ``avro``,
+                   or ``auto`` (inferred from extension).  Also accepts the
+                   aliases ``xls`` and ``xlsx``.
+
+    Raises:
+        ValueError:    On path-traversal attempt or unsupported file type.
+        FileNotFoundError: When the file does not exist.
+        Exception:     When the circuit is currently open for this path.
+    """
+    safe_path = _resolve_safe_path(path)
+    ft = _normalise_file_type(file_type, safe_path)
+
+    async with _lock:
+        wrapper = _file_cache.get(safe_path)
+
+        if wrapper:
+            if wrapper.circuit_open_until and time.time() < wrapper.circuit_open_until:
+                raise Exception(
+                    f"File datasource temporarily unavailable (circuit open): {safe_path}"
+                )
+            wrapper.last_used = time.time()
+            return wrapper
+
+        wrapper = FileDataSourceWrapper(
+            path=safe_path,
+            file_type=ft,
+            last_used=time.time(),
+        )
+        _file_cache[safe_path] = wrapper
+        return wrapper
+
+
+async def close_file_datasource(path: str) -> None:
+    """
+    Evict the wrapper for *path* from the cache.
+
+    Because file datasources hold no persistent connection, this is purely a
+    cache-management operation.  Safe to call even if the path is not cached.
+    """
+    safe_path = str(Path(path).resolve())
+    async with _lock:
+        _file_cache.pop(safe_path, None)
+
+
+# ------------------------------------------------------------------------------
+# Connection test
+# ------------------------------------------------------------------------------
+
+async def test_file_connection(path: str, file_type: str) -> bool:
+    """
+    Verify that *path* exists, is readable, and can be minimally parsed.
+
+    Reads only the smallest possible slice of the file (1 row / schema header)
+    to avoid unnecessary I/O.  Registers circuit-breaker state accordingly.
+
+    Returns:
+        ``True`` on success, ``False`` on any failure.
+    """
+    try:
+        wrapper = await get_file_datasource(path, file_type)
+    except Exception:
+        return False
+
+    def _probe() -> bool:
+        ft = wrapper.file_type
+        sp = wrapper.path
+
+        if ft == "csv":
+            import pandas as pd
+            # Read exactly 1 row — cheap existence and parse verification.
+            chunk_iter = pd.read_csv(sp, chunksize=1, nrows=1)
+            chunk = next(chunk_iter)
+            return len(chunk.columns) > 0
+
+        if ft == "excel":
+            import pandas as pd
+            df = pd.read_excel(sp, nrows=1)
+            return len(df.columns) > 0
+
+        if ft == "parquet":
+            import pyarrow.parquet as pq
+            pf = pq.ParquetFile(sp)
+            # Accessing metadata does not load row data.
+            return pf.metadata.num_row_groups >= 0
+
+        if ft == "json":
+            import pandas as pd
+            lines = _is_jsonl(sp)
+            if lines:
+                df = pd.read_json(sp, lines=True, nrows=1)
+            else:
+                df = pd.read_json(sp)
+                df = df.head(1)
+            return len(df.columns) > 0
+
+        if ft == "avro":
+            import fastavro
+            with open(sp, "rb") as fh:
+                reader = fastavro.reader(fh)
+                return reader.writer_schema is not None
+
+        raise ValueError(f"Unsupported file type: {ft!r}")
+
+    try:
+        await asyncio.get_running_loop().run_in_executor(None, _probe)
+        await _file_register_success(wrapper)
+        return True
+    except Exception:
+        await _file_register_failure(wrapper)
+        return False
+
+
+# ------------------------------------------------------------------------------
+# Schema extraction
+# ------------------------------------------------------------------------------
+
+async def fetch_file_schema(path: str, file_type: str) -> List[Dict[str, str]]:
+    """
+    Infer and return the schema of a file datasource.
+
+    For CSV / Excel / JSON the schema is inferred from a small sample (up to
+    500 rows) to keep memory usage bounded.  For Parquet the schema is read
+    directly from file metadata without loading any row data.  For Avro the
+    schema is extracted from the file header.
+
+    Returns:
+        A list of ``{"column": <name>, "type": <type_string>}`` dicts.
+    """
+    wrapper = await get_file_datasource(path, file_type)
+
+    def _read_schema() -> List[Dict[str, str]]:
+        ft = wrapper.file_type
+        sp = wrapper.path
+
+        if ft == "csv":
+            import pandas as pd
+            # A 500-row sample is sufficient for dtype inference while keeping
+            # memory usage well-bounded for very large files.
+            df = pd.read_csv(sp, nrows=500)
+            return [
+                {"column": col, "type": str(dtype)}
+                for col, dtype in df.dtypes.items()
+            ]
+
+        if ft == "excel":
+            import pandas as pd
+            df = pd.read_excel(sp, nrows=500)
+            return [
+                {"column": col, "type": str(dtype)}
+                for col, dtype in df.dtypes.items()
+            ]
+
+        if ft == "parquet":
+            import pyarrow.parquet as pq
+            # read_schema() reads only the file footer — no row data loaded.
+            schema = pq.read_schema(sp)
+            return [
+                {"column": field.name, "type": str(field.type)}
+                for field in schema
+            ]
+
+        if ft == "json":
+            import pandas as pd
+            lines = _is_jsonl(sp)
+            if lines:
+                df = pd.read_json(sp, lines=True, nrows=500)
+            else:
+                # JSON arrays must be fully parsed before slicing; document
+                # this limitation for very large JSON files.
+                df = pd.read_json(sp)
+                df = df.head(500)
+            return [
+                {"column": col, "type": str(dtype)}
+                for col, dtype in df.dtypes.items()
+            ]
+
+        if ft == "avro":
+            import fastavro
+            with open(sp, "rb") as fh:
+                reader = fastavro.reader(fh)
+                avro_schema = reader.writer_schema
+            return _parse_avro_schema(avro_schema)
+
+        raise ValueError(f"Unsupported file type: {ft!r}")
+
+    try:
+        schema = await asyncio.get_running_loop().run_in_executor(None, _read_schema)
+        await _file_register_success(wrapper)
+        return schema
+    except Exception:
+        await _file_register_failure(wrapper)
+        raise
+
+
+# ------------------------------------------------------------------------------
+# Preview (first N rows)
+# ------------------------------------------------------------------------------
+
+async def fetch_file_preview(
+    path: str,
+    file_type: str,
+    limit: int = 50,
+) -> List[Dict[str, Any]]:
+    """
+    Return up to *limit* rows from the file as a list of plain dicts.
+
+    Reads only the required rows where the format supports it (CSV via
+    ``nrows``, Parquet via ``iter_batches``).  For formats that require full
+    parsing first (JSON arrays, Excel, Avro) the slice is applied after an
+    initial in-memory parse.
+
+    Returns:
+        A list of row dicts: ``[{"col1": val, "col2": val, ...}, ...]``
+    """
+    wrapper = await get_file_datasource(path, file_type)
+
+    def _read_preview() -> List[Dict[str, Any]]:
+        ft = wrapper.file_type
+        sp = wrapper.path
+
+        if ft == "csv":
+            import pandas as pd
+            df = pd.read_csv(sp, nrows=limit)
+            return df.to_dict(orient="records")
+
+        if ft == "excel":
+            import pandas as pd
+            df = pd.read_excel(sp, nrows=limit)
+            return df.to_dict(orient="records")
+
+        if ft == "parquet":
+            import pyarrow.parquet as pq
+            pf = pq.ParquetFile(sp)
+            # iter_batches streams row-groups; reading only *limit* rows avoids
+            # loading the full file.
+            batch_iter = pf.iter_batches(batch_size=limit)
+            try:
+                batch = next(batch_iter)
+            except StopIteration:
+                return []
+            return batch.to_pandas().to_dict(orient="records")
+
+        if ft == "json":
+            import pandas as pd
+            lines = _is_jsonl(sp)
+            if lines:
+                df = pd.read_json(sp, lines=True, nrows=limit)
+            else:
+                df = pd.read_json(sp)
+                df = df.head(limit)
+            return df.to_dict(orient="records")
+
+        if ft == "avro":
+            import fastavro
+            records: List[Dict[str, Any]] = []
+            with open(sp, "rb") as fh:
+                reader = fastavro.reader(fh)
+                for record in reader:
+                    records.append(dict(record))
+                    if len(records) >= limit:
+                        break
+            return records
+
+        raise ValueError(f"Unsupported file type: {ft!r}")
+
+    try:
+        preview = await asyncio.get_running_loop().run_in_executor(None, _read_preview)
+        await _file_register_success(wrapper)
+        return preview
+    except Exception:
+        await _file_register_failure(wrapper)
+        raise
+
+
+# ------------------------------------------------------------------------------
+# File listing (tables abstraction)
+# ------------------------------------------------------------------------------
+
+async def fetch_file_listing(path: str, file_type: str) -> List[str]:
+    """
+    Return the logical "tables" exposed by a file.
+
+    - **Excel**: returns all sheet names.
+    - **All other types**: returns a single-element list containing the
+      file's base name (the file itself is the table).
+
+    This function is the file-datasource counterpart of
+    :func:`fetch_rdbms_tables` and :func:`fetch_mongo_collections`.
+    """
+    wrapper = await get_file_datasource(path, file_type)
+
+    def _list() -> List[str]:
+        ft = wrapper.file_type
+        sp = wrapper.path
+
+        if ft == "excel":
+            import pandas as pd
+            xl = pd.ExcelFile(sp)
+            return xl.sheet_names  # type: ignore[return-value]
+
+        # For every other format the file represents a single table.
+        return [Path(sp).name]
+
+    try:
+        listing = await asyncio.get_running_loop().run_in_executor(None, _list)
+        await _file_register_success(wrapper)
+        return listing
+    except Exception:
+        await _file_register_failure(wrapper)
+        raise
+
+
+# ------------------------------------------------------------------------------
+# TTL cleanup — file datasources
+# ------------------------------------------------------------------------------
+
+async def cleanup_idle_file_datasources() -> None:
+    """
+    Background task that evicts idle :class:`FileDataSourceWrapper` entries
+    from ``_file_cache`` after ``_FILE_TTL_SECONDS`` of inactivity.
+
+    Run alongside :func:`cleanup_idle_connections`::
+
+        asyncio.create_task(cleanup_idle_connections())
+        asyncio.create_task(cleanup_idle_file_datasources())
+
+    Because file datasources hold no persistent I/O handle, eviction is a
+    pure cache-removal operation with no teardown cost.
+    """
+    while True:
+        await asyncio.sleep(300)  # check every 5 minutes
+
+        now = time.time()
+        async with _lock:
+            for path in list(_file_cache.keys()):
+                wrapper = _file_cache[path]
+                if now - wrapper.last_used > _FILE_TTL_SECONDS:
+                    del _file_cache[path]
+
+
+# ==============================================================================
+# UNIFIED SOURCE ABSTRACTION  (bonus)
+# Provides a single entry-point for listing logical "tables" regardless of
+# whether the backing store is an RDBMS, MongoDB, or a file.
+# ==============================================================================
+
+async def fetch_tables_or_collections_or_files(
+    source_type: str,
+    # RDBMS kwargs
+    url: Optional[str] = None,
+    db_type: Optional[str] = None,
+    # MongoDB kwargs
+    uri: Optional[str] = None,
+    database: Optional[str] = None,
+    # File kwargs
+    path: Optional[str] = None,
+    file_type: Optional[str] = None,
+) -> List[str]:
+    """
+    Unified abstraction that returns the list of addressable "tables" for any
+    supported datasource type.
+
+    +--------------+-------------------------------------------+
+    | source_type  | Returns                                   |
+    +==============+===========================================+
+    | ``"rdbms"``  | Table names in the target database        |
+    +--------------+-------------------------------------------+
+    | ``"mongo"``  | Collection names in the target database   |
+    +--------------+-------------------------------------------+
+    | ``"file"``   | Sheet names (Excel) or ``[filename]``     |
+    +--------------+-------------------------------------------+
+
+    Args:
+        source_type: ``"rdbms"``, ``"mongo"``, or ``"file"``.
+        url:         RDBMS connection URL  (required for ``"rdbms"``).
+        db_type:     ``"postgres"`` / ``"mysql"`` / ``"sqlite"``
+                     (required for ``"rdbms"``).
+        uri:         MongoDB connection URI  (required for ``"mongo"``).
+        database:    MongoDB database name   (required for ``"mongo"``).
+        path:        File path               (required for ``"file"``).
+        file_type:   File type string        (required for ``"file"``).
+
+    Returns:
+        List of table / collection / sheet names.
+
+    Raises:
+        ValueError: For an unknown *source_type* or missing required kwargs.
+    """
+    if source_type == "rdbms":
+        if not url or not db_type:
+            raise ValueError(
+                "fetch_tables_or_collections_or_files: "
+                "'url' and 'db_type' are required for source_type='rdbms'."
+            )
+        return await fetch_rdbms_tables(url=url, db_type=db_type)
+
+    if source_type == "mongo":
+        if not uri or not database:
+            raise ValueError(
+                "fetch_tables_or_collections_or_files: "
+                "'uri' and 'database' are required for source_type='mongo'."
+            )
+        return await fetch_mongo_collections(uri=uri, database=database)
+
+    if source_type == "file":
+        if not path or not file_type:
+            raise ValueError(
+                "fetch_tables_or_collections_or_files: "
+                "'path' and 'file_type' are required for source_type='file'."
+            )
+        return await fetch_file_listing(path=path, file_type=file_type)
+
+    raise ValueError(
+        f"Unknown source_type: {source_type!r}. "
+        "Expected one of: 'rdbms', 'mongo', 'file'."
+    )

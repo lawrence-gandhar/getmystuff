@@ -1,16 +1,20 @@
 import uuid
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from litestar.exceptions import HTTPException
 from sqlalchemy.orm.attributes import flag_modified
+from pydantic import ValidationError
 
 from app.models.datasource import DataSource
+from app.schemas.datasource import DatasourceCreateSchema, DatasourceUpdateSchema
 from app.services.metadata_service import (
     get_rdbms_tables,
     get_mongo_collections,
     get_table_schema,
 )
 from app.utils.crypto import encrypt_password
+from app.utils.file_utils import FILE_BASED_TYPES
 from app.db.db_utils import (
     CRUDQueryBuilder,
     build_rdbms_url,
@@ -47,6 +51,7 @@ async def test_connection(db_type, host, port, database, username, password):
 async def create_datasource(
     db: AsyncSession,
     user_id: uuid.UUID,
+    datasource_name: str,
     db_type: str,
     host: str,
     port: str,
@@ -55,22 +60,36 @@ async def create_datasource(
     password: str,
     connection_tester,
 ):
+    # Validate and normalize datasource_name via Pydantic schema.
+    # Raises HTTPException(422) on validation failure so the caller
+    # (route handler) can surface a clean error message to the UI.
+    try:
+        validated = DatasourceCreateSchema(datasource_name=datasource_name)
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=exc.errors()[0]["msg"],
+        )
 
-    if not db_type or not database_name:
-        raise HTTPException(status_code=400, detail="Missing required fields")
+    is_file_type = db_type in FILE_BASED_TYPES
 
-    is_valid = await connection_tester(
-        db_type, host, port, database_name, username, password
-    )
+    if not is_file_type:
+        if not db_type or not database_name:
+            raise HTTPException(status_code=400, detail="Missing required fields")
 
-    if not is_valid:
-        raise HTTPException(status_code=400, detail="Connection Failed")
+        is_valid = await connection_tester(
+            db_type, host, port, database_name, username, password
+        )
 
-    encrypted_password = encrypt_password(password)
+        if not is_valid:
+            raise HTTPException(status_code=400, detail="Connection Failed")
+
+    encrypted_password = encrypt_password(password) if password else ""
 
     try:
         datasource = await datasource_crud.create(db, {
             "user_id": user_id,
+            "datasource_name": validated.datasource_name,
             "db_type": db_type,
             "host": host,
             "port": port,
@@ -79,17 +98,76 @@ async def create_datasource(
             "password_encrypted": encrypted_password,
         })
 
-        configuration_data = await collect_datasource_metadata(datasource)
-
-        datasource = await datasource_crud.update(
-            db, datasource.id, {"configuration_data":configuration_data}
-        )
+        if not is_file_type:
+            configuration_data = await collect_datasource_metadata(datasource)
+            datasource = await datasource_crud.update(
+                db, datasource.id, {"configuration_data": configuration_data}
+            )
 
         return datasource
-    
+
+    except IntegrityError:
+        # The functional unique index uq_datasource_name_lower fired —
+        # a datasource with the same name (case-insensitively) already exists.
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="A datasource with this name already exists",
+        )
     except Exception as e:
         print(str(e))
         return False
+
+
+# -----------------------------------
+# UPDATE DATASOURCE NAME
+# -----------------------------------
+async def update_datasource_name(
+    db: AsyncSession,
+    datasource_id: uuid.UUID,
+    user_id: uuid.UUID,
+    datasource_name: str,
+) -> DataSource:
+    """
+    Rename an existing datasource.
+
+    Validates and normalizes the new name through DatasourceUpdateSchema,
+    then persists it.  Returns the updated DataSource instance.
+
+    Raises:
+        HTTPException(404) – datasource not found or not owned by user.
+        HTTPException(422) – validation / normalization failure.
+        HTTPException(409) – name already taken (case-insensitive).
+    """
+    datasource = await datasource_crud.get_one(
+        db,
+        filters={"id": datasource_id, "user_id": user_id},
+    )
+
+    if not datasource:
+        raise HTTPException(status_code=404, detail="Datasource not found")
+
+    try:
+        validated = DatasourceUpdateSchema(datasource_name=datasource_name)
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=exc.errors()[0]["msg"],
+        )
+
+    try:
+        updated = await datasource_crud.update(
+            db,
+            datasource_id,
+            {"datasource_name": validated.datasource_name},
+        )
+        return updated
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="A datasource with this name already exists",
+        )
 
 
 # -----------------------------------
@@ -125,6 +203,7 @@ async def get_datasource_objects(
 
     return {
         "datasource_id": str(datasource.id),
+        "datasource_name": datasource.datasource_name,
         "database": datasource.database_name,
         "host": datasource.host,
         "port": datasource.port,
@@ -173,7 +252,7 @@ async def get_datasource_table_schema(
     }
 
 async def get_user_datasources(
-    db: AsyncSession, 
+    db: AsyncSession,
     user_id: uuid.UUID
 ):
     return await datasource_crud.get_many(
@@ -225,10 +304,10 @@ async def collect_datasource_metadata(datasource):
         # Loop tables
         for table_name in tables:
             configuration_data[table_name] = await get_tables_columns(datasource, table_name)
-        
+
     except Exception as e:
         return False
-    
+
 async def toggle_column_status_service(
     db: AsyncSession,
     datasource_id: uuid.UUID,

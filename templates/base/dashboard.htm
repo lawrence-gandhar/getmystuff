@@ -47,7 +47,7 @@ Dashboard | GetMyStuff
 </div>
 
 <!-- OFFCANVAS SETTINGS PANEL -->
-<div class="offcanvas offcanvas-end" tabindex="-1" id="settingsOffcanvas">
+<div class="offcanvas offcanvas-end" tabindex="-1" id="settingsOffcanvas" style="width:75vw">
     <div class="offcanvas-header">
         <h5 class="offcanvas-title">
             <i class="las la-database"></i> Add Data Source
@@ -63,60 +63,127 @@ Dashboard | GetMyStuff
             <div class="spinner-border text-primary"></div>
         </div>
 
-        <form 
+        <form
+            id="addDatasourceForm"
             hx-post="/datasource/create"
             hx-target="#datasource-message"
             hx-swap="innerHTML"
             hx-indicator="#loading-spinner"
+            hx-encoding="multipart/form-data"
         >
+
+            <!-- Datasource Name -->
+            <div class="mb-3">
+                <label class="form-label" for="ds-name">
+                    Datasource Name <span class="text-danger">*</span>
+                </label>
+                <input
+                    type="text"
+                    class="form-control"
+                    id="ds-name"
+                    name="datasource_name"
+                    placeholder="e.g. sales_db"
+                    required
+                    autocomplete="off"
+                    hx-post="/datasource/validate-name"
+                    hx-trigger="blur"
+                    hx-target="#datasource-name-feedback"
+                    hx-swap="innerHTML"
+                    hx-params="datasource_name"
+                >
+                <div id="datasource-name-feedback"></div>
+                <div class="form-text">
+                    Unique identifier. Allowed: <code>a–z</code>, <code>0–9</code>,
+                    <code>_</code>. Automatically lowercased.
+                </div>
+            </div>
 
             <!-- Database Type -->
             <div class="mb-3">
-                <label class="form-label">Database Type</label>
-                <select class="form-select" name="db_type" required>
+                <label class="form-label" for="dbTypeSelect">Database Type</label>
+                <select class="form-select" name="db_type" id="dbTypeSelect" required>
                     <option value="">Select Database</option>
-                    <option value="postgres">PostgreSQL</option>
-                    <option value="mysql">MySQL</option>
-                    <option value="mongodb">MongoDB</option>
-                    <option value="sqlite">SQLite</option>
-                    <option value="oracle">Oracle</option>
+                    <optgroup label="Relational / NoSQL">
+                        <option value="postgres">PostgreSQL</option>
+                        <option value="mysql">MySQL</option>
+                        <option value="mongodb">MongoDB</option>
+                        <option value="sqlite">SQLite</option>
+                        <option value="oracle">Oracle</option>
+                    </optgroup>
+                    <optgroup label="File-based">
+                        <option value="csv">CSV</option>
+                        <option value="xls">XLS / XLSX</option>
+                        <option value="json">JSON / JSONL</option>
+                        <option value="parquet">Parquet</option>
+                        <option value="avro">Avro</option>
+                    </optgroup>
                 </select>
             </div>
 
-            <!-- Host -->
-            <div class="mb-3">
-                <label class="form-label">Host</label>
-                <input type="text" class="form-control" name="host" placeholder="localhost">
+            <!-- DB connection fields (hidden for file-based types) -->
+            <div id="db-connection-fields">
+
+                <div class="mb-3">
+                    <label class="form-label" for="ds-host">Host</label>
+                    <input type="text" class="form-control" id="ds-host" name="host" placeholder="localhost">
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label" for="ds-port">Port</label>
+                    <input type="number" class="form-control" id="ds-port" name="port" placeholder="5432">
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label" for="ds-database-name">Database Name</label>
+                    <input type="text" class="form-control" id="ds-database-name" name="database_name">
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label" for="ds-username">Username</label>
+                    <input type="text" class="form-control" id="ds-username" name="username">
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label" for="ds-password">Password</label>
+                    <input type="password" class="form-control" id="ds-password" name="password">
+                </div>
+
             </div>
 
-            <!-- Port -->
-            <div class="mb-3">
-                <label class="form-label">Port</label>
-                <input type="number" class="form-control" name="port" placeholder="5432">
-            </div>
+            <!-- File upload section (shown instead of connection fields) -->
+            <div id="file-upload-section" class="d-none">
 
-            <!-- Database Name -->
-            <div class="mb-3">
-                <label class="form-label">Database Name</label>
-                <input type="text" class="form-control" name="database_name">
-            </div>
+                <div class="mb-3">
+                    <label class="form-label fw-semibold" for="ds-files">
+                        Upload Files
+                    </label>
+                    <input
+                        type="file"
+                        class="form-control"
+                        id="ds-files"
+                        name="files"
+                        multiple
+                    >
+                    <div class="form-text" id="ds-files-hint"></div>
+                </div>
 
-            <!-- Username -->
-            <div class="mb-3">
-                <label class="form-label">Username</label>
-                <input type="text" class="form-control" name="username">
-            </div>
+                <!-- UPLOAD PROGRESS BAR (hidden until upload starts) -->
+                <div id="ds-upload-progress-wrap" class="mb-3 d-none">
+                    <div class="d-flex justify-content-between small text-muted mb-1">
+                        <span>Uploading…</span>
+                        <span id="ds-upload-pct">0%</span>
+                    </div>
+                    <progress id="ds-upload-progress" class="w-100" value="0" max="100"></progress>
+                </div>
 
-            <!-- Password -->
-            <div class="mb-3">
-                <label class="form-label">Password</label>
-                <input type="password" class="form-control" name="password">
+                <div id="ds-file-check-results" class="mb-2"></div>
+
             </div>
 
             <!-- Submit -->
             <div class="d-grid mt-4">
-                <button type="submit" class="btn btn-primary">
-                    <i class="las la-plus-circle"></i> Add Data Source
+                <button type="submit" class="btn btn-primary" id="addDsBtn">
+                    <i class="las la-plus-circle"></i> <span id="addDsBtnText">Add Data Source</span>
                 </button>
             </div>
 
@@ -125,25 +192,105 @@ Dashboard | GetMyStuff
     </div>
 </div>
 
-<script src="https://unpkg.com/htmx.org@1.9.10"></script>
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+{% endblock %}
 
+
+{% block extra_js %}
 <script>
-document.querySelector("select[name='db_type']")
-.addEventListener("change", function() {
+(function () {
+    const FILE_TYPES = new Set(["csv", "xls", "json", "parquet", "avro"]);
 
-    const db = this.value;
-    const hostField = document.querySelector("input[name='host']").closest(".mb-3");
-    const portField = document.querySelector("input[name='port']").closest(".mb-3");
+    const ACCEPT_MAP = {
+        csv:     ".csv",
+        xls:     ".xls,.xlsx",
+        json:    ".json,.jsonl",
+        parquet: ".parquet",
+        avro:    ".avro",
+    };
+    const HINT_MAP = {
+        csv:     "Allowed: .csv",
+        xls:     "Allowed: .xls, .xlsx",
+        json:    "Allowed: .json, .jsonl",
+        parquet: "Allowed: .parquet",
+        avro:    "Allowed: .avro",
+    };
 
-    if (db === "sqlite") {
-        hostField.style.display = "none";
-        portField.style.display = "none";
-    } else {
-        hostField.style.display = "block";
-        portField.style.display = "block";
-    }
-});
+    const dbTypeSelect    = document.getElementById("dbTypeSelect");
+    const dbFields        = document.getElementById("db-connection-fields");
+    const fileSection     = document.getElementById("file-upload-section");
+    const fileInput       = document.getElementById("ds-files");
+    const fileHint        = document.getElementById("ds-files-hint");
+    const fileCheckArea   = document.getElementById("ds-file-check-results");
+    const btnText         = document.getElementById("addDsBtnText");
+    const hostField       = document.getElementById("ds-host").closest(".mb-3");
+    const portField       = document.getElementById("ds-port").closest(".mb-3");
+    const progressWrap    = document.getElementById("ds-upload-progress-wrap");
+    const progressBar     = document.getElementById("ds-upload-progress");
+    const progressPct     = document.getElementById("ds-upload-pct");
+    const addDatasourceForm = document.getElementById("addDatasourceForm");
+
+    // ── db_type change: toggle visible sections ───────────────────────────
+    dbTypeSelect.addEventListener("change", function () {
+        const db = this.value;
+        const isFile = FILE_TYPES.has(db);
+
+        dbFields.style.display = isFile ? "none" : "block";
+        fileSection.classList.toggle("d-none", !isFile);
+
+        if (isFile) {
+            fileInput.accept = ACCEPT_MAP[db] || "";
+            fileHint.textContent = HINT_MAP[db] || "";
+            fileCheckArea.innerHTML = "";
+        } else {
+            const hidePair = db === "sqlite";
+            hostField.style.display = hidePair ? "none" : "block";
+            portField.style.display = hidePair ? "none" : "block";
+        }
+
+        btnText.textContent = isFile ? "Create & Upload" : "Add Data Source";
+    });
+
+    // ── Client-side file list preview (no server call at creation time) ───
+    fileInput.addEventListener("change", function () {
+        const files = Array.from(this.files);
+        if (!files.length) {
+            fileCheckArea.innerHTML = "";
+            return;
+        }
+        const items = files.map(f =>
+            `<div class="d-flex align-items-center gap-2 mb-1">` +
+            `<i class="las la-file-alt text-primary"></i>` +
+            `<span class="small text-truncate">${f.name}</span>` +
+            `<span class="badge bg-secondary ms-auto">${(f.size / 1024).toFixed(1)} KB</span>` +
+            `</div>`
+        );
+        fileCheckArea.innerHTML = items.join("");
+    });
+
+    // ── Upload progress bar ───────────────────────────────────────────────
+    // htmx:configRequest fires before the XHR is sent, giving us the raw
+    // XMLHttpRequest so we can attach an upload-phase progress listener.
+    addDatasourceForm.addEventListener("htmx:configRequest", function (evt) {
+        evt.detail.xhr.upload.addEventListener("progress", function (e) {
+            if (e.lengthComputable) {
+                const pct = Math.round((e.loaded / e.total) * 100);
+                progressBar.value = pct;
+                progressPct.textContent = pct + "%";
+            }
+        });
+    });
+
+    addDatasourceForm.addEventListener("htmx:beforeRequest", function () {
+        progressBar.value = 0;
+        progressPct.textContent = "0%";
+        progressWrap.classList.remove("d-none");
+    });
+
+    addDatasourceForm.addEventListener("htmx:afterRequest", function () {
+        progressWrap.classList.add("d-none");
+        progressBar.value = 0;
+        progressPct.textContent = "0%";
+    });
+}());
 </script>
-
 {% endblock %}

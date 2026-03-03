@@ -1,6 +1,7 @@
 import uuid
+from typing import Optional, List
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy import String, Boolean, ForeignKey, UniqueConstraint, DateTime
+from sqlalchemy import String, Boolean, Integer, ForeignKey, UniqueConstraint, DateTime, Index, text
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.sql import func
@@ -21,6 +22,16 @@ class DataSource(Base):
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False
+    )
+
+    # Human-readable unique identifier.
+    # Stored normalized (lowercase, alphanum + underscore only).
+    # The functional unique index uq_datasource_name_lower enforces
+    # case-insensitive uniqueness at the database level.
+    datasource_name: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+        index=True,
     )
 
     db_type: Mapped[str] = mapped_column(String(50))
@@ -54,6 +65,25 @@ class DataSource(Base):
         "DatasourceToolBaseConfig",
         back_populates="datasource",
         cascade="all, delete-orphan"
+    )
+
+    files = relationship(
+        "DatasourceFile",
+        back_populates="datasource",
+        cascade="all, delete-orphan",
+        order_by="DatasourceFile.uploaded_at",
+    )
+
+    # Functional unique index: enforces case-insensitive uniqueness on
+    # datasource_name at the PostgreSQL level.  Alembic autogenerate does
+    # not detect functional indexes — the hand-written migration
+    # (c7d1f4a8e3b9_add_datasource_name) creates this index explicitly.
+    __table_args__ = (
+        Index(
+            "uq_datasource_name_lower",
+            text("lower(datasource_name)"),
+            unique=True,
+        ),
     )
 
 class DatasourceToolBaseConfig(Base):
@@ -180,3 +210,76 @@ class DataSourceAgentConfig(Base):
     )
 
 
+class DatasourceFile(Base):
+    """
+    Tracks every file uploaded to a file-based datasource.
+
+    Versioning:
+      • ``normalized_base_name`` is the logical file identity
+        (e.g. "sales_data.csv").  All versions of the same logical file
+        share this value.
+      • ``stored_filename`` is the physical name on disk
+        (e.g. "sales_data.csv" for v1, "sales_data_v2.csv" for v2, …).
+      • Only one record per ``(datasource_id, normalized_base_name)``
+        should have ``is_active=True`` at any time.
+    """
+    __tablename__ = "datasource_files"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+
+    datasource_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("datasources.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    uploaded_by: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    # Original name as supplied by the user.
+    original_filename: Mapped[str] = mapped_column(String(500), nullable=False)
+
+    # Physical filename on disk (may include _v2, _v3 suffix for newer versions).
+    stored_filename: Mapped[str] = mapped_column(String(500), nullable=False)
+
+    # Normalized form of original_filename — used as the logical file key
+    # when resolving versions.
+    normalized_base_name: Mapped[str] = mapped_column(
+        String(500),
+        nullable=False,
+        index=True,
+    )
+
+    # Absolute (or project-relative) path to the stored file.
+    file_path: Mapped[str] = mapped_column(String(1000), nullable=False)
+
+    # SHA-256 hex digest; NULL when the file could not be read after write.
+    checksum: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
+    # Monotonically increasing per logical file; starts at 1.
+    version: Mapped[int] = mapped_column(
+        Integer,
+        default=1,
+        nullable=False,
+        index=True,
+    )
+
+    # Only the most-recent active record is used for queries / previews.
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    uploaded_at: Mapped[DateTime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        index=True,
+    )
+
+    datasource = relationship("DataSource", back_populates="files")
