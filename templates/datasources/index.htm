@@ -60,6 +60,14 @@ Datasources | GetMyStuff
                         <td>{{ datasource.port }}</td>
                         <td>{{ datasource.database_name }}</td>
                         <td>
+                            {% if datasource.db_type in ['csv', 'xls', 'json', 'parquet', 'avro'] %}
+                            <button
+                                class="btn btn-sm btn-outline-primary"
+                                onclick="fpOpen('{{ datasource.id }}', '{{ datasource.datasource_name }}')"
+                            >
+                                Preview
+                            </button>
+                            {% else %}
                             <button
                                 class="btn btn-sm btn-outline-primary"
                                 hx-get="/datasource/{{ datasource.id }}"
@@ -69,6 +77,7 @@ Datasources | GetMyStuff
                             >
                                 Preview
                             </button>
+                            {% endif %}
                             <button
                                 class="btn btn-sm btn-outline-secondary"
                                 onclick="openRenameModal('{{ datasource.id }}', '{{ datasource.datasource_name }}')"
@@ -101,6 +110,58 @@ Datasources | GetMyStuff
 
         <div class="offcanvas-body" id="preview-container">
             <!-- HTMX will inject preview here -->
+        </div>
+    </div>
+
+    <!-- ============================================================
+         OFFCANVAS — FILE DATA PREVIEW
+         ============================================================ -->
+    <div
+        class="offcanvas offcanvas-end"
+        tabindex="-1"
+        id="fpOffcanvas"
+        aria-labelledby="fpOffcanvasLabel"
+        style="width: 92vw;"
+    >
+        <div class="offcanvas-header border-bottom">
+            <h5 class="offcanvas-title" id="fpOffcanvasLabel">
+                <i class="las la-table text-primary"></i>
+                Preview: <span id="fpDsName" class="fw-bold"></span>
+            </h5>
+            <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+        </div>
+
+        <div class="offcanvas-body" style="display:flex; flex-direction:column; padding-bottom:0; overflow:hidden;">
+
+            <!-- File selector (shown when datasource has multiple uploaded files) -->
+            <div id="fpFileSelector" style="display:none; margin-bottom:12px;">
+                <label class="form-label fw-semibold small mb-1" for="fpFileSelect">File</label>
+                <select id="fpFileSelect" class="form-select form-select-sm"></select>
+            </div>
+
+            <!-- Loading spinner -->
+            <div id="fpSpinner" style="display:none; text-align:center; padding:48px 0;">
+                <div class="spinner-border text-primary"></div>
+                <div class="small text-muted mt-2">Loading preview…</div>
+            </div>
+
+            <!-- Error alert -->
+            <div id="fpError" class="alert alert-danger" style="display:none;" role="alert"></div>
+
+            <!-- Table container — grows to fill remaining height -->
+            <div id="fpTable" class="overflow-auto" style="display:none; flex:1; min-height:0;"></div>
+
+            <!-- Pagination controls — pinned to bottom -->
+            <div id="fpPagination" style="display:none; align-items:center; gap:8px; padding:12px 0; border-top:1px solid #dee2e6; flex-shrink:0;">
+                <button id="fpBtnPrev" class="btn btn-sm btn-outline-secondary" disabled>
+                    &laquo; Previous
+                </button>
+                <span id="fpPageInfo" class="small text-muted px-2">Page 1</span>
+                <button id="fpBtnNext" class="btn btn-sm btn-outline-secondary">
+                    Next &raquo;
+                </button>
+            </div>
+
         </div>
     </div>
 
@@ -317,6 +378,141 @@ Datasources | GetMyStuff
 
 
 {% block extra_js %}
+
+<!-- ============================================================
+     FILE PREVIEW — state + helpers
+     ============================================================ -->
+<script>
+(function () {
+    // ── Shared state ─────────────────────────────────────────────────────
+    const fp = { dsId: null, page: 1, fileId: null, hasNext: false };
+
+    // ── DOM refs (resolved once on first open) ────────────────────────────
+    const $ = id => document.getElementById(id);
+
+    // ── Public: called by the Preview button on file-based datasources ────
+    window.fpOpen = function (datasourceId, name) {
+        fp.dsId   = datasourceId;
+        fp.page   = 1;
+        fp.fileId = null;
+        fp.hasNext = false;
+
+        $('fpDsName').textContent = name;
+        $('fpError').style.display        = 'none';
+        $('fpTable').style.display        = 'none';
+        $('fpPagination').style.display   = 'none';
+        $('fpFileSelector').style.display = 'none';
+        $('fpSpinner').style.display      = 'none';
+
+        bootstrap.Offcanvas.getOrCreateInstance($('fpOffcanvas')).show();
+        _fpFetch();
+    };
+
+    // ── Fetch one page from the backend ──────────────────────────────────
+    function _fpFetch() {
+        $('fpSpinner').style.display    = 'block';
+        $('fpTable').style.display      = 'none';
+        $('fpError').style.display      = 'none';
+        $('fpPagination').style.display = 'none';
+        $('fpBtnPrev').disabled = true;
+        $('fpBtnNext').disabled = true;
+
+        let url = `/datasource/${fp.dsId}/file-preview?page=${fp.page}`;
+        if (fp.fileId) url += `&file_id=${encodeURIComponent(fp.fileId)}`;
+
+        fetch(url)
+            .then(r => {
+                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                return r.json();
+            })
+            .then(data => {
+                $('fpSpinner').style.display = 'none';
+
+                if (data.error) {
+                    $('fpError').textContent    = data.error;
+                    $('fpError').style.display  = 'block';
+                    return;
+                }
+
+                // ── File selector (only when multiple files exist) ────────
+                if (data.files && data.files.length > 1) {
+                    const sel = $('fpFileSelect');
+                    // Rebuild options only when the file list changed
+                    const key = data.files.map(f => f.id).join(',');
+                    if (sel.dataset.key !== key) {
+                        sel.innerHTML = data.files
+                            .map(f => `<option value="${_esc(f.id)}">${_esc(f.filename)}</option>`)
+                            .join('');
+                        sel.dataset.key = key;
+                    }
+                    sel.value = data.file_id;
+                    $('fpFileSelector').style.display = 'block';
+                }
+
+                // ── Update state ──────────────────────────────────────────
+                fp.hasNext = data.has_next;
+                fp.fileId  = data.file_id;
+
+                // ── Render table ──────────────────────────────────────────
+                _fpRenderTable(data.columns, data.rows);
+                $('fpTable').style.display = 'block';
+
+                // ── Pagination ────────────────────────────────────────────
+                $('fpPageInfo').textContent  = `Page ${fp.page}`;
+                $('fpBtnPrev').disabled      = fp.page <= 1;
+                $('fpBtnNext').disabled      = !data.has_next;
+                $('fpPagination').style.display = 'flex';
+            })
+            .catch(() => {
+                $('fpSpinner').style.display = 'none';
+                $('fpError').textContent     = 'Failed to load preview data. Please try again.';
+                $('fpError').style.display   = 'block';
+            });
+    }
+
+    // ── Build the HTML table from columns + rows arrays ───────────────────
+    function _fpRenderTable(columns, rows) {
+        const ths = columns.map(c => `<th class="text-nowrap small fw-semibold">${_esc(c)}</th>`).join('');
+        const trs = rows.map(row =>
+            '<tr>' + row.map(cell => `<td class="small text-nowrap">${_esc(String(cell ?? ''))}</td>`).join('') + '</tr>'
+        ).join('');
+        $('fpTable').innerHTML =
+            `<table class="table table-sm table-hover table-bordered mb-0">` +
+            `<thead class="table-light"><tr>${ths}</tr></thead>` +
+            `<tbody>${trs}</tbody>` +
+            `</table>`;
+    }
+
+    // ── HTML entity escaper — prevents XSS from file content ─────────────
+    function _esc(s) {
+        return String(s ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    // ── Pagination buttons ────────────────────────────────────────────────
+    $('fpBtnPrev').addEventListener('click', () => {
+        if (fp.page > 1) { fp.page--; _fpFetch(); }
+    });
+    $('fpBtnNext').addEventListener('click', () => {
+        if (fp.hasNext) { fp.page++; _fpFetch(); }
+    });
+
+    // ── File selector change ──────────────────────────────────────────────
+    $('fpFileSelect').addEventListener('change', function () {
+        fp.fileId = this.value;
+        fp.page   = 1;
+        _fpFetch();
+    });
+}());
+</script>
+
+<!-- ============================================================
+     RENAME MODAL
+     ============================================================ -->
 <script>
     let _renameDatasourceId = null;
 

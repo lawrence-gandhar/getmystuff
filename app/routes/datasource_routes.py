@@ -1,6 +1,8 @@
 import re
 import uuid
+import asyncio
 from datetime import datetime
+from pathlib import Path
 
 from litestar import post, get, Controller
 from litestar.response import Response, Template
@@ -10,7 +12,7 @@ from litestar.connection import Request
 from litestar.exceptions import HTTPException
 
 from app.models.user import User
-from app.models.datasource import DataSource
+from app.models.datasource import DataSource, DatasourceFile
 from app.services.datasource_service import (
     test_connection,
     create_datasource,
@@ -27,6 +29,113 @@ from app.db.auth import require_auth
 
 # Compiled once at import time — reused on every validation request.
 _NAME_RE = re.compile(r'^[a-z0-9_]+$')
+
+# ─────────────────────────────────────────────────────────────
+# File preview helpers — each runs inside asyncio.to_thread so
+# they never block the event loop. Pandas is imported lazily to
+# keep startup fast when the library is not installed.
+# ─────────────────────────────────────────────────────────────
+
+_PREVIEW_PAGE_SIZE = 50
+
+
+def _read_csv_chunk(file_path: str, page: int) -> tuple | None:
+    """Return one page of CSV data without loading the whole file.
+
+    Uses pd.read_csv(chunksize=…) so only two chunks are ever in memory:
+    the target chunk and one extra row used to detect has_next.
+    """
+    import pandas as pd  # lazy import
+
+    chunks = pd.read_csv(
+        file_path, chunksize=_PREVIEW_PAGE_SIZE, dtype=str, low_memory=False
+    )
+    target = None
+    has_next = False
+    for i, chunk in enumerate(chunks):
+        if i == page - 1:
+            target = chunk
+        elif i == page:
+            has_next = True
+            break
+    if target is None:
+        return None
+    columns = target.columns.tolist()
+    rows = target.fillna("").values.tolist()
+    return columns, rows, has_next
+
+
+def _read_excel_chunk(file_path: str, page: int) -> tuple | None:
+    """Return one page of XLS/XLSX data using skiprows + nrows.
+
+    Row 0 (header) is always kept; data rows from previous pages are
+    skipped by index. Reads _PREVIEW_PAGE_SIZE + 1 rows to probe has_next
+    without loading the entire file into memory.
+    """
+    import pandas as pd  # lazy import
+
+    skip_data = (page - 1) * _PREVIEW_PAGE_SIZE
+    # Build list of 1-based row indices to skip (keeps row 0 as header).
+    skip_rows = list(range(1, skip_data + 1)) if skip_data > 0 else None
+    df = pd.read_excel(
+        file_path,
+        skiprows=skip_rows,
+        nrows=_PREVIEW_PAGE_SIZE + 1,  # +1 to detect whether a next page exists
+        dtype=str,
+    )
+    if df.empty:
+        return None
+    has_next = len(df) > _PREVIEW_PAGE_SIZE
+    if has_next:
+        df = df.iloc[:_PREVIEW_PAGE_SIZE]
+    columns = df.columns.tolist()
+    rows = df.fillna("").values.tolist()
+    return columns, rows, has_next
+
+
+def _read_parquet_chunk(file_path: str, page: int) -> tuple | None:
+    """Return one page of Parquet data using pyarrow's iter_batches.
+
+    Only two batches are materialised at most (target + has_next probe),
+    regardless of total file size.
+    """
+    import pyarrow.parquet as pq  # lazy import
+
+    pf = pq.ParquetFile(file_path)
+    target_idx = page - 1
+    target_batch = None
+    has_next = False
+    for i, batch in enumerate(pf.iter_batches(batch_size=_PREVIEW_PAGE_SIZE)):
+        if i == target_idx:
+            target_batch = batch
+        elif i == target_idx + 1:
+            has_next = True
+            break
+    if target_batch is None or len(target_batch) == 0:
+        return None
+    df = target_batch.to_pandas().fillna("").astype(str)
+    columns = df.columns.tolist()
+    rows = df.values.tolist()
+    return columns, rows, has_next
+
+
+def _read_file_chunk(file_path: str, page: int) -> tuple | None:
+    """Dispatch to the correct reader based on file extension.
+
+    Returns (columns, rows, has_next) or None when the page is empty.
+    Raises FileNotFoundError / ValueError for unrecoverable conditions.
+    """
+    path = Path(file_path)
+    if not path.exists():
+        raise FileNotFoundError(f"File not found: {file_path}")
+    ext = path.suffix.lower().lstrip(".")
+    if ext == "csv":
+        return _read_csv_chunk(file_path, page)
+    if ext in ("xls", "xlsx"):
+        return _read_excel_chunk(file_path, page)
+    if ext == "parquet":
+        return _read_parquet_chunk(file_path, page)
+    raise ValueError(f"Unsupported file format: .{ext}")
 
 
 class DataSourceController(Controller):
@@ -561,3 +670,118 @@ class DataSourceController(Controller):
             + "</ul>"
         )
         return Response(html, media_type="text/html")
+
+    # --------------------------
+    # FILE DATA PREVIEW (paginated, memory-safe)
+    # --------------------------
+    @get("/{datasource_id:uuid}/file-preview")
+    async def file_preview(
+        self,
+        datasource_id: uuid.UUID,
+        request: Request,
+        db: AsyncSession,
+        user: User,
+    ) -> dict:
+        """Return one page of data from an uploaded file datasource as JSON.
+
+        Never loads the full file — uses chunk iterators / skiprows so that
+        only _PREVIEW_PAGE_SIZE rows are in memory at any time.
+
+        Query params
+        ------------
+        page     : int  (default 1)
+        file_id  : str  UUID of a specific DatasourceFile record (optional)
+        """
+        try:
+            page = max(1, int(request.query_params.get("page", "1")))
+        except (ValueError, TypeError):
+            page = 1
+
+        file_id_str = request.query_params.get("file_id")
+
+        # Verify ownership
+        datasource = await db.get(DataSource, datasource_id)
+        if not datasource or datasource.user_id != user.id:
+            return {"error": "Datasource not found"}
+
+        # Resolve the target file
+        if file_id_str:
+            try:
+                file_uuid = uuid.UUID(file_id_str)
+            except ValueError:
+                return {"error": "Invalid file ID"}
+            stmt = select(DatasourceFile).where(
+                DatasourceFile.id == file_uuid,
+                DatasourceFile.datasource_id == datasource_id,
+                DatasourceFile.is_active == True,  # noqa: E712
+            )
+        else:
+            # Default: most recently uploaded active file
+            stmt = (
+                select(DatasourceFile)
+                .where(
+                    DatasourceFile.datasource_id == datasource_id,
+                    DatasourceFile.is_active == True,  # noqa: E712
+                )
+                .order_by(DatasourceFile.uploaded_at.desc())
+                .limit(1)
+            )
+
+        result = await db.execute(stmt)
+        target_file = result.scalar_one_or_none()
+
+        if not target_file:
+            return {
+                "error": (
+                    "No uploaded files found for this datasource. "
+                    "Please upload a file first."
+                )
+            }
+
+        # All active files — sent to the frontend for the file selector
+        all_stmt = (
+            select(DatasourceFile)
+            .where(
+                DatasourceFile.datasource_id == datasource_id,
+                DatasourceFile.is_active == True,  # noqa: E712
+            )
+            .order_by(DatasourceFile.uploaded_at.desc())
+        )
+        all_result = await db.execute(all_stmt)
+        files_list = [
+            {"id": str(f.id), "filename": f.original_filename}
+            for f in all_result.scalars().all()
+        ]
+
+        # Read the chunk in a thread — never blocks the event loop
+        try:
+            chunk = await asyncio.to_thread(
+                _read_file_chunk, target_file.file_path, page
+            )
+        except FileNotFoundError:
+            return {
+                "error": "File not found on disk. It may have been moved or deleted."
+            }
+        except ValueError as exc:
+            return {"error": str(exc)}
+        except Exception as exc:  # noqa: BLE001
+            return {"error": f"Failed to read file: {exc}"}
+
+        if chunk is None:
+            return {
+                "error": (
+                    "No data found at this page. "
+                    "The file may be empty or the page number is out of range."
+                )
+            }
+
+        columns, rows, has_next = chunk
+        return {
+            "columns": columns,
+            "rows": rows,
+            "page": page,
+            "has_next": has_next,
+            "file_id": str(target_file.id),
+            "filename": target_file.original_filename,
+            "files": files_list,
+        }

@@ -85,6 +85,15 @@
         </button>
     </div>
 
+    <!-- UPLOAD PROGRESS BAR (hidden until upload starts) -->
+    <div id="uploadProgressWrap-{{ datasource_id }}" class="mb-2 d-none">
+        <div class="d-flex justify-content-between small text-muted mb-1">
+            <span>Uploading…</span>
+            <span id="uploadPct-{{ datasource_id }}">0%</span>
+        </div>
+        <progress id="uploadProgress-{{ datasource_id }}" class="w-100" value="0" max="100"></progress>
+    </div>
+
     <!-- UPLOAD RESULTS (populated by JS) -->
     <div id="uploadResults-{{ datasource_id }}"></div>
 
@@ -130,31 +139,52 @@
     });
 
     // ── Step 2: upload ────────────────────────────────────────────────────
-    uploadBtn.addEventListener("click", async function () {
+    const progressWrap = document.getElementById("uploadProgressWrap-" + dsId);
+    const progressBar  = document.getElementById("uploadProgress-" + dsId);
+    const progressPct  = document.getElementById("uploadPct-" + dsId);
+
+    uploadBtn.addEventListener("click", function () {
         const files = Array.from(fileInput.files);
         if (!files.length) return;
 
         uploadBtn.disabled = true;
-        uploadRes.innerHTML = "<div class='text-muted small'>Uploading\u2026</div>";
+        uploadRes.innerHTML = "";
 
         const fd = new FormData();
         files.forEach(f => fd.append("files", f));
         fd.append("override", overSwitch && overSwitch.checked ? "yes" : "no");
 
-        const res = await fetch("/datasource/" + dsId + "/upload-files", {
-            method: "POST",
-            body: fd,
+        const xhr = new XMLHttpRequest();
+
+        xhr.upload.addEventListener("progress", function (e) {
+            if (e.lengthComputable) {
+                const pct = Math.round((e.loaded / e.total) * 100);
+                progressBar.value = pct;
+                progressPct.textContent = pct + "%";
+            }
         });
 
-        uploadRes.innerHTML = await res.text();
-        uploadBtn.disabled = false;
+        xhr.addEventListener("loadstart", function () {
+            progressBar.value = 0;
+            progressPct.textContent = "0%";
+            progressWrap.classList.remove("d-none");
+        });
 
-        // Clear file input and check area after a successful upload.
-        if (res.ok) {
-            fileInput.value = "";
-            checkArea.innerHTML = "";
-            overToggle.style.display = "none";
-        }
+        xhr.addEventListener("loadend", function () {
+            progressWrap.classList.add("d-none");
+            progressBar.value = 0;
+            uploadRes.innerHTML = xhr.responseText;
+            uploadBtn.disabled = false;
+
+            if (xhr.status >= 200 && xhr.status < 300) {
+                fileInput.value = "";
+                checkArea.innerHTML = "";
+                overToggle.style.display = "none";
+            }
+        });
+
+        xhr.open("POST", "/datasource/" + dsId + "/upload-files");
+        xhr.send(fd);
     });
 }());
 </script>
