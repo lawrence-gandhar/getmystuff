@@ -101,6 +101,19 @@ async def create_datasource(
 
         if not is_file_type:
             configuration_data = await collect_datasource_metadata(datasource)
+
+            if not configuration_data:
+                await db.delete(datasource)
+                await db.commit()
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "We connected to the database successfully, but could not read "
+                        "any tables or collections from it. Please make sure the database "
+                        "is not empty and your user account has permission to list tables."
+                    ),
+                )
+
             datasource = await datasource_crud.update(
                 db, datasource.id, {"configuration_data": configuration_data}
             )
@@ -304,21 +317,23 @@ async def collect_datasource_metadata(datasource):
     with column_data dictionary format.
     """
 
-    try:
-        configuration_data = {}
+    configuration_data = {}
 
-        # Get tables / collections
+    try:
         if datasource.db_type == "mongodb":
             tables = await get_mongo_collections(datasource)
         else:
             tables = await get_rdbms_tables(datasource)
+    except Exception:
+        return configuration_data
 
-        # Loop tables
-        for table_name in tables:
+    for table_name in tables:
+        try:
             configuration_data[table_name] = await get_tables_columns(datasource, table_name)
+        except Exception:
+            continue
 
-    except Exception as e:
-        return False
+    return configuration_data
 
 async def toggle_column_status_service(
     db: AsyncSession,

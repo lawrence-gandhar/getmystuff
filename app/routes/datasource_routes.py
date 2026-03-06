@@ -18,6 +18,7 @@ from app.services.datasource_service import (
     create_datasource,
     update_datasource_name,
     get_datasource_objects,
+    get_datasource_table_schema,
     get_user_datasources,
     toggle_column_status_service,
     toggle_table_status_service,
@@ -422,7 +423,22 @@ class DataSourceController(Controller):
 
         configuration_data = datasource.get("configuration_data") or {}
         table_schema = configuration_data.get(table_name, {})
-        column_data = table_schema.get("column_data", [])
+        column_data = table_schema.get("column_data") or {}
+
+        if not column_data:
+            # configuration_data was never populated (e.g. existing datasources
+            # created before the collect_datasource_metadata return bug was fixed).
+            # Fall back to a live schema fetch from the actual database.
+            live = await get_datasource_table_schema(
+                db=db,
+                datasource_id=datasource_id,
+                user_id=user.id,
+                table_name=table_name,
+            )
+            column_data = {
+                col["column"]: {"column_name": col["column"], "status": "active"}
+                for col in live.get("schema", [])
+            }
 
         return Template(
             template_name="datasources/column_view.htm",

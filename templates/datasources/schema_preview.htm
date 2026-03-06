@@ -68,9 +68,9 @@
         <thead class="table-light">
             <tr>
                 <th>#</th>
-                <th>Table/Collection Name</th>
-                <th width="220">Status</th>
-                <th  width="280" class="text-nowrap">Action</th>
+                <th>Table Name</th>
+                <th style="width:100px">Status</th>
+                <th style="width:280px" class="text-nowrap">Action</th>
             </tr>
         </thead>
         <tbody>
@@ -94,8 +94,7 @@
                         hx-get="/datasource/{{ datasource_id }}/table/{{ obj }}/view"
                         hx-target="#viewModalContent"
                         hx-swap="innerHTML"
-                        data-bs-toggle="modal"
-                        data-bs-target="#viewModal"
+                        hx-on="htmx:afterOnLoad: bootstrap.Modal.getOrCreateInstance(document.getElementById('viewModal')).show()"
                     >
                         View
                     </button>

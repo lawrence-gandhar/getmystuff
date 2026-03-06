@@ -209,12 +209,6 @@ Datasources | GetMyStuff
                                     >
                                         Preview
                                     </button>
-                                    <button
-                                        class="btn btn-sm btn-outline-secondary"
-                                        onclick="openRenameModal('{{ datasource.id }}', '{{ datasource.datasource_name }}')"
-                                    >
-                                        Rename
-                                    </button>
                                 </td>
                             </tr>
                             {% else %}
@@ -574,7 +568,7 @@ Datasources | GetMyStuff
                             title="Lowercase letters, digits, and underscores only"
                         >
                         <div class="form-text">
-                            Allowed: <code>a–z</code>, <code>0–9</code>, <code>_</code>.
+                            Allowed: <code>a-z</code>, <code>0-9</code>, <code>_</code>.
                         </div>
                     </div>
 
