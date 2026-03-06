@@ -6,7 +6,7 @@ from litestar.exceptions import HTTPException
 from sqlalchemy.orm.attributes import flag_modified
 from pydantic import ValidationError
 
-from app.models.datasource import DataSource
+from app.models.datasource import DataSource, DatasourceFile
 from app.schemas.datasource import DatasourceCreateSchema, DatasourceUpdateSchema
 from app.services.metadata_service import (
     get_rdbms_tables,
@@ -20,7 +20,8 @@ from app.db.db_utils import (
     build_rdbms_url,
     build_mongo_uri,
     test_rdbms_connection,
-    test_mongo_connection
+    test_mongo_connection,
+    fetch_file_listing,
 )
 
 from typing import Optional
@@ -193,6 +194,17 @@ async def get_datasource_objects(
     try:
         if datasource.db_type == "mongodb":
             objects = await get_mongo_collections(datasource)
+        elif datasource.db_type in FILE_BASED_TYPES:
+            result = await db.execute(
+                select(DatasourceFile)
+                .where(DatasourceFile.datasource_id == datasource_id)
+                .where(DatasourceFile.is_active == True)
+            )
+            files = result.scalars().all()
+            objects = []
+            for f in files:
+                listing = await fetch_file_listing(path=f.file_path, file_type=datasource.db_type)
+                objects.extend(listing)
         else:
             objects = await get_rdbms_tables(datasource)
     except Exception as e:
@@ -382,36 +394,42 @@ async def search_sort_tables(
     datasource = await db.get(DataSource, datasource_id)
 
     if not datasource or datasource.user_id != user_id:
-        return None
+        return []
+
+    # Fetch live objects so search works against the actual DB, not just saved config
+    try:
+        if datasource.db_type == "mongodb":
+            live_tables = await get_mongo_collections(datasource)
+        elif datasource.db_type in FILE_BASED_TYPES:
+            live_tables = []
+        else:
+            live_tables = await get_rdbms_tables(datasource)
+    except Exception:
+        live_tables = []
 
     configuration = datasource.configuration_data or {}
 
-    tables = list(configuration.keys())
-
-    # print("Tables", tables)
-
-    # SEARCH
+    # SEARCH (substring, case-insensitive)
     if search:
-        tables = [t for t in tables if search in t.lower()]
+        live_tables = [t for t in live_tables if search in t.lower()]
 
-    # FILTER
-    if status_filter != "all":
-        tables = [
-            t for t in tables
-            if configuration[t]["status"] == status_filter
+    # STATUS FILTER — use configuration_data status, default "active" for unconfigured tables
+    if status_filter and status_filter != "all":
+        live_tables = [
+            t for t in live_tables
+            if configuration.get(t, {}).get("status", "active") == status_filter
         ]
 
     # SORT
-    reverse = True if sort_by == "za" else False
-    tables.sort(reverse=reverse)
+    live_tables.sort(reverse=(sort_by == "za"))
 
-    # Return list of table configuration objects with table_name included
+    # Build result — overlay status from configuration_data
     result = []
-    for table_name in tables:
-        table_config = configuration[table_name].copy()
-        table_config["table_name"] = table_name
-        table_config.pop("column_data")
-        table_config.pop("column_count")
-        result.append(table_config)
+    for table_name in live_tables:
+        cfg = configuration.get(table_name, {})
+        result.append({
+            "table_name": table_name,
+            "status": cfg.get("status", "active"),
+        })
 
     return result

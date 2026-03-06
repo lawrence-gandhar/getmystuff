@@ -31,6 +31,16 @@ Dashboard | GetMyStuff
         </div>
 
         <div class="col-md-4">
+            <div class="dashboard-card">
+                <div class="card-icon mb-3">
+                    <i class="las la-box"></i>
+                </div>
+                <h5>Settings</h5>
+                <p class="text-muted">Manage settings.</p>
+            </div>
+        </div>
+
+        <!-- <div class="col-md-4">
             <div class="dashboard-card" role="button"
                 data-bs-toggle="offcanvas"
                 data-bs-target="#settingsOffcanvas">
@@ -40,14 +50,14 @@ Dashboard | GetMyStuff
                 <h5>Settings</h5>
                 <p class="text-muted">Add and manage data sources.</p>
             </div>
-        </div>
+        </div> -->
 
     </div>
 
 </div>
 
 <!-- OFFCANVAS SETTINGS PANEL -->
-<div class="offcanvas offcanvas-end" tabindex="-1" id="settingsOffcanvas" style="width:75vw">
+<!-- <div class="offcanvas offcanvas-end" tabindex="-1" id="settingsOffcanvas" style="width:75vw">
     <div class="offcanvas-header">
         <h5 class="offcanvas-title">
             <i class="las la-database"></i> Add Data Source
@@ -72,7 +82,7 @@ Dashboard | GetMyStuff
             hx-encoding="multipart/form-data"
         >
 
-            <!-- Datasource Name -->
+            
             <div class="mb-3">
                 <label class="form-label" for="ds-name">
                     Datasource Name <span class="text-danger">*</span>
@@ -98,7 +108,7 @@ Dashboard | GetMyStuff
                 </div>
             </div>
 
-            <!-- Database Type -->
+            
             <div class="mb-3">
                 <label class="form-label" for="dbTypeSelect">Database Type</label>
                 <select class="form-select" name="db_type" id="dbTypeSelect" required>
@@ -120,7 +130,7 @@ Dashboard | GetMyStuff
                 </select>
             </div>
 
-            <!-- DB connection fields (hidden for file-based types) -->
+            
             <div id="db-connection-fields">
 
                 <div class="mb-3">
@@ -150,7 +160,7 @@ Dashboard | GetMyStuff
 
             </div>
 
-            <!-- File upload section (shown instead of connection fields) -->
+            
             <div id="file-upload-section" class="d-none">
 
                 <div class="mb-3">
@@ -167,7 +177,7 @@ Dashboard | GetMyStuff
                     <div class="form-text" id="ds-files-hint"></div>
                 </div>
 
-                <!-- UPLOAD PROGRESS BAR (hidden until upload starts) -->
+                
                 <div id="ds-upload-progress-wrap" class="mb-3 d-none">
                     <div class="d-flex justify-content-between small text-muted mb-1">
                         <span>Uploading…</span>
@@ -180,7 +190,6 @@ Dashboard | GetMyStuff
 
             </div>
 
-            <!-- Submit -->
             <div class="d-grid mt-4">
                 <button type="submit" class="btn btn-primary" id="addDsBtn">
                     <i class="las la-plus-circle"></i> <span id="addDsBtnText">Add Data Source</span>
@@ -190,107 +199,8 @@ Dashboard | GetMyStuff
         </form>
 
     </div>
-</div>
+</div> -->
 
 {% endblock %}
 
 
-{% block extra_js %}
-<script>
-(function () {
-    const FILE_TYPES = new Set(["csv", "xls", "json", "parquet", "avro"]);
-
-    const ACCEPT_MAP = {
-        csv:     ".csv",
-        xls:     ".xls,.xlsx",
-        json:    ".json,.jsonl",
-        parquet: ".parquet",
-        avro:    ".avro",
-    };
-    const HINT_MAP = {
-        csv:     "Allowed: .csv",
-        xls:     "Allowed: .xls, .xlsx",
-        json:    "Allowed: .json, .jsonl",
-        parquet: "Allowed: .parquet",
-        avro:    "Allowed: .avro",
-    };
-
-    const dbTypeSelect    = document.getElementById("dbTypeSelect");
-    const dbFields        = document.getElementById("db-connection-fields");
-    const fileSection     = document.getElementById("file-upload-section");
-    const fileInput       = document.getElementById("ds-files");
-    const fileHint        = document.getElementById("ds-files-hint");
-    const fileCheckArea   = document.getElementById("ds-file-check-results");
-    const btnText         = document.getElementById("addDsBtnText");
-    const hostField       = document.getElementById("ds-host").closest(".mb-3");
-    const portField       = document.getElementById("ds-port").closest(".mb-3");
-    const progressWrap    = document.getElementById("ds-upload-progress-wrap");
-    const progressBar     = document.getElementById("ds-upload-progress");
-    const progressPct     = document.getElementById("ds-upload-pct");
-    const addDatasourceForm = document.getElementById("addDatasourceForm");
-
-    // ── db_type change: toggle visible sections ───────────────────────────
-    dbTypeSelect.addEventListener("change", function () {
-        const db = this.value;
-        const isFile = FILE_TYPES.has(db);
-
-        dbFields.style.display = isFile ? "none" : "block";
-        fileSection.classList.toggle("d-none", !isFile);
-
-        if (isFile) {
-            fileInput.accept = ACCEPT_MAP[db] || "";
-            fileHint.textContent = HINT_MAP[db] || "";
-            fileCheckArea.innerHTML = "";
-        } else {
-            const hidePair = db === "sqlite";
-            hostField.style.display = hidePair ? "none" : "block";
-            portField.style.display = hidePair ? "none" : "block";
-        }
-
-        btnText.textContent = isFile ? "Create & Upload" : "Add Data Source";
-    });
-
-    // ── Client-side file list preview (no server call at creation time) ───
-    fileInput.addEventListener("change", function () {
-        const files = Array.from(this.files);
-        if (!files.length) {
-            fileCheckArea.innerHTML = "";
-            return;
-        }
-        const items = files.map(f =>
-            `<div class="d-flex align-items-center gap-2 mb-1">` +
-            `<i class="las la-file-alt text-primary"></i>` +
-            `<span class="small text-truncate">${f.name}</span>` +
-            `<span class="badge bg-secondary ms-auto">${(f.size / 1024).toFixed(1)} KB</span>` +
-            `</div>`
-        );
-        fileCheckArea.innerHTML = items.join("");
-    });
-
-    // ── Upload progress bar ───────────────────────────────────────────────
-    // htmx:configRequest fires before the XHR is sent, giving us the raw
-    // XMLHttpRequest so we can attach an upload-phase progress listener.
-    addDatasourceForm.addEventListener("htmx:configRequest", function (evt) {
-        evt.detail.xhr.upload.addEventListener("progress", function (e) {
-            if (e.lengthComputable) {
-                const pct = Math.round((e.loaded / e.total) * 100);
-                progressBar.value = pct;
-                progressPct.textContent = pct + "%";
-            }
-        });
-    });
-
-    addDatasourceForm.addEventListener("htmx:beforeRequest", function () {
-        progressBar.value = 0;
-        progressPct.textContent = "0%";
-        progressWrap.classList.remove("d-none");
-    });
-
-    addDatasourceForm.addEventListener("htmx:afterRequest", function () {
-        progressWrap.classList.add("d-none");
-        progressBar.value = 0;
-        progressPct.textContent = "0%";
-    });
-}());
-</script>
-{% endblock %}

@@ -79,7 +79,7 @@ class DataSourceConfigurations(Controller):
         Render configuration page for a specific table/collection.
         """
 
-        config = get_datasource_table_schema(
+        config = await get_datasource_table_schema(
             db,
             datasource_id = datasource_id,
             user_id = user.id,

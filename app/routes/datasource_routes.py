@@ -420,13 +420,15 @@ class DataSourceController(Controller):
             user_id=user.id,
         )
 
-        schema = datasource.get("configuration_data", {})
+        configuration_data = datasource.get("configuration_data") or {}
+        table_schema = configuration_data.get(table_name, {})
+        column_data = table_schema.get("column_data", [])
 
         return Template(
             template_name="datasources/column_view.htm",
             context={
                 "table_name": table_name,
-                "schema": schema[table_name]["column_data"],
+                "schema": column_data,
                 "datasource_id": str(datasource_id),
             },
         )

@@ -9,6 +9,70 @@
         color:#fff;
     }
 
+    /* ── Side-nav tab widget ── */
+    #dsvPanel {
+        min-height: 420px;
+    }
+
+    #dsvSidenav {
+        min-width: 210px;
+        max-width: 210px;
+        background-color: #f8f9fa;
+        border-right: 1px solid #dee2e6;
+        display: flex;
+        flex-direction: column;
+        padding: 0.75rem 0;
+    }
+
+    .dsv-section-label {
+        padding: 0.35rem 1rem 0.25rem;
+        font-size: 0.68rem;
+        font-weight: 700;
+        letter-spacing: 0.09em;
+        text-transform: uppercase;
+        color: #adb5bd;
+    }
+
+    .dsv-nav-btn {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        width: 100%;
+        background: none;
+        border: none;
+        border-left: 3px solid transparent;
+        padding: 0.5rem 1rem;
+        text-align: left;
+        font-size: 0.855rem;
+        color: #495057;
+        cursor: pointer;
+        transition: background 0.12s, color 0.12s, border-color 0.12s;
+        white-space: nowrap;
+    }
+
+    .dsv-nav-btn:hover {
+        background-color: #e9ecef;
+        color: #0d6efd;
+    }
+
+    .dsv-nav-btn.active {
+        background-color: #e7f1ff;
+        color: #0d6efd;
+        border-left-color: #0d6efd;
+        font-weight: 600;
+    }
+
+    .dsv-tab-pane {
+        display: none;
+        padding: 1.25rem;
+        width: 100%;
+        overflow-x: auto;
+    }
+
+    .dsv-tab-pane.dsv-active {
+        display: block;
+    }
+
 </style>
 
 <div class="container-fluid mt-4">
@@ -45,112 +109,261 @@
     <!-- RESPONSE TOAST -->
     <div id="config-response" class="mb-3"></div>
 
-    <!-- COLUMN SUMMARY CARD -->
-    <div class="card shadow-sm mb-4">
-        <div class="card-header d-flex justify-content-between align-items-center">
-            <span class="fw-semibold">
-                <i class="las la-table text-primary"></i> Data Sources Summary
-            </span>
+    <!-- ============================================================
+         NEW: TABBED SIDE-NAV VIEW
+         (existing stacked cards below are kept for testing)
+         ============================================================ -->
+    {% set file_types = ["csv", "xls", "json", "parquet", "avro"] %}
+    {% set rdbms_types_tab = ["postgres", "mysql", "sqlite"] %}
+    {% set nosql_types_tab = ["mongodb"] %}
+
+    <div id="dsvPanel" class="card shadow-sm mb-5 d-flex flex-row overflow-hidden">
+
+        <!-- ── SIDE NAV ── -->
+        <div id="dsvSidenav">
+
+            <span class="dsv-section-label">Data Sources</span>
+
+            <button class="dsv-nav-btn active" data-dsv-target="tab-file">
+                <i class="las la-file-alt"></i> File Based
+            </button>
+            <button class="dsv-nav-btn" data-dsv-target="tab-rdbms">
+                <i class="las la-database"></i> RDBMS
+            </button>
+            <button class="dsv-nav-btn" data-dsv-target="tab-nosql">
+                <i class="las la-leaf"></i> Collections
+            </button>
+
+            <hr class="mx-3 my-2">
+            <span class="dsv-section-label">Configurations</span>
+
+            <button class="dsv-nav-btn" data-dsv-target="tab-tool-cfg">
+                <i class="las la-tools"></i> Tool Configs
+            </button>
+            <button class="dsv-nav-btn" data-dsv-target="tab-agent-cfg">
+                <i class="las la-robot"></i> Agent Configs
+            </button>
+
         </div>
-        <div class="card-body p-0">
-            {% if datasources %}
+
+        <!-- ── TAB CONTENT ── -->
+        <div class="flex-grow-1">
+
+            <!-- FILE BASED TAB -->
+            <div class="dsv-tab-pane dsv-active" id="tab-file">
+                <h6 class="fw-semibold mb-3">
+                    <i class="las la-file-alt text-success"></i> Data Sources File Based Summary
+                </h6>
                 <div class="table-responsive">
                     <table class="table table-hover align-middle mb-0">
                         <thead class="table-light">
                             <tr>
                                 <th>#</th>
                                 <th>Data Source Name</th>
-                                <th>Status</th>
+                                <th style="width:140px;">Type</th>
+                                <th style="width:100px;">Status</th>
                             </tr>
                         </thead>
                         <tbody>
-                            {% for datasource in datasources %}
-                                <tr 
-                                    id="{{ datasource.id }}" 
-                                    class="datasource-row" 
-                                    data-id="{{ datasource.id }}"
-                                    style="cursor: pointer;"
-                                >
+                            {% for ds in datasources if ds.db_type in file_types %}
+                                <tr class="datasource-row" id="tab-ds-{{ ds.id }}" data-id="{{ ds.id }}" data-category="file" style="cursor:pointer;">
                                     <td class="text-muted small">{{ loop.index }}</td>
-                                    <td>{{ datasource.datasource_name }}</td>
+                                    <td>{{ ds.datasource_name }}</td>
+                                    <td><span class="badge bg-success-subtle text-success-emphasis border border-success-subtle">{{ ds.db_type | upper }}</span></td>
                                     <td>
-                                        {% if datasource.status == "active" %}
+                                        {% if ds.is_active %}
                                             <span class="badge bg-success">Active</span>
                                         {% else %}
                                             <span class="badge bg-secondary">Inactive</span>
                                         {% endif %}
                                     </td>
                                 </tr>
+                            {% else %}
+                                <tr>
+                                    <td colspan="4" class="text-center text-muted py-4">
+                                        <i class="las la-info-circle fs-5"></i><br>No file-based datasources yet.
+                                    </td>
+                                </tr>
                             {% endfor %}
                         </tbody>
                     </table>
                 </div>
-            {% else %}
-                <div class="p-4 text-muted text-center">
-                    <i class="las la-info-circle"></i> No column data available.
+            </div>
+
+            <!-- RDBMS TAB -->
+            <div class="dsv-tab-pane" id="tab-rdbms">
+                <h6 class="fw-semibold mb-3">
+                    <i class="las la-database text-primary"></i> Data Sources RDBMS Based Summary
+                </h6>
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>#</th>
+                                <th>Data Source Name</th>
+                                <th style="width:140px;">Type</th>
+                                <th style="width:100px;">Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for ds in datasources if ds.db_type in rdbms_types_tab %}
+                                <tr class="datasource-row" id="tab-ds-{{ ds.id }}-rdbms" data-id="{{ ds.id }}" data-category="rdbms" style="cursor:pointer;">
+                                    <td class="text-muted small">{{ loop.index }}</td>
+                                    <td>{{ ds.datasource_name }}</td>
+                                    <td><span class="badge bg-primary-subtle text-primary-emphasis border border-primary-subtle">{{ ds.db_type | upper }}</span></td>
+                                    <td>
+                                        {% if ds.is_active %}
+                                            <span class="badge bg-success">Active</span>
+                                        {% else %}
+                                            <span class="badge bg-secondary">Inactive</span>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                            {% else %}
+                                <tr>
+                                    <td colspan="4" class="text-center text-muted py-4">
+                                        <i class="las la-info-circle fs-5"></i><br>No RDBMS datasources yet.
+                                    </td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
                 </div>
-            {% endif %}
-        </div>
-    </div>
-
-    <!-- TOOL BASE CONFIGURATIONS CARD -->
-    <div class="card shadow-sm mb-4">
-        <div class="card-header d-flex justify-content-between align-items-center">
-            <span class="fw-semibold">
-                <i class="las la-tools text-warning"></i> Tool Base Configurations
-            </span>
-            <button
-                class="btn btn-primary btn-sm"
-                type="button"
-                data-bs-toggle="offcanvas"
-                data-bs-target="#toolConfigOffcanvas"
-            >
-                <i class="las la-plus"></i> Add
-            </button>
-        </div>
-        <div class="card-body" id="tool-config-list">
-            <div class="text-muted text-center py-3">
-                <i class="las la-inbox"></i> No tool configurations yet.
             </div>
-        </div>
-    </div>
 
-    <!-- AGENT CONFIGURATIONS CARD -->
-    <div class="card shadow-sm mb-4">
-        <div class="card-header d-flex justify-content-between align-items-center">
-            <span class="fw-semibold">
-                <i class="las la-robot text-info"></i> Agent Configurations
-            </span>
-            <button
-                class="btn btn-primary btn-sm"
-                type="button"
-                data-bs-toggle="offcanvas"
-                data-bs-target="#agentConfigOffcanvas"
-            >
-                <i class="las la-plus"></i> Add
-            </button>
-        </div>
-        <div class="card-body" id="agent-config-list">
-            <div class="text-muted text-center py-3">
-                <i class="las la-inbox"></i> No agent configurations yet.
+            <!-- NOSQL TAB -->
+            <div class="dsv-tab-pane" id="tab-nosql">
+                <h6 class="fw-semibold mb-3">
+                    <i class="las la-leaf text-warning"></i> Data Sources Collection Based Summary
+                </h6>
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>#</th>
+                                <th>Data Source Name</th>
+                                <th style="width:140px;">Type</th>
+                                <th style="width:100px;">Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for ds in datasources if ds.db_type in nosql_types_tab %}
+                                <tr class="datasource-row" id="tab-ds-{{ ds.id }}-nosql" data-id="{{ ds.id }}" data-category="nosql" style="cursor:pointer;">
+                                    <td class="text-muted small">{{ loop.index }}</td>
+                                    <td>{{ ds.datasource_name }}</td>
+                                    <td><span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle">{{ ds.db_type | upper }}</span></td>
+                                    <td>
+                                        {% if ds.is_active %}
+                                            <span class="badge bg-success">Active</span>
+                                        {% else %}
+                                            <span class="badge bg-secondary">Inactive</span>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                            {% else %}
+                                <tr>
+                                    <td colspan="4" class="text-center text-muted py-4">
+                                        <i class="las la-info-circle fs-5"></i><br>No collection-based datasources yet.
+                                    </td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
             </div>
-        </div>
-    </div>
+
+            <!-- TOOL CONFIGS TAB -->
+            <div class="dsv-tab-pane" id="tab-tool-cfg">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h6 class="fw-semibold mb-0">
+                        <i class="las la-tools text-warning"></i> Tool Base Configurations
+                    </h6>
+                    <button
+                        class="btn btn-primary btn-sm"
+                        type="button"
+                        data-bs-toggle="offcanvas"
+                        data-bs-target="#toolConfigOffcanvas"
+                    >
+                        <i class="las la-plus"></i> Add
+                    </button>
+                </div>
+                <div class="text-muted text-center py-4">
+                    <i class="las la-inbox fs-4"></i><br>No tool configurations yet.
+                </div>
+            </div>
+
+            <!-- AGENT CONFIGS TAB -->
+            <div class="dsv-tab-pane" id="tab-agent-cfg">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h6 class="fw-semibold mb-0">
+                        <i class="las la-robot text-info"></i> Agent Configurations
+                    </h6>
+                    <button
+                        class="btn btn-outline-secondary btn-sm"
+                        type="button"
+                        data-bs-toggle="offcanvas"
+                        data-bs-target="#agentConfigOffcanvas"
+                    >
+                        <i class="las la-plus"></i> Add
+                    </button>
+                </div>
+                <div class="text-muted text-center py-4">
+                    <i class="las la-inbox fs-4"></i><br>No agent configurations yet.
+                </div>
+            </div>
+
+        </div><!-- /.flex-grow-1 -->
+    </div><!-- /#dsvPanel -->
+    <!-- END TABBED VIEW -->
+
+    {% set file_types = ["csv", "xls", "json", "parquet", "avro"] %}
+    {% set rdbms_types = ["postgres", "mysql", "sqlite"] %}
+    {% set nosql_types = ["mongodb"] %}
+
+    
 
 </div>
 
 <!-- ============================================
-     OFFCANVAS 1 — DATASOURCE SHOW DETAILS OFFCANVAS
+     OFFCANVAS — FILE DATASOURCE DETAILS
      ============================================ -->
+<div class="offcanvas offcanvas-end" tabindex="-1" id="fileCanvas" style="width: 75vw;">
+    <div class="offcanvas-header" style="border-bottom:1px solid #eee;">
+        <h5 class="offcanvas-title">
+            <i class="las la-file-alt text-success"></i>
+            <span id="fileCanvasTitle">File Datasource Details</span>
+        </h5>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+    </div>
+    <div class="offcanvas-body" id="fileCanvasContent">Loading...</div>
+</div>
 
-<div class="offcanvas offcanvas-end" tabindex="-1" id="datasourceCanvas" style="width: 75vw;">
-  <div class="offcanvas-header">
-    <h5 class="offcanvas-title">Datasource Details</h5>
-    <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
-  </div>
-  <div class="offcanvas-body" id="offcanvasContent">
-    Loading...
-  </div>
+<!-- ============================================
+     OFFCANVAS — RDBMS DATASOURCE DETAILS
+     ============================================ -->
+<div class="offcanvas offcanvas-end" tabindex="-1" id="rdbmsCanvas" style="width: 75vw;">
+    <div class="offcanvas-header" style="border-bottom:1px solid #eee;">
+        <h5 class="offcanvas-title">
+            <i class="las la-database text-primary"></i>
+            <span id="rdbmsCanvasTitle">RDBMS Datasource Details</span>
+        </h5>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+    </div>
+    <div class="offcanvas-body" id="rdbmsCanvasContent">Loading...</div>
+</div>
+
+<!-- ============================================
+     OFFCANVAS — COLLECTION DATASOURCE DETAILS
+     ============================================ -->
+<div class="offcanvas offcanvas-end" tabindex="-1" id="nosqlCanvas" style="width: 75vw;">
+    <div class="offcanvas-header" style="border-bottom:1px solid #eee;">
+        <h5 class="offcanvas-title">
+            <i class="las la-leaf text-warning"></i>
+            <span id="nosqlCanvasTitle">Collection Datasource Details</span>
+        </h5>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+    </div>
+    <div class="offcanvas-body" id="nosqlCanvasContent">Loading...</div>
 </div>
 
 <!-- ============================================
@@ -389,6 +602,20 @@
 
 <script>
 
+// ── Side-nav tab switching (no page reload) ──────────────────────
+document.querySelectorAll('.dsv-nav-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+        document.querySelectorAll('.dsv-nav-btn').forEach(function (b) {
+            b.classList.remove('active');
+        });
+        document.querySelectorAll('.dsv-tab-pane').forEach(function (p) {
+            p.classList.remove('dsv-active');
+        });
+        this.classList.add('active');
+        document.getElementById(this.dataset.dsvTarget).classList.add('dsv-active');
+    });
+});
+
 let globalConfigurationData = {};
 let globalDatasourceId = null;
 let currentTableColumns = [];
@@ -404,132 +631,192 @@ let queryState = {
 };
 
 // =========================================================
+// Category offcanvas registry
+// =========================================================
+const CATEGORY_CANVAS = {
+    file:  { id: "fileCanvas",  contentId: "fileCanvasContent",  titleId: "fileCanvasTitle"  },
+    rdbms: { id: "rdbmsCanvas", contentId: "rdbmsCanvasContent", titleId: "rdbmsCanvasTitle" },
+    nosql: { id: "nosqlCanvas", contentId: "nosqlCanvasContent", titleId: "nosqlCanvasTitle" },
+};
+
+// Bootstrap instances — created once after DOM ready
+const canvasInstances = {};
+
+// Close any open category canvas, then run callback
+function closeAllAndThen(callback) {
+    const openEl = document.querySelector("#fileCanvas.show, #rdbmsCanvas.show, #nosqlCanvas.show");
+    if (!openEl) {
+        callback();
+        return;
+    }
+    openEl.addEventListener("hidden.bs.offcanvas", function handler() {
+        openEl.removeEventListener("hidden.bs.offcanvas", handler);
+        callback();
+    });
+    bootstrap.Offcanvas.getInstance(openEl).hide();
+}
+
+// Render datasource details into a given content element
+function renderDatasourceDetails(contentEl, data, category) {
+    globalConfigurationData = data.datasource_details.configuration_data;
+
+    const details        = data.datasource_details;
+    const database_name  = details.database;
+    const host           = details.host;
+    const port           = details.port;
+    const user           = details.user;
+
+    const OBJECT_HEADER = {
+        file:  "File / Sheet",
+        rdbms: "Table Name",
+        nosql: "Collection Name",
+    };
+
+    const FILE_BASED_TYPES = ["csv", "xls", "json", "parquet", "avro"];
+    const isFileBased = FILE_BASED_TYPES.includes(details.db_type);
+
+    if (isFileBased || !globalConfigurationData) {
+        const objects   = details.objects || [];
+        const colHeader = OBJECT_HEADER[category] || "File / Sheet";
+        let html = `
+            <div class="table-responsive">
+                <table class="table table-bordered table-hover align-middle">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Type</th>
+                            <td colspan="2">${details.type ? details.type.toUpperCase() : "File"}</td>
+                        </tr>
+                        <tr class="custom_table_header">
+                            <th>#</th>
+                            <th>${colHeader}</th>
+                            <th class="text-center">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+        `;
+        if (objects.length === 0) {
+            html += `<tr><td colspan="3" class="text-center text-muted">No files uploaded yet.</td></tr>`;
+        } else {
+            objects.forEach((name, idx) => {
+                html += `
+                    <tr style="font-size:12px;">
+                        <td>${idx + 1}</td>
+                        <td>${name}</td>
+                        <td class="text-center">
+                            <button class="btn btn-sm btn-outline-primary"
+                                onclick="openFileCanvas('${name}')">
+                                View
+                            </button>
+                        </td>
+                    </tr>
+                `;
+            });
+        }
+        html += `</tbody></table></div>`;
+        contentEl.innerHTML = html;
+        return;
+    }
+
+    const colHeader = OBJECT_HEADER[category] || "Table Name";
+    const tables = Object.entries(globalConfigurationData);
+    tables.sort((a, b) => (a[1].status === "active" ? 0 : 1) - (b[1].status === "active" ? 0 : 1));
+
+    let html = `
+        <div class="table-responsive">
+            <table class="table table-bordered table-hover align-middle">
+                <thead class="table-light">
+                    <tr><th>Database</th><td colspan="6">${database_name}</td></tr>
+                    <tr><th>Host</th><td colspan="6">${host}</td></tr>
+                    <tr><th>Port</th><td colspan="6">${port}</td></tr>
+                    <tr><th>User</th><td colspan="6">${user}</td></tr>
+                    <tr class="custom_table_header">
+                        <th>#</th><th>${colHeader}</th><th>Status</th>
+                        <th>Total Columns</th><th>Active Columns</th>
+                        <th>Inactive Columns</th><th class="text-center">Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+    `;
+
+    let index = 1;
+    tables.forEach(([tableName, tableData]) => {
+        const totalColumns   = tableData.column_count;
+        const activeColumns  = Object.values(tableData.column_data).filter(c => c.status === "active").length;
+        const inactiveColumns = totalColumns - activeColumns;
+        const statusBadge    = tableData.status === "active"
+            ? `<span class="badge bg-success">Active</span>`
+            : `<span class="badge bg-secondary">Inactive</span>`;
+        const viewButton     = tableData.status === "active"
+            ? `<button class="btn btn-sm btn-outline-primary" onclick="openTableCanvas('${tableName}')">View</button>`
+            : `-`;
+        const rowClass       = (tableData.status === "active" && activeColumns === 0) ? "table-danger" : "";
+
+        html += `
+            <tr class="${rowClass}" style="font-size:12px;">
+                <td>${index++}</td>
+                <td>${tableName}</td>
+                <td>${statusBadge}</td>
+                <td>${totalColumns}</td>
+                <td class="text-success">${activeColumns}</td>
+                <td class="text-danger">${inactiveColumns}</td>
+                <td class="text-center">${viewButton}</td>
+            </tr>
+        `;
+    });
+
+    html += `</tbody></table></div>`;
+    contentEl.innerHTML = html;
+}
+
+// Open the right offcanvas for a row click
+function openCategoryCanvas(category, datasourceId) {
+    const cfg       = CATEGORY_CANVAS[category];
+    const targetEl  = document.getElementById(cfg.id);
+    const contentEl = document.getElementById(cfg.contentId);
+
+    function fetchAndRender() {
+        contentEl.innerHTML = "Loading...";
+        fetch(`/datasource/${datasourceId}/details`)
+            .then(r => r.json())
+            .then(data => {
+                globalDatasourceId = datasourceId;
+                renderDatasourceDetails(contentEl, data, category);
+            })
+            .catch(() => { contentEl.innerHTML = "Failed to load data."; });
+    }
+
+    // If this canvas is already open just refresh content — no close/reopen
+    if (targetEl.classList.contains("show")) {
+        fetchAndRender();
+        return;
+    }
+
+    // Close any other open canvas first, then show the target
+    closeAllAndThen(function () {
+        canvasInstances[category].show();
+        fetchAndRender();
+    });
+}
+
+// =========================================================
 document.addEventListener("DOMContentLoaded", function () {
 
-    const offcanvasElement = document.getElementById("datasourceCanvas");
-    const offcanvas = new bootstrap.Offcanvas(offcanvasElement);
-    const content = document.getElementById("offcanvasContent");
+    // Initialise Bootstrap offcanvas instances
+    Object.entries(CATEGORY_CANVAS).forEach(function ([cat, cfg]) {
+        canvasInstances[cat] = new bootstrap.Offcanvas(document.getElementById(cfg.id));
+    });
 
-    document.querySelectorAll(".datasource-row").forEach(row => {
+    // Attach click handler to every datasource row
+    document.querySelectorAll(".datasource-row").forEach(function (row) {
         row.addEventListener("click", function () {
-
             const datasourceId = this.dataset.id;
-            content.innerHTML = "Loading...";
-
-            fetch(`/datasource/${datasourceId}/details`)
-                .then(response => response.json())
-                .then(data => {
-                    
-                    globalDatasourceId = datasourceId;
-                    globalConfigurationData = data.datasource_details.configuration_data;
-
-                    const config = globalConfigurationData;
-                    const database_name = data.datasource_details.database;
-                    const host = data.datasource_details.host;
-                    const port = data.datasource_details.port;
-                    const user = data.datasource_details.user;
-
-
-                    // Convert object to array for sorting
-                    const tables = Object.entries(config);
-
-                    // Sort by status ascending (active first)
-                    tables.sort((a, b) => {
-                        const statusA = a[1].status === "active" ? 0 : 1;
-                        const statusB = b[1].status === "active" ? 0 : 1;
-                        return statusA - statusB;
-                    });
-
-                    let html = `
-
-                        <div class="table-responsive">
-                            <table class="table table-bordered table-hover align-middle">
-                                <thead class="table-light">
-                                    <tr>
-                                        <th>Database</th>
-                                        <td colspan="6">${database_name}</td>
-                                    </tr>
-                                    <tr>
-                                        <th>Host</th>
-                                        <td colspan="6">${host}</td>
-                                    </tr>
-                                    <tr>
-                                        <th>Port</th>
-                                        <td colspan="6">${port}</td>
-                                    </tr>
-                                    <tr>
-                                        <th>User</th>
-                                        <td colspan="6">${user}</td>
-                                    </tr>
-                                    <tr class="custom_table_header">
-                                        <th>#</th>
-                                        <th>Table Name</th>
-                                        <th>Status</th>
-                                        <th>Total Columns</th>
-                                        <th>Active Columns</th>
-                                        <th>Inactive Columns</th>
-                                        <th class="text-center">Action</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                    `;
-
-                    let index = 1;
-
-                    tables.forEach(([tableName, tableData]) => {
-
-                        const totalColumns = tableData.column_count;
-
-                        const activeColumns = Object.values(tableData.column_data)
-                            .filter(col => col.status === "active").length;
-
-                        const inactiveColumns = totalColumns - activeColumns;
-
-                        const statusBadge = tableData.status === "active"
-                            ? `<span class="badge bg-success">Active</span>`
-                            : `<span class="badge bg-secondary">Inactive</span>`;
-
-                        const viewButton = tableData.status === "active"
-                            ? `<button class="btn btn-sm btn-outline-primary"
-                                    onclick="openTableCanvas('${tableName}')">
-                                    View
-                            </button>`
-                            : `-`;
-
-                        const rowClass = tableData.status === "active" && activeColumns === 0
-                            ? "table-danger"
-                            : "";
-
-                        html += `
-                            <tr class="${rowClass}" style="font-size:12px;">
-                                <td>${index++}</td>
-                                <td>${tableName}</td>
-                                <td>${statusBadge}</td>
-                                <td>${totalColumns}</td>
-                                <td class="text-success">${activeColumns}</td>
-                                <td class="text-danger">${inactiveColumns}</td>
-                                <td class="text-center">${viewButton}</td>
-                            </tr>
-                        `;
-                    });
-
-                    html += `
-                                </tbody>
-                            </table>
-                        </div>
-                    `;
-
-                    content.innerHTML = html;
-                })
-                .catch(() => {
-                    content.innerHTML = "Failed to load data.";
-                });
-
-            offcanvas.show();
+            const category     = this.dataset.category;
+            if (!category || !CATEGORY_CANVAS[category]) return;
+            openCategoryCanvas(category, datasourceId);
         });
     });
 
-    // ===========================================================    
+    // ===========================================================
 });
 
 
@@ -746,6 +1033,34 @@ function updateSQLPreview() {
     }
 
     document.getElementById("sqlPreview").innerText = sql;
+}
+
+
+function openFileCanvas(fileName) {
+    const offcanvasElement = document.getElementById("tableCanvas");
+    const tableCanvas = new bootstrap.Offcanvas(offcanvasElement);
+    const content = document.getElementById("tableCanvasContent");
+    const title = document.getElementById("tableCanvasTitle");
+
+    title.textContent = fileName;
+    currentTableName = fileName;
+
+    content.innerHTML = `
+        <div class="d-flex justify-content-between align-items-start mb-3">
+            <h5 class="mb-0">${fileName}</h5>
+            <button
+                class="btn btn-primary btn-sm"
+                type="button"
+                data-bs-toggle="offcanvas"
+                data-bs-target="#toolConfigOffcanvas"
+            >
+                <i class="las la-plus"></i> New Tool Config
+            </button>
+        </div>
+        <p class="text-muted small">File-based datasource — schema preview is available after upload.</p>
+    `;
+
+    tableCanvas.show();
 }
 
 

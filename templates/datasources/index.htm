@@ -5,6 +5,64 @@ Datasources | GetMyStuff
 
 
 {% block content %}
+<style>
+    #dsPanel {
+        min-height: 420px;
+    }
+    #dsSidenav {
+        min-width: 210px;
+        max-width: 210px;
+        background-color: #f8f9fa;
+        border-right: 1px solid #dee2e6;
+        display: flex;
+        flex-direction: column;
+        padding: 0.75rem 0;
+    }
+    .ds-section-label {
+        padding: 0.35rem 1rem 0.25rem;
+        font-size: 0.68rem;
+        font-weight: 700;
+        letter-spacing: 0.09em;
+        text-transform: uppercase;
+        color: #adb5bd;
+    }
+    .ds-nav-btn {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        width: 100%;
+        background: none;
+        border: none;
+        border-left: 3px solid transparent;
+        padding: 0.5rem 1rem;
+        text-align: left;
+        font-size: 0.855rem;
+        color: #495057;
+        cursor: pointer;
+        transition: background 0.12s, color 0.12s, border-color 0.12s;
+        white-space: nowrap;
+    }
+    .ds-nav-btn:hover {
+        background-color: #e9ecef;
+        color: #0d6efd;
+    }
+    .ds-nav-btn.active {
+        background-color: #e7f1ff;
+        color: #0d6efd;
+        border-left-color: #0d6efd;
+        font-weight: 600;
+    }
+    .ds-tab-pane {
+        display: none;
+        padding: 1.25rem;
+        width: 100%;
+        overflow-x: auto;
+    }
+    .ds-tab-pane.ds-active {
+        display: block;
+    }
+</style>
+
     <div class="container mt-4" style="max-width: 100%;">
 
     <!-- PAGE HEADER -->
@@ -16,7 +74,7 @@ Datasources | GetMyStuff
             class="btn btn-primary btn-sm"
             type="button"
             data-bs-toggle="offcanvas"
-            data-bs-target="#createDatasourceOffcanvas"
+            data-bs-target="#settingsOffcanvas"
         >
             <i class="las la-plus"></i> Add Datasource
         </button>
@@ -25,74 +83,220 @@ Datasources | GetMyStuff
     <!-- RESPONSE AREA (HTMX target for create / rename feedback) -->
     <div id="datasource-response" class="mb-3"></div>
 
-    <!-- Bootstrap Table -->
-    <div class="card shadow-sm">
-        <div class="card-body">
+    {% set file_types = ["csv", "xls", "json", "parquet", "avro"] %}
+    {% set nosql_types = ["mongodb"] %}
 
-            <table class="table table-hover align-middle">
-                <thead class="table-light">
-                    <tr>
-                        <th>#</th>
-                        <th>Datasource Name</th>
-                        <th>Source Type</th>
-                        <th>Host</th>
-                        <th>Port</th>
-                        <th>Database</th>
-                        <th width="180">Action</th>
-                    </tr>
-                </thead>
-                <tbody>
+    <!-- TABBED SIDE-NAV PANEL -->
+    <div id="dsPanel" class="card shadow-sm d-flex flex-row overflow-hidden">
 
-                    {% for datasource in datasources %}
-                    <tr>
-                        <td>{{ loop.index }}</td>
-                        <td>
-                            <span class="fw-semibold text-primary">
-                                <i class="las la-tag"></i>
-                                {{ datasource.datasource_name }}
-                            </span>
-                        </td>
-                        <td>
-                            <i class="las la-database text-secondary"></i>
-                            {{ datasource.db_type }}
-                        </td>
-                        <td>{{ datasource.host }}</td>
-                        <td>{{ datasource.port }}</td>
-                        <td>{{ datasource.database_name }}</td>
-                        <td>
-                            {% if datasource.db_type in ['csv', 'xls', 'json', 'parquet', 'avro'] %}
-                            <button
-                                class="btn btn-sm btn-outline-primary"
-                                onclick="fpOpen('{{ datasource.id }}', '{{ datasource.datasource_name }}')"
-                            >
-                                Preview
-                            </button>
-                            {% else %}
-                            <button
-                                class="btn btn-sm btn-outline-primary"
-                                hx-get="/datasource/{{ datasource.id }}"
-                                hx-target="#preview-container"
-                                hx-swap="innerHTML"
-                                hx-on="htmx:afterOnLoad: bootstrap.Offcanvas.getOrCreateInstance(document.getElementById('previewOffcanvas')).show()"
-                            >
-                                Preview
-                            </button>
-                            {% endif %}
-                            <button
-                                class="btn btn-sm btn-outline-secondary"
-                                onclick="openRenameModal('{{ datasource.id }}', '{{ datasource.datasource_name }}')"
-                            >
-                                Rename
-                            </button>
-                        </td>
-                    </tr>
-                    {% endfor %}
-
-                </tbody>
-            </table>
-
+        <!-- SIDE NAV -->
+        <div id="dsSidenav">
+            <span class="ds-section-label">Data Sources</span>
+            <button class="ds-nav-btn active" data-ds-target="tab-file">
+                <i class="las la-file-alt"></i> File Based
+            </button>
+            <button class="ds-nav-btn" data-ds-target="tab-rdbms">
+                <i class="las la-database"></i> RDBMS
+            </button>
+            <button class="ds-nav-btn" data-ds-target="tab-nosql">
+                <i class="las la-leaf"></i> Collections
+            </button>
         </div>
-    </div>
+
+        <!-- TAB CONTENT -->
+        <div class="flex-grow-1">
+
+            <!-- FILE BASED TAB -->
+            <div class="ds-tab-pane ds-active" id="tab-file">
+                <h6 class="fw-semibold mb-3">
+                    <i class="las la-file-alt text-success"></i> File Based Data Sources
+                </h6>
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>#</th>
+                                <th>Datasource Name</th>
+                                <th>Type</th>
+                                <th width="180">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for datasource in datasources if datasource.db_type in file_types %}
+                            <tr>
+                                <td class="text-muted small">{{ loop.index }}</td>
+                                <td>
+                                    <span class="fw-semibold text-success">
+                                        <i class="las la-tag"></i>
+                                        {{ datasource.datasource_name }}
+                                    </span>
+                                </td>
+                                <td>
+                                    <span class="badge bg-success-subtle text-success-emphasis border border-success-subtle">
+                                        {{ datasource.db_type | upper }}
+                                    </span>
+                                </td>
+                                <td>
+                                    <button
+                                        class="btn btn-sm btn-outline-primary"
+                                        onclick="fpOpen('{{ datasource.id }}', '{{ datasource.datasource_name }}')"
+                                    >
+                                        Preview
+                                    </button>
+                                    <button
+                                        class="btn btn-sm btn-outline-secondary"
+                                        onclick="openRenameModal('{{ datasource.id }}', '{{ datasource.datasource_name }}')"
+                                    >
+                                        Rename
+                                    </button>
+                                </td>
+                            </tr>
+                            {% else %}
+                            <tr>
+                                <td colspan="4" class="text-center text-muted py-4">
+                                    <i class="las la-info-circle fs-5"></i><br>No file-based datasources yet.
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- RDBMS TAB -->
+            <div class="ds-tab-pane" id="tab-rdbms">
+                <h6 class="fw-semibold mb-3">
+                    <i class="las la-database text-primary"></i> RDBMS Data Sources
+                </h6>
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>#</th>
+                                <th>Datasource Name</th>
+                                <th>Type</th>
+                                <th>Host</th>
+                                <th>Port</th>
+                                <th>Database</th>
+                                <th width="180">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for datasource in datasources if datasource.db_type not in file_types and datasource.db_type not in nosql_types %}
+                            <tr>
+                                <td class="text-muted small">{{ loop.index }}</td>
+                                <td>
+                                    <span class="fw-semibold text-primary">
+                                        <i class="las la-tag"></i>
+                                        {{ datasource.datasource_name }}
+                                    </span>
+                                </td>
+                                <td>
+                                    <span class="badge bg-primary-subtle text-primary-emphasis border border-primary-subtle">
+                                        {{ datasource.db_type | upper }}
+                                    </span>
+                                </td>
+                                <td>{{ datasource.host }}</td>
+                                <td>{{ datasource.port }}</td>
+                                <td>{{ datasource.database_name }}</td>
+                                <td>
+                                    <button
+                                        class="btn btn-sm btn-outline-primary"
+                                        hx-get="/datasource/{{ datasource.id }}"
+                                        hx-target="#preview-container"
+                                        hx-swap="innerHTML"
+                                        hx-on="htmx:afterOnLoad: bootstrap.Offcanvas.getOrCreateInstance(document.getElementById('previewOffcanvas')).show()"
+                                    >
+                                        Preview
+                                    </button>
+                                    <button
+                                        class="btn btn-sm btn-outline-secondary"
+                                        onclick="openRenameModal('{{ datasource.id }}', '{{ datasource.datasource_name }}')"
+                                    >
+                                        Rename
+                                    </button>
+                                </td>
+                            </tr>
+                            {% else %}
+                            <tr>
+                                <td colspan="7" class="text-center text-muted py-4">
+                                    <i class="las la-info-circle fs-5"></i><br>No RDBMS datasources yet.
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- COLLECTIONS TAB -->
+            <div class="ds-tab-pane" id="tab-nosql">
+                <h6 class="fw-semibold mb-3">
+                    <i class="las la-leaf text-warning"></i> Collection Based Data Sources
+                </h6>
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>#</th>
+                                <th>Datasource Name</th>
+                                <th>Type</th>
+                                <th>Host</th>
+                                <th>Port</th>
+                                <th>Database</th>
+                                <th width="180">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for datasource in datasources if datasource.db_type in nosql_types %}
+                            <tr>
+                                <td class="text-muted small">{{ loop.index }}</td>
+                                <td>
+                                    <span class="fw-semibold" style="color:#fd7e14;">
+                                        <i class="las la-tag"></i>
+                                        {{ datasource.datasource_name }}
+                                    </span>
+                                </td>
+                                <td>
+                                    <span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle">
+                                        {{ datasource.db_type | upper }}
+                                    </span>
+                                </td>
+                                <td>{{ datasource.host }}</td>
+                                <td>{{ datasource.port }}</td>
+                                <td>{{ datasource.database_name }}</td>
+                                <td>
+                                    <button
+                                        class="btn btn-sm btn-outline-primary"
+                                        hx-get="/datasource/{{ datasource.id }}"
+                                        hx-target="#preview-container"
+                                        hx-swap="innerHTML"
+                                        hx-on="htmx:afterOnLoad: bootstrap.Offcanvas.getOrCreateInstance(document.getElementById('previewOffcanvas')).show()"
+                                    >
+                                        Preview
+                                    </button>
+                                    <button
+                                        class="btn btn-sm btn-outline-secondary"
+                                        onclick="openRenameModal('{{ datasource.id }}', '{{ datasource.datasource_name }}')"
+                                    >
+                                        Rename
+                                    </button>
+                                </td>
+                            </tr>
+                            {% else %}
+                            <tr>
+                                <td colspan="7" class="text-center text-muted py-4">
+                                    <i class="las la-info-circle fs-5"></i><br>No collection-based datasources yet.
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+        </div><!-- /.flex-grow-1 -->
+    </div><!-- /#dsPanel -->
 
     <!-- Preview Area -->
     <!-- Offcanvas Preview -->
@@ -191,133 +395,149 @@ Datasources | GetMyStuff
 <!-- ============================================================
      OFFCANVAS — CREATE DATASOURCE
      ============================================================ -->
-<div
-    class="offcanvas offcanvas-end"
-    tabindex="-1"
-    id="createDatasourceOffcanvas"
-    aria-labelledby="createDatasourceOffcanvasLabel"
-    style="width: 40vw;"
->
-    <div class="offcanvas-header border-bottom">
-        <h5 class="offcanvas-title" id="createDatasourceOffcanvasLabel">
-            <i class="las la-plus-circle text-primary"></i> Add Datasource
+<!-- OFFCANVAS SETTINGS PANEL -->
+<div class="offcanvas offcanvas-end" tabindex="-1" id="settingsOffcanvas" style="width:75vw">
+    <div class="offcanvas-header">
+        <h5 class="offcanvas-title">
+            <i class="las la-database"></i> Add Data Source
         </h5>
         <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
     </div>
 
     <div class="offcanvas-body">
 
+        <div id="datasource-message"></div>
+
+        <div id="loading-spinner" class="htmx-indicator text-center mt-2">
+            <div class="spinner-border text-primary"></div>
+        </div>
+
         <form
+            id="addDatasourceForm"
             hx-post="/datasource/create"
-            hx-target="#datasource-response"
+            hx-target="#datasource-message"
             hx-swap="innerHTML"
-            hx-on::after-request="if(event.detail.successful && event.detail.xhr.status === 200){ this.reset(); bootstrap.Offcanvas.getInstance(document.getElementById('createDatasourceOffcanvas')).hide(); location.reload(); }"
+            hx-indicator="#loading-spinner"
+            hx-encoding="multipart/form-data"
         >
 
-            <!-- DATASOURCE NAME (required) -->
+            <!-- Datasource Name -->
             <div class="mb-3">
-                <label class="form-label fw-semibold">
+                <label class="form-label" for="ds-name">
                     Datasource Name <span class="text-danger">*</span>
                 </label>
                 <input
                     type="text"
-                    name="datasource_name"
                     class="form-control"
+                    id="ds-name"
+                    name="datasource_name"
                     placeholder="e.g. sales_db"
                     required
-                    pattern="[a-z0-9_]+"
-                    title="Lowercase letters, digits, and underscores only"
+                    autocomplete="off"
+                    hx-post="/datasource/validate-name"
+                    hx-trigger="blur"
+                    hx-target="#datasource-name-feedback"
+                    hx-swap="innerHTML"
+                    hx-params="datasource_name"
                 >
+                <div id="datasource-name-feedback"></div>
                 <div class="form-text">
-                    Unique identifier. Allowed: <code>a–z</code>, <code>0–9</code>, <code>_</code>.
-                    Automatically lowercased.
+                    Unique identifier. Allowed: <code>a-z</code>, <code>0-9</code>,
+                    <code>_</code>. Automatically lowercased.
                 </div>
             </div>
 
-            <!-- DB TYPE -->
+            <!-- Database Type -->
             <div class="mb-3">
-                <label class="form-label fw-semibold">
-                    Database Type <span class="text-danger">*</span>
-                </label>
-                <select name="db_type" class="form-select" required>
-                    <option value="" disabled selected>— select type —</option>
-                    <option value="postgres">PostgreSQL</option>
-                    <option value="mysql">MySQL</option>
-                    <option value="sqlite">SQLite</option>
-                    <option value="mongodb">MongoDB</option>
+                <label class="form-label" for="dbTypeSelect">Database Type</label>
+                <select class="form-select" name="db_type" id="dbTypeSelect" required>
+                    <option value="">Select Database</option>
+                    <optgroup label="Relational / NoSQL">
+                        <option value="postgres">PostgreSQL</option>
+                        <option value="mysql">MySQL</option>
+                        <option value="mongodb">MongoDB</option>
+                        <option value="sqlite">SQLite</option>
+                        <option value="oracle">Oracle</option>
+                    </optgroup>
+                    <optgroup label="File-based">
+                        <option value="csv">CSV</option>
+                        <option value="xls">XLS / XLSX</option>
+                        <option value="json">JSON / JSONL</option>
+                        <option value="parquet">Parquet</option>
+                        <option value="avro">Avro</option>
+                    </optgroup>
                 </select>
             </div>
 
-            <!-- HOST -->
-            <div class="mb-3">
-                <label class="form-label fw-semibold">Host</label>
-                <input
-                    type="text"
-                    name="host"
-                    class="form-control"
-                    placeholder="localhost"
-                >
+            <!-- DB connection fields (hidden for file-based types) -->
+            <div id="db-connection-fields">
+
+                <div class="mb-3">
+                    <label class="form-label" for="ds-host">Host</label>
+                    <input type="text" class="form-control" id="ds-host" name="host" placeholder="localhost">
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label" for="ds-port">Port</label>
+                    <input type="number" class="form-control" id="ds-port" name="port" placeholder="5432">
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label" for="ds-database-name">Database Name</label>
+                    <input type="text" class="form-control" id="ds-database-name" name="database_name">
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label" for="ds-username">Username</label>
+                    <input type="text" class="form-control" id="ds-username" name="username">
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label" for="ds-password">Password</label>
+                    <input type="password" class="form-control" id="ds-password" name="password">
+                </div>
+
             </div>
 
-            <!-- PORT -->
-            <div class="mb-3">
-                <label class="form-label fw-semibold">Port</label>
-                <input
-                    type="text"
-                    name="port"
-                    class="form-control"
-                    placeholder="5432"
-                >
+            <!-- File upload section (shown instead of connection fields) -->
+            <div id="file-upload-section" class="d-none">
+
+                <div class="mb-3">
+                    <label class="form-label fw-semibold" for="ds-files">
+                        Upload Files
+                    </label>
+                    <input
+                        type="file"
+                        class="form-control"
+                        id="ds-files"
+                        name="files"
+                        multiple
+                    >
+                    <div class="form-text" id="ds-files-hint"></div>
+                </div>
+
+                <!-- UPLOAD PROGRESS BAR (hidden until upload starts) -->
+                <div id="ds-upload-progress-wrap" class="mb-3 d-none">
+                    <div class="d-flex justify-content-between small text-muted mb-1">
+                        <span>Uploading…</span>
+                        <span id="ds-upload-pct">0%</span>
+                    </div>
+                    <progress id="ds-upload-progress" class="w-100" value="0" max="100"></progress>
+                </div>
+
+                <div id="ds-file-check-results" class="mb-2"></div>
+
             </div>
 
-            <!-- DATABASE NAME -->
-            <div class="mb-3">
-                <label class="form-label fw-semibold">
-                    Database Name <span class="text-danger">*</span>
-                </label>
-                <input
-                    type="text"
-                    name="database_name"
-                    class="form-control"
-                    placeholder="my_database"
-                    required
-                >
-            </div>
-
-            <!-- USERNAME -->
-            <div class="mb-3">
-                <label class="form-label fw-semibold">Username</label>
-                <input
-                    type="text"
-                    name="username"
-                    class="form-control"
-                    placeholder="db_user"
-                    autocomplete="username"
-                >
-            </div>
-
-            <!-- PASSWORD -->
-            <div class="mb-4">
-                <label class="form-label fw-semibold">Password</label>
-                <input
-                    type="password"
-                    name="password"
-                    class="form-control"
-                    placeholder="••••••••"
-                    autocomplete="new-password"
-                >
-            </div>
-
-            <div class="d-flex gap-2">
-                <button type="submit" class="btn btn-primary">
-                    <i class="las la-save"></i> Save &amp; Connect
-                </button>
-                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="offcanvas">
-                    Cancel
+            <!-- Submit -->
+            <div class="d-grid mt-4">
+                <button type="submit" class="btn btn-primary" id="addDsBtn">
+                    <i class="las la-plus-circle"></i> <span id="addDsBtnText">Add Data Source</span>
                 </button>
             </div>
 
         </form>
+
     </div>
 </div>
 
@@ -378,6 +598,120 @@ Datasources | GetMyStuff
 
 
 {% block extra_js %}
+<!-- Tab switcher -->
+<script>
+(function () {
+    const btns  = document.querySelectorAll("#dsSidenav .ds-nav-btn");
+    const panes = document.querySelectorAll(".ds-tab-pane");
+    btns.forEach(function (btn) {
+        btn.addEventListener("click", function () {
+            const target = this.dataset.dsTarget;
+            btns.forEach(b => b.classList.remove("active"));
+            panes.forEach(p => p.classList.remove("ds-active"));
+            this.classList.add("active");
+            document.getElementById(target).classList.add("ds-active");
+        });
+    });
+}());
+</script>
+
+<script>
+(function () {
+    const FILE_TYPES = new Set(["csv", "xls", "json", "parquet", "avro"]);
+
+    const ACCEPT_MAP = {
+        csv:     ".csv",
+        xls:     ".xls,.xlsx",
+        json:    ".json,.jsonl",
+        parquet: ".parquet",
+        avro:    ".avro",
+    };
+    const HINT_MAP = {
+        csv:     "Allowed: .csv",
+        xls:     "Allowed: .xls, .xlsx",
+        json:    "Allowed: .json, .jsonl",
+        parquet: "Allowed: .parquet",
+        avro:    "Allowed: .avro",
+    };
+
+    const dbTypeSelect    = document.getElementById("dbTypeSelect");
+    const dbFields        = document.getElementById("db-connection-fields");
+    const fileSection     = document.getElementById("file-upload-section");
+    const fileInput       = document.getElementById("ds-files");
+    const fileHint        = document.getElementById("ds-files-hint");
+    const fileCheckArea   = document.getElementById("ds-file-check-results");
+    const btnText         = document.getElementById("addDsBtnText");
+    const hostField       = document.getElementById("ds-host").closest(".mb-3");
+    const portField       = document.getElementById("ds-port").closest(".mb-3");
+    const progressWrap    = document.getElementById("ds-upload-progress-wrap");
+    const progressBar     = document.getElementById("ds-upload-progress");
+    const progressPct     = document.getElementById("ds-upload-pct");
+    const addDatasourceForm = document.getElementById("addDatasourceForm");
+
+    // ── db_type change: toggle visible sections ───────────────────────────
+    dbTypeSelect.addEventListener("change", function () {
+        const db = this.value;
+        const isFile = FILE_TYPES.has(db);
+
+        dbFields.style.display = isFile ? "none" : "block";
+        fileSection.classList.toggle("d-none", !isFile);
+
+        if (isFile) {
+            fileInput.accept = ACCEPT_MAP[db] || "";
+            fileHint.textContent = HINT_MAP[db] || "";
+            fileCheckArea.innerHTML = "";
+        } else {
+            const hidePair = db === "sqlite";
+            hostField.style.display = hidePair ? "none" : "block";
+            portField.style.display = hidePair ? "none" : "block";
+        }
+
+        btnText.textContent = isFile ? "Create & Upload" : "Add Data Source";
+    });
+
+    // ── Client-side file list preview (no server call at creation time) ───
+    fileInput.addEventListener("change", function () {
+        const files = Array.from(this.files);
+        if (!files.length) {
+            fileCheckArea.innerHTML = "";
+            return;
+        }
+        const items = files.map(f =>
+            `<div class="d-flex align-items-center gap-2 mb-1">` +
+            `<i class="las la-file-alt text-primary"></i>` +
+            `<span class="small text-truncate">${f.name}</span>` +
+            `<span class="badge bg-secondary ms-auto">${(f.size / 1024).toFixed(1)} KB</span>` +
+            `</div>`
+        );
+        fileCheckArea.innerHTML = items.join("");
+    });
+
+    // ── Upload progress bar ───────────────────────────────────────────────
+    // htmx:configRequest fires before the XHR is sent, giving us the raw
+    // XMLHttpRequest so we can attach an upload-phase progress listener.
+    addDatasourceForm.addEventListener("htmx:configRequest", function (evt) {
+        evt.detail.xhr.upload.addEventListener("progress", function (e) {
+            if (e.lengthComputable) {
+                const pct = Math.round((e.loaded / e.total) * 100);
+                progressBar.value = pct;
+                progressPct.textContent = pct + "%";
+            }
+        });
+    });
+
+    addDatasourceForm.addEventListener("htmx:beforeRequest", function () {
+        progressBar.value = 0;
+        progressPct.textContent = "0%";
+        progressWrap.classList.remove("d-none");
+    });
+
+    addDatasourceForm.addEventListener("htmx:afterRequest", function () {
+        progressWrap.classList.add("d-none");
+        progressBar.value = 0;
+        progressPct.textContent = "0%";
+    });
+}());
+</script>
 
 <!-- ============================================================
      FILE PREVIEW — state + helpers

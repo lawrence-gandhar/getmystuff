@@ -11,7 +11,7 @@ from app.db.db_utils import (
 
 async def get_rdbms_tables(datasource):
     """Fetch RDBMS tables using db_utils connection management."""
-    password = decrypt_password(datasource.password_encrypted)
+    password = decrypt_password(datasource.password_encrypted) if datasource.password_encrypted else ""
 
     url = build_rdbms_url(
         db_type=datasource.db_type,
@@ -27,7 +27,7 @@ async def get_rdbms_tables(datasource):
 
 async def get_mongo_collections(datasource):
     """Fetch MongoDB collections using db_utils connection management."""
-    password = decrypt_password(datasource.password_encrypted)
+    password = decrypt_password(datasource.password_encrypted) if datasource.password_encrypted else ""
 
     uri = build_mongo_uri(
         host=datasource.host,
@@ -41,7 +41,7 @@ async def get_mongo_collections(datasource):
 
 async def get_table_schema(datasource, table_name: str):
     """Fetch table/collection schema (columns and types) using db_utils."""
-    password = decrypt_password(datasource.password_encrypted)
+    password = decrypt_password(datasource.password_encrypted) if datasource.password_encrypted else ""
 
     if datasource.db_type == "mongodb":
         uri = build_mongo_uri(
