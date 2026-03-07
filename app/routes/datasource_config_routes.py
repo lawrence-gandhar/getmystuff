@@ -43,6 +43,7 @@ class DataSourceConfigurations(Controller):
                 "table_name": "",
                 "config":{},
                 "user": user,
+                "active": "datasource_configuration"
             },
         )
     

@@ -393,6 +393,8 @@
     id="toolConfigOffcanvas"
     aria-labelledby="toolConfigOffcanvasLabel"
     style="width: 75vw;"
+    data-bs-backdrop="static"
+    data-bs-keyboard="false"
 >
     <div class="offcanvas-header border-bottom">
         <h5 class="offcanvas-title" id="toolConfigOffcanvasLabel">
@@ -434,11 +436,25 @@
 
             <div class="query-builder">
 
+            <!-- COLUMNS -->
+            <div class="card mb-3">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <strong>Columns</strong>
+                    <button type="button" class="btn btn-sm btn-outline-primary"
+                            onclick="addColumn()">
+                        + Add Column
+                    </button>
+                </div>
+                <div class="card-body" id="columnsContainer">
+                    <p class="text-muted small mb-0">No columns selected — defaults to <code>*</code></p>
+                </div>
+            </div>
+
             <!-- AGGREGATIONS -->
             <div class="card mb-3">
-                <div class="card-header d-flex justify-content-between">
+                <div class="card-header d-flex justify-content-between align-items-center">
                     <strong>Aggregations</strong>
-                    <button class="btn btn-sm btn-outline-primary"
+                    <button type="button" class="btn btn-sm btn-outline-primary"
                             onclick="addAggregation()">
                         + Add Aggregation
                     </button>
@@ -450,7 +466,7 @@
             <div class="card mb-3">
                 <div class="card-header d-flex justify-content-between">
                     <strong>Group By</strong>
-                    <button class="btn btn-sm btn-outline-primary"
+                    <button type="button" class="btn btn-sm btn-outline-primary"
                             onclick="addGroupBy()">
                         + Add Group
                     </button>
@@ -462,7 +478,7 @@
             <div class="card mb-3">
                 <div class="card-header d-flex justify-content-between">
                     <strong>Filters</strong>
-                    <button class="btn btn-sm btn-outline-primary"
+                    <button type="button" class="btn btn-sm btn-outline-primary"
                             onclick="addFilter()">
                         + Add Filter
                     </button>
@@ -623,7 +639,8 @@ currentTableName = null;
 
 let queryState = {
     table: "",
-    aggregations: [],     // multiple
+    columns: [],          // { column, alias }
+    aggregations: [],     // { type, column, alias }
     groupBy: [],          // multiple
     filters: [],          // multiple
     orderBy: [],
@@ -821,12 +838,30 @@ document.addEventListener("DOMContentLoaded", function () {
 
 
 document
+    .getElementById("agentConfigOffcanvas")
+    .addEventListener("shown.bs.offcanvas", function () {
+        if (globalDatasourceId) {
+            const form = this.querySelector("form[hx-post]");
+            if (form) {
+                form.setAttribute("hx-post", `/datasource/${globalDatasourceId}/agent-config/create`);
+                htmx.process(form);
+            }
+        }
+    });
+
+document
     .getElementById("toolConfigOffcanvas")
     .addEventListener("shown.bs.offcanvas", function () {
 
-        if (!queryState.table) {
-            queryState.table = currentTableName;
+        if (globalDatasourceId) {
+            const form = this.querySelector("form[hx-post]");
+            if (form) {
+                form.setAttribute("hx-post", `/datasource/${globalDatasourceId}/config/create`);
+                htmx.process(form);
+            }
         }
+
+        queryState.table = currentTableName;
 
         if (queryState.aggregations.length === 0) {
             addAggregation();
@@ -838,31 +873,55 @@ document
         updateSQLPreview();
     });
 
+document
+    .getElementById("toolConfigOffcanvas")
+    .addEventListener("hidden.bs.offcanvas", function () {
+        // Reset queryState (dynamic builder state)
+        queryState.table = "";
+        queryState.columns = [];
+        queryState.aggregations = [];
+        queryState.groupBy = [];
+        queryState.filters = [];
+        queryState.orderBy = [];
+        queryState.limit = null;
+
+        // Clear text/textarea fields only (skip selects)
+        const form = this.querySelector("form");
+        if (form) {
+            form.querySelectorAll("input[type=text], input[type=number], textarea").forEach(el => {
+                el.value = el.tagName === "TEXTAREA" && el.name === "base_config" ? "{}" : "";
+            });
+        }
+
+        // Clear dynamic builder containers
+        const columnsEl = document.getElementById("columnsContainer");
+        if (columnsEl) columnsEl.innerHTML = `<p class="text-muted small mb-0">No columns selected — defaults to <code>*</code></p>`;
+
+        ["aggregationContainer", "groupByContainer", "filterContainer"].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.innerHTML = "";
+        });
+
+        // Clear SQL preview
+        const preview = document.getElementById("sqlPreview");
+        if (preview) preview.textContent = "";
+
+        // Clear response banner
+        const resp = document.getElementById("config-response");
+        if (resp) resp.innerHTML = "";
+    });
+
 
 function updateBaseConfigJSON() {
-
-    const aggregation = document.getElementById("aggregationSelect").value;
-    const aggColumn = document.getElementById("aggregationColumn").value;
-    const groupBy = document.getElementById("groupByColumn").value;
-    const filterColumn = document.getElementById("filterColumn").value;
-    const filterOperator = document.getElementById("filterOperator").value;
-    const filterValue = document.getElementById("filterValue").value;
-
     const config = {
-        aggregation: aggregation && aggColumn ? {
-            type: aggregation,
-            column: aggColumn
-        } : null,
-        group_by: groupBy || null,
-        filter: filterColumn ? {
-            column: filterColumn,
-            operator: filterOperator,
-            value: filterValue
-        } : null
+        columns: queryState.columns.length > 0 ? queryState.columns : null,
+        aggregations: queryState.aggregations.length > 0 ? queryState.aggregations : null,
+        group_by: queryState.groupBy.length > 0 ? queryState.groupBy : null,
+        filters: queryState.filters.length > 0 ? queryState.filters : null,
     };
 
-    document.querySelector("textarea[name='base_config']")
-        .value = JSON.stringify(config, null, 2);
+    const textarea = document.querySelector("textarea[name='base_config']");
+    if (textarea) textarea.value = JSON.stringify(config, null, 2);
 }
 
 function renderGroupBy() {
@@ -881,7 +940,7 @@ function renderGroupBy() {
                     )}
                 </div>
                 <div class="col-2">
-                    <button class="btn btn-sm btn-danger"
+                    <button type="button" class="btn btn-sm btn-danger"
                         onclick="removeGroupBy(${index})">
                         ✕
                     </button>
@@ -894,54 +953,155 @@ function renderGroupBy() {
 }
 
 
-document.querySelectorAll(
-    "#aggregationSelect, #aggregationColumn, #groupByColumn, #filterColumn, #filterOperator, #filterValue"
-).forEach(el => {
-    el.addEventListener("change", updateBaseConfigJSON);
-});
 
+
+function addColumn() {
+    queryState.columns.push({ column: currentTableColumns[0] || "", alias: "" });
+    renderColumns();
+    updateBaseConfigJSON();
+}
+
+function removeColumn(index) {
+    queryState.columns.splice(index, 1);
+    renderColumns();
+    updateBaseConfigJSON();
+}
+
+function updateColumn(index, field, value) {
+    queryState.columns[index][field] = value;
+    if (field !== "alias") renderColumns();
+    updateSQLPreview();
+    updateBaseConfigJSON();
+}
+
+function renderColumns() {
+    const container = document.getElementById("columnsContainer");
+    if (!container) return;
+
+    if (queryState.columns.length === 0) {
+        container.innerHTML = `<p class="text-muted small mb-0">No columns selected — defaults to <code>*</code></p>`;
+        updateSQLPreview();
+        return;
+    }
+
+    container.innerHTML = queryState.columns.map((col, index) => `
+        <div class="row g-2 mb-2 align-items-center">
+            <div class="col-5">
+                ${buildColumnDropdown(col.column, `updateColumn(${index}, 'column', this.value)`)}
+            </div>
+            <div class="col-5">
+                <input type="text" class="form-control" placeholder="Alias (optional)"
+                    value="${col.alias || ""}"
+                    oninput="updateColumn(${index}, 'alias', this.value)">
+            </div>
+            <div class="col-2">
+                <button type="button" class="btn btn-sm btn-danger"
+                    onclick="removeColumn(${index})">✕</button>
+            </div>
+        </div>
+    `).join("");
+
+    updateSQLPreview();
+}
 
 function addAggregation() {
     queryState.aggregations.push({
         type: "count",
-        column: currentTableColumns[0] || ""
+        column: currentTableColumns[0] || "",
+        alias: ""
     });
     renderAggregations();
 }
 
+function removeAggregation(index) {
+    queryState.aggregations.splice(index, 1);
+    renderAggregations();
+    updateBaseConfigJSON();
+}
+
+function updateAggregation(index, field, value) {
+    queryState.aggregations[index][field] = value;
+    // Only re-render for type/column changes (alias uses oninput, re-render would lose cursor)
+    if (field !== "alias") renderAggregations();
+    updateSQLPreview();
+    updateBaseConfigJSON();
+}
+
+function addGroupBy() {
+    queryState.groupBy.push(currentTableColumns[0] || "");
+    renderGroupBy();
+    updateBaseConfigJSON();
+}
+
+function removeGroupBy(index) {
+    queryState.groupBy.splice(index, 1);
+    renderGroupBy();
+    updateBaseConfigJSON();
+}
+
+function updateGroupBy(index, value) {
+    queryState.groupBy[index] = value;
+    updateSQLPreview();
+    updateBaseConfigJSON();
+}
+
+function addFilter() {
+    queryState.filters.push({
+        column: currentTableColumns[0] || "",
+        operator: "=",
+        value: ""
+    });
+    renderFilters();
+    updateBaseConfigJSON();
+}
+
+function removeFilter(index) {
+    queryState.filters.splice(index, 1);
+    renderFilters();
+    updateBaseConfigJSON();
+}
+
+function updateFilter(index, field, value) {
+    queryState.filters[index][field] = value;
+    updateSQLPreview();
+    updateBaseConfigJSON();
+}
+
 function renderAggregations() {
-    
     const container = document.getElementById("aggregationContainer");
+    if (!container) return;
 
-    if (!container) return;  // ← prevents crash
+    const aggTypes = ["count", "sum", "avg", "min", "max"];
 
-    container.innerHTML = "";
-
-    queryState.aggregations.forEach((agg, index) => {
-        container.innerHTML += `
-            <div class="row g-2 mb-2">
-                <div class="col-4">
+    container.innerHTML = queryState.aggregations.map((agg, index) => {
+        const typeOptions = aggTypes.map(t =>
+            `<option value="${t}" ${agg.type === t ? "selected" : ""}>${t.toUpperCase()}</option>`
+        ).join("");
+        return `
+            <div class="row g-2 mb-2 align-items-center">
+                <div class="col-3">
                     <select class="form-select"
                         onchange="updateAggregation(${index}, 'type', this.value)">
-                        <option value="count">COUNT</option>
-                        <option value="sum">SUM</option>
-                        <option value="avg">AVG</option>
-                        <option value="min">MIN</option>
-                        <option value="max">MAX</option>
+                        ${typeOptions}
                     </select>
                 </div>
-                <div class="col-6">
+                <div class="col-4">
                     ${buildColumnDropdown(agg.column, `updateAggregation(${index}, 'column', this.value)`)}
                 </div>
-                <div class="col-2">
-                    <button class="btn btn-sm btn-danger"
+                <div class="col-4">
+                    <input type="text" class="form-control" placeholder="Alias (optional)"
+                        value="${agg.alias || ""}"
+                        oninput="updateAggregation(${index}, 'alias', this.value)">
+                </div>
+                <div class="col-1">
+                    <button type="button" class="btn btn-sm btn-danger"
                         onclick="removeAggregation(${index})">
                         ✕
                     </button>
                 </div>
             </div>
         `;
-    });
+    }).join("");
 
     updateSQLPreview();
 }
@@ -960,14 +1120,6 @@ function buildColumnDropdown(selected, onChange) {
     `;
 }
 
-function addFilter() {
-    queryState.filters.push({
-        column: currentTableColumns[0] || "",
-        operator: "=",
-        value: ""
-    });
-    renderFilters();
-}
 
 function renderFilters() {
     const container = document.getElementById("filterContainer");
@@ -996,7 +1148,7 @@ function renderFilters() {
                         onchange="updateFilter(${index}, 'value', this.value)">
                 </div>
                 <div class="col-1">
-                    <button class="btn btn-sm btn-danger"
+                    <button type="button" class="btn btn-sm btn-danger"
                         onclick="removeFilter(${index})">✕</button>
                 </div>
             </div>
@@ -1007,29 +1159,28 @@ function renderFilters() {
 }
 
 function updateSQLPreview() {
+    const parts = [];
 
-    let sql = "SELECT ";
+    queryState.columns.forEach(c => {
+        parts.push(c.alias ? `${c.column} AS ${c.alias}` : c.column);
+    });
 
-    if (queryState.aggregations.length === 0) {
-        sql += "*";
-    } else {
-        sql += queryState.aggregations
-            .map(a => `${a.type.toUpperCase()}(${a.column})`)
-            .join(", ");
-    }
+    queryState.aggregations.forEach(a => {
+        const expr = `${a.type.toUpperCase()}(${a.column})`;
+        parts.push(a.alias ? `${expr} AS ${a.alias}` : expr);
+    });
 
+    let sql = "SELECT " + (parts.length > 0 ? parts.join(", ") : "*");
     sql += `\nFROM ${queryState.table}`;
 
     if (queryState.filters.length > 0) {
-        sql += "\nWHERE ";
-        sql += queryState.filters
+        sql += "\nWHERE " + queryState.filters
             .map(f => `${f.column} ${f.operator} '${f.value}'`)
             .join(" AND ");
     }
 
     if (queryState.groupBy.length > 0) {
-        sql += "\nGROUP BY ";
-        sql += queryState.groupBy.join(", ");
+        sql += "\nGROUP BY " + queryState.groupBy.join(", ");
     }
 
     document.getElementById("sqlPreview").innerText = sql;
@@ -1073,6 +1224,7 @@ function openTableCanvas(tableName) {
 
     const tableData = globalConfigurationData[tableName];
 
+    currentTableName = tableName;
     currentTableColumns = Object.values(tableData.column_data).map(col => col.column_name);
 
     if (!tableData) {

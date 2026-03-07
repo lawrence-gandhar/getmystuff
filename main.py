@@ -7,7 +7,7 @@ from litestar.template.config import TemplateConfig
 from litestar.plugins.htmx import HTMXPlugin, HTMXRequest
 from litestar.middleware.session.server_side import ServerSideSessionConfig
 from litestar.plugins.flash import FlashConfig, FlashPlugin
-from litestar.response import Template, Redirect
+from litestar.response import Template, Redirect, Response
 from litestar.static_files.config import StaticFilesConfig
 from litestar.exceptions import HTTPException
 from litestar.connection import Request
@@ -70,18 +70,20 @@ async def on_startup() -> None:
 # -----------------------------
 # Exception Handler for Token Expiry
 # -----------------------------
-def http_exception_handler(request: Request, exc: HTTPException) -> Redirect:
+def http_exception_handler(request: Request, exc: HTTPException) -> Response | Redirect:
     """
     Handle 401 errors by redirecting to login page.
-    For AJAX/HTMX requests, set HX-Redirect header.
+    For HTMX requests, return 200 with HX-Redirect so the browser does a full
+    page navigation instead of swapping the login page into the current target.
     """
     if exc.status_code == 401:
-        response = Redirect(path="/auth/login")
-        # For HTMX requests, use HX-Redirect header
         if request.headers.get("HX-Request"):
-            response.headers["HX-Redirect"] = "/auth/login"
-        return response
-    # Re-raise the exception if it's not a 401 error
+            return Response(
+                content="",
+                status_code=200,
+                headers={"HX-Redirect": "/auth/login"},
+            )
+        return Redirect(path="/auth/login")
     raise exc
 
 

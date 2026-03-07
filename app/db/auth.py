@@ -6,7 +6,6 @@ from passlib.context import CryptContext
 
 from litestar.connection import Request
 from litestar.exceptions import HTTPException
-from litestar.response import Redirect, Response
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -154,26 +153,11 @@ async def require_auth(request: Request, db: AsyncSession) -> User:
     token = request.cookies.get("access_token")
 
     if not token:
-        # 🔥 If HTMX request → force full redirect
-        if request.headers.get("HX-Request") == "true":
-            return Response(
-                content="",
-                status_code=204,
-                headers={"HX-Redirect": "/login"},
-            )
-
-        # Normal browser request
-        return Redirect(path="/login")
+        raise HTTPException(status_code=401, detail="Not authenticated")
 
     user = await get_current_user(db, token)
 
     if not user:
-        if request.headers.get("HX-Request") == "true":
-            return Response(
-                content="",
-                status_code=204,
-                headers={"HX-Redirect": "/login"},
-            )
-        return Redirect(path="/login")
+        raise HTTPException(status_code=401, detail="Not authenticated")
 
     return user
