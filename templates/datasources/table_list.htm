@@ -29,13 +29,14 @@
                     </td>
 
                     <td>
-                        <button 
+                        <button
                             class="btn btn-sm btn-outline-primary"
                             hx-get="/datasource/{{ datasource_id }}/table/{{ obj['table_name'] }}/view"
                             hx-target="#viewModalContent"
                             hx-swap="innerHTML"
                             data-bs-toggle="modal"
                             data-bs-target="#viewModal"
+                            data-table-name="{{ obj['table_name'] }}"
                         >
                             View
                         </button>
@@ -50,12 +51,6 @@
                             >
                                 Deactivate
                             </button>
-                            <a 
-                                href="/datasource/{{ datasource_id }}/{{ obj }}/configuration"
-                                class="btn btn-sm btn-outline-secondary"
-                            >
-                                Config
-                            </a>
                         {% else %}
                             <button 
                                 class="btn btn-sm btn-outline-success"

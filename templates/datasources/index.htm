@@ -61,6 +61,41 @@ Datasources | GetMyStuff
     .ds-tab-pane.ds-active {
         display: block;
     }
+    /* ── Code viewers (JSON / XML) ─────────────────────────────────────── */
+    .fp-code-viewer {
+        background: #1e1e1e;
+        border-radius: 8px;
+        overflow: auto;
+        font-family: 'Cascadia Code', 'Fira Code', 'Consolas', 'Menlo', monospace;
+        font-size: 0.80rem;
+        line-height: 1.65;
+        padding: 1.1rem 1.4rem;
+        max-height: calc(100vh - 200px);
+        box-shadow: inset 0 0 0 1px rgba(255,255,255,0.07);
+        position: relative;
+    }
+    .fp-code-viewer pre { margin: 0; white-space: pre; color: #d4d4d4; }
+    /* JSON tokens */
+    .fp-j-key  { color: #9cdcfe; }
+    .fp-j-str  { color: #ce9178; }
+    .fp-j-num  { color: #b5cea8; }
+    .fp-j-bool { color: #569cd6; }
+    .fp-j-null { color: #569cd6; opacity: .7; }
+    .fp-j-punc { color: #808080; }
+    /* XML tokens */
+    .fp-x-tag  { color: #4ec9b0; }
+    .fp-x-attr { color: #9cdcfe; }
+    .fp-x-val  { color: #ce9178; }
+    .fp-x-decl { color: #808080; }
+    .fp-x-cmt  { color: #6a9955; font-style: italic; }
+    /* Copy button */
+    .fp-copy-btn {
+        position: absolute; top: .6rem; right: .8rem;
+        background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15);
+        color: #ccc; border-radius: 5px; padding: 2px 10px;
+        font-size: 0.74rem; cursor: pointer; transition: background .15s;
+    }
+    .fp-copy-btn:hover { background: rgba(255,255,255,0.18); color: #fff; }
 </style>
 
     <div class="container mt-4" style="max-width: 100%;">
@@ -115,16 +150,15 @@ Datasources | GetMyStuff
                     <table class="table table-hover align-middle mb-0">
                         <thead class="table-light">
                             <tr>
-                                <th>#</th>
                                 <th>Datasource Name</th>
                                 <th>Type</th>
-                                <th width="180">Action</th>
+                                <th>Status</th>
+                                <th width="350px">Action</th>
                             </tr>
                         </thead>
                         <tbody>
                             {% for datasource in datasources if datasource.db_type in file_types %}
-                            <tr>
-                                <td class="text-muted small">{{ loop.index }}</td>
+                            <tr id="ds-row-{{ datasource.id }}">
                                 <td>
                                     <span class="fw-semibold text-success">
                                         <i class="las la-tag"></i>
@@ -137,18 +171,53 @@ Datasources | GetMyStuff
                                     </span>
                                 </td>
                                 <td>
-                                    <button
-                                        class="btn btn-sm btn-outline-primary"
-                                        onclick="fpOpen('{{ datasource.id }}', '{{ datasource.datasource_name }}')"
+                                    {% if datasource.is_active %}
+                                        <span class="badge bg-success me-1">Active</span>
+                                    {% else %}
+                                        <span class="badge bg-secondary me-1">Inactive</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <button 
+                                        class="btn btn-sm {% if datasource.is_active %}btn-outline-warning{% else %}btn-outline-success{% endif %}" 
+                                        hx-post="/datasource/{{ datasource.id }}/toggle-active" 
+                                        hx-target="#ds-row-{{ datasource.id }}" 
+                                        hx-swap="outerHTML"
                                     >
-                                        Preview
+                                        {% if datasource.is_active %}
+                                            Deactivate
+                                        {% else %}
+                                            Activate
+                                        {% endif %}
                                     </button>
-                                    <button
-                                        class="btn btn-sm btn-outline-secondary"
-                                        onclick="openRenameModal('{{ datasource.id }}', '{{ datasource.datasource_name }}')"
-                                    >
-                                        Rename
-                                    </button>
+                                    
+                                    {% if datasource.is_active %}
+                                        <button 
+                                            class="btn btn-sm btn-outline-primary" 
+                                            onclick="fpOpen('{{ datasource.id }}', '{{ datasource.datasource_name }}')"
+                                        >
+                                            Preview
+                                        </button>
+                                    {% else %}
+                                        <button 
+                                            class="btn btn-sm btn-outline-secondary" 
+                                            onclick="openRenameModal(
+                                                '{{ datasource.id }}', 
+                                                '{{ datasource.datasource_name }}'
+                                            )"
+                                        >
+                                            Rename
+                                        </button>
+                                        <button 
+                                            class="btn btn-sm btn-outline-danger" 
+                                            hx-post="/datasource/{{ datasource.id }}/delete" 
+                                            hx-target="#ds-row-{{ datasource.id }}" 
+                                            hx-swap="outerHTML" 
+                                            hx-confirm="Delete '{{ datasource.datasource_name }}'? This cannot be undone."
+                                        >
+                                            Delete
+                                        </button>
+                                    {% endif %}
                                 </td>
                             </tr>
                             {% else %}
@@ -172,19 +241,18 @@ Datasources | GetMyStuff
                     <table class="table table-hover align-middle mb-0">
                         <thead class="table-light">
                             <tr>
-                                <th>#</th>
                                 <th>Datasource Name</th>
                                 <th>Type</th>
                                 <th>Host</th>
                                 <th>Port</th>
                                 <th>Database</th>
-                                <th width="180">Action</th>
+                                <th>Status</th>
+                                <th width="350px">Action</th>
                             </tr>
                         </thead>
                         <tbody>
                             {% for datasource in datasources if datasource.db_type not in file_types and datasource.db_type not in nosql_types %}
-                            <tr>
-                                <td class="text-muted small">{{ loop.index }}</td>
+                            <tr id="ds-row-{{ datasource.id }}">
                                 <td>
                                     <span class="fw-semibold text-primary">
                                         <i class="las la-tag"></i>
@@ -200,15 +268,55 @@ Datasources | GetMyStuff
                                 <td>{{ datasource.port }}</td>
                                 <td>{{ datasource.database_name }}</td>
                                 <td>
-                                    <button
-                                        class="btn btn-sm btn-outline-primary"
-                                        hx-get="/datasource/{{ datasource.id }}"
-                                        hx-target="#preview-container"
-                                        hx-swap="innerHTML"
-                                        hx-on="htmx:afterOnLoad: bootstrap.Offcanvas.getOrCreateInstance(document.getElementById('previewOffcanvas')).show()"
+                                    {% if datasource.is_active %}
+                                        <span class="badge bg-success me-1">Active</span>
+                                    {% else %}
+                                        <span class="badge bg-secondary me-1">Inactive</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <button 
+                                        class="btn btn-sm 
+                                            {% if datasource.is_active %}
+                                                btn-outline-warning
+                                            {% else %}
+                                                btn-outline-success
+                                            {% endif %}" 
+                                        hx-post="/datasource/{{ datasource.id }}/toggle-active" 
+                                        hx-target="#ds-row-{{ datasource.id }}" 
+                                        hx-swap="outerHTML"
                                     >
-                                        Preview
+                                        {% if datasource.is_active %}
+                                            Deactivate
+                                        {% else %}
+                                            Activate
+                                        {% endif %}
                                     </button>
+                                    
+                                    {% if datasource.is_active %}
+                                        <button 
+                                            class="btn btn-sm btn-outline-primary" 
+                                            onclick="dbOpen('{{ datasource.id }}', '{{ datasource.datasource_name }}')"
+                                        >
+                                            Preview
+                                        </button>
+                                    {% else %}
+                                        <button 
+                                            class="btn btn-sm btn-outline-secondary" 
+                                            onclick="openRenameModal('{{ datasource.id }}', '{{ datasource.datasource_name }}')"
+                                        >
+                                            Rename
+                                        </button>
+                                        <button 
+                                            class="btn btn-sm btn-outline-danger" 
+                                            hx-post="/datasource/{{ datasource.id }}/delete" 
+                                            hx-target="#ds-row-{{ datasource.id }}" 
+                                            hx-swap="outerHTML" 
+                                            hx-confirm="Delete '{{ datasource.datasource_name }}'? This cannot be undone."
+                                        >
+                                            Delete
+                                        </button>
+                                    {% endif %}
                                 </td>
                             </tr>
                             {% else %}
@@ -232,19 +340,18 @@ Datasources | GetMyStuff
                     <table class="table table-hover align-middle mb-0">
                         <thead class="table-light">
                             <tr>
-                                <th>#</th>
                                 <th>Datasource Name</th>
                                 <th>Type</th>
                                 <th>Host</th>
                                 <th>Port</th>
                                 <th>Database</th>
-                                <th width="180">Action</th>
+                                <th>Status</th>
+                                <th width="350px">Action</th>
                             </tr>
                         </thead>
                         <tbody>
                             {% for datasource in datasources if datasource.db_type in nosql_types %}
-                            <tr>
-                                <td class="text-muted small">{{ loop.index }}</td>
+                            <tr id="ds-row-{{ datasource.id }}">
                                 <td>
                                     <span class="fw-semibold" style="color:#fd7e14;">
                                         <i class="las la-tag"></i>
@@ -259,22 +366,54 @@ Datasources | GetMyStuff
                                 <td>{{ datasource.host }}</td>
                                 <td>{{ datasource.port }}</td>
                                 <td>{{ datasource.database_name }}</td>
+                                <td>{% if datasource.is_active %}
+                                        <span class="badge bg-success me-1">Active</span>
+                                    {% else %}
+                                        <span class="badge bg-secondary me-1">Inactive</span>
+                                    {% endif %}
+                                </td>
                                 <td>
-                                    <button
-                                        class="btn btn-sm btn-outline-primary"
-                                        hx-get="/datasource/{{ datasource.id }}"
-                                        hx-target="#preview-container"
-                                        hx-swap="innerHTML"
-                                        hx-on="htmx:afterOnLoad: bootstrap.Offcanvas.getOrCreateInstance(document.getElementById('previewOffcanvas')).show()"
-                                    >
-                                        Preview
-                                    </button>
-                                    <button
-                                        class="btn btn-sm btn-outline-secondary"
-                                        onclick="openRenameModal('{{ datasource.id }}', '{{ datasource.datasource_name }}')"
-                                    >
-                                        Rename
-                                    </button>
+                                    {% if datasource.is_active %}
+                                        <button 
+                                            class="btn btn-sm btn-outline-primary" 
+                                            onclick="dbOpen('{{ datasource.id }}', '{{ datasource.datasource_name }}')"
+                                        >
+                                            Preview
+                                        </button>
+                                    {% else %}
+                                        <button 
+                                            class="btn btn-sm btn-outline-secondary" 
+                                            onclick="openRenameModal('{{ datasource.id }}', '{{ datasource.datasource_name }}')"
+                                        >
+                                            Rename
+                                        </button>
+                                        <button 
+                                            class="btn btn-sm 
+                                                {% if datasource.is_active %}
+                                                    btn-outline-warning
+                                                {% else %}
+                                                    btn-outline-success
+                                                {% endif %}" 
+                                            hx-post="/datasource/{{ datasource.id }}/toggle-active" 
+                                            hx-target="#ds-row-{{ datasource.id }}" 
+                                            hx-swap="outerHTML"
+                                        >
+                                            {% if datasource.is_active %}
+                                                Deactivate
+                                            {% else %}
+                                                Activate
+                                            {% endif %}
+                                        </button>
+                                        <button 
+                                            class="btn btn-sm btn-outline-danger" 
+                                            hx-post="/datasource/{{ datasource.id }}/delete" 
+                                            hx-target="#ds-row-{{ datasource.id }}" 
+                                            hx-swap="outerHTML" 
+                                            hx-confirm="Delete '{{ datasource.datasource_name }}'? This cannot be undone."
+                                        >
+                                            Delete
+                                        </button>
+                                    {% endif %}
                                 </td>
                             </tr>
                             {% else %}
@@ -299,7 +438,7 @@ Datasources | GetMyStuff
         tabindex="-1"
         id="previewOffcanvas"
         aria-labelledby="previewOffcanvasLabel"
-        style="width: 80vw;"
+        style="width: 75vw;"
     >
         <div class="offcanvas-header">
             <h5 id="previewOffcanvasLabel">Datasource Preview</h5>
@@ -319,7 +458,7 @@ Datasources | GetMyStuff
         tabindex="-1"
         id="fpOffcanvas"
         aria-labelledby="fpOffcanvasLabel"
-        style="width: 92vw;"
+        style="width: 85vw;"
     >
         <div class="offcanvas-header border-bottom">
             <h5 class="offcanvas-title" id="fpOffcanvasLabel">
@@ -372,6 +511,13 @@ Datasources | GetMyStuff
                     <h5 class="modal-title">Table Details</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
+                <script>
+                    document.getElementById('viewModal').addEventListener('show.bs.modal', function (e) {
+                        var btn = e.relatedTarget;
+                        var tableName = btn ? btn.getAttribute('data-table-name') : '';
+                        this.querySelector('.modal-title').textContent = tableName ? 'Table Details : ' + tableName : 'Table Details';
+                    });
+                </script>
 
                 <!-- THIS is where HTMX injects -->
                 <div class="modal-body" id="viewModalContent">
@@ -390,7 +536,7 @@ Datasources | GetMyStuff
      OFFCANVAS — CREATE DATASOURCE
      ============================================================ -->
 <!-- OFFCANVAS SETTINGS PANEL -->
-<div class="offcanvas offcanvas-end" tabindex="-1" id="settingsOffcanvas" style="width:75vw">
+<div class="offcanvas offcanvas-end" tabindex="-1" id="settingsOffcanvas" style="width:85vw">
     <div class="offcanvas-header">
         <h5 class="offcanvas-title">
             <i class="las la-database"></i> Add Data Source
@@ -595,15 +741,30 @@ Datasources | GetMyStuff
 <!-- Tab switcher -->
 <script>
 (function () {
+    const STORAGE_KEY = "ds-active-tab";
     const btns  = document.querySelectorAll("#dsSidenav .ds-nav-btn");
     const panes = document.querySelectorAll(".ds-tab-pane");
+
+    function activateTab(target) {
+        btns.forEach(b => b.classList.remove("active"));
+        panes.forEach(p => p.classList.remove("ds-active"));
+        const btn = document.querySelector(`[data-ds-target="${target}"]`);
+        const pane = document.getElementById(target);
+        if (btn) btn.classList.add("active");
+        if (pane) pane.classList.add("ds-active");
+    }
+
+    // Restore saved tab on load (fall back to first tab)
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved && document.getElementById(saved)) {
+        activateTab(saved);
+    }
+
     btns.forEach(function (btn) {
         btn.addEventListener("click", function () {
             const target = this.dataset.dsTarget;
-            btns.forEach(b => b.classList.remove("active"));
-            panes.forEach(p => p.classList.remove("ds-active"));
-            this.classList.add("active");
-            document.getElementById(target).classList.add("ds-active");
+            activateTab(target);
+            localStorage.setItem(STORAGE_KEY, target);
         });
     });
 }());
@@ -718,6 +879,35 @@ Datasources | GetMyStuff
     // ── DOM refs (resolved once on first open) ────────────────────────────
     const $ = id => document.getElementById(id);
 
+    // ── Public: called by the Preview button on RDBMS/NoSQL datasources ─────
+    window.dbOpen = function (datasourceId, name) {
+        $('fpDsName').textContent = name;
+        $('fpError').style.display        = 'none';
+        $('fpTable').style.display        = 'none';
+        $('fpPagination').style.display   = 'none';
+        $('fpFileSelector').style.display = 'none';
+        $('fpSpinner').style.display      = 'block';
+
+        bootstrap.Offcanvas.getOrCreateInstance($('fpOffcanvas')).show();
+
+        fetch(`/datasource/${datasourceId}/tables`)
+            .then(r => {
+                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                return r.text();
+            })
+            .then(html => {
+                $('fpSpinner').style.display = 'none';
+                $('fpTable').innerHTML = html;
+                htmx.process($('fpTable'));
+                $('fpTable').style.display = 'block';
+            })
+            .catch(() => {
+                $('fpSpinner').style.display = 'none';
+                $('fpError').textContent    = 'Failed to load tables. Please try again.';
+                $('fpError').style.display  = 'block';
+            });
+    };
+
     // ── Public: called by the Preview button on file-based datasources ────
     window.fpOpen = function (datasourceId, name) {
         fp.dsId   = datasourceId;
@@ -781,15 +971,24 @@ Datasources | GetMyStuff
                 fp.hasNext = data.has_next;
                 fp.fileId  = data.file_id;
 
-                // ── Render table ──────────────────────────────────────────
-                _fpRenderTable(data.columns, data.rows);
+                // ── Render based on type ──────────────────────────────────
+                const type = data.type || 'table';
+                if (type === 'json') {
+                    _fpRenderCode('json', data.content);
+                } else if (type === 'xml') {
+                    _fpRenderCode('xml', data.content);
+                } else {
+                    _fpRenderTable(data.columns, data.rows);
+                }
                 $('fpTable').style.display = 'block';
 
-                // ── Pagination ────────────────────────────────────────────
-                $('fpPageInfo').textContent  = `Page ${fp.page}`;
-                $('fpBtnPrev').disabled      = fp.page <= 1;
-                $('fpBtnNext').disabled      = !data.has_next;
-                $('fpPagination').style.display = 'flex';
+                // ── Pagination (hide for single-page code views) ──────────
+                if (data.has_next || fp.page > 1) {
+                    $('fpPageInfo').textContent  = `Page ${fp.page}`;
+                    $('fpBtnPrev').disabled      = fp.page <= 1;
+                    $('fpBtnNext').disabled      = !data.has_next;
+                    $('fpPagination').style.display = 'flex';
+                }
             })
             .catch(() => {
                 $('fpSpinner').style.display = 'none';
@@ -809,6 +1008,102 @@ Datasources | GetMyStuff
             `<thead class="table-light"><tr>${ths}</tr></thead>` +
             `<tbody>${trs}</tbody>` +
             `</table>`;
+    }
+
+    // ── Render code viewer (JSON or XML) ─────────────────────────────────
+    function _fpRenderCode(lang, raw) {
+        const highlighted = lang === 'json' ? _fpHighlightJson(raw) : _fpHighlightXml(raw);
+        $('fpTable').innerHTML =
+            `<div class="fp-code-viewer">` +
+            `<button class="fp-copy-btn" onclick="_fpCopy(this)">Copy</button>` +
+            `<pre>${highlighted}</pre>` +
+            `</div>`;
+    }
+
+    window._fpCopy = function (btn) {
+        const pre = btn.closest('.fp-code-viewer').querySelector('pre');
+        navigator.clipboard.writeText(pre.innerText).then(() => {
+            btn.textContent = 'Copied!';
+            setTimeout(() => { btn.textContent = 'Copy'; }, 1800);
+        });
+    };
+
+    // ── JSON syntax highlighter (state-machine, handles all edge cases) ───
+    function _fpHighlightJson(raw) {
+        let html = '';
+        let i = 0;
+        const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+        while (i < raw.length) {
+            const ch = raw[i];
+
+            if (ch === '"') {
+                // Collect the full JSON string token
+                let tok = '"';
+                i++;
+                while (i < raw.length) {
+                    if (raw[i] === '\\') { tok += raw[i] + (raw[i+1] || ''); i += 2; }
+                    else if (raw[i] === '"') { tok += '"'; i++; break; }
+                    else { tok += raw[i++]; }
+                }
+                // Peek past whitespace to detect object key (followed by ':')
+                let j = i;
+                while (j < raw.length && (raw[j] === ' ' || raw[j] === '\t')) j++;
+                const cls = raw[j] === ':' ? 'fp-j-key' : 'fp-j-str';
+                html += `<span class="${cls}">${esc(tok)}</span>`;
+
+            } else if (raw.startsWith('true', i)) {
+                html += `<span class="fp-j-bool">true</span>`; i += 4;
+            } else if (raw.startsWith('false', i)) {
+                html += `<span class="fp-j-bool">false</span>`; i += 5;
+            } else if (raw.startsWith('null', i)) {
+                html += `<span class="fp-j-null">null</span>`; i += 4;
+            } else if (ch === '-' || (ch >= '0' && ch <= '9')) {
+                let num = '';
+                if (ch === '-') { num += ch; i++; }
+                while (i < raw.length && /[\d.eE+\-]/.test(raw[i])) num += raw[i++];
+                html += `<span class="fp-j-num">${esc(num)}</span>`;
+            } else if (ch === '{' || ch === '}' || ch === '[' || ch === ']' || ch === ',' || ch === ':') {
+                html += `<span class="fp-j-punc">${esc(ch)}</span>`; i++;
+            } else {
+                html += esc(ch); i++;
+            }
+        }
+        return html;
+    }
+
+    // ── XML syntax highlighter ────────────────────────────────────────────
+    function _fpHighlightXml(raw) {
+        const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+        let html = '';
+        const tagRe = new RegExp('(<[^>]*?>|<!--[\\s\\S]*?-->)', 'g');
+        let last = 0, m;
+
+        while ((m = tagRe.exec(raw)) !== null) {
+            if (m.index > last) html += esc(raw.slice(last, m.index));
+            const tag = m[0];
+
+            if (tag.startsWith('<!--')) {
+                html += `<span class="fp-x-cmt">${esc(tag)}</span>`;
+            } else if (tag.startsWith('<?')) {
+                html += `<span class="fp-x-decl">${esc(tag)}</span>`;
+            } else {
+                // Highlight tag name, then attribute names and values inline
+                const escapedTag = esc(tag);
+                const withAttrs = escapedTag
+                    // tag name
+                    .replace(/^(&lt;\/?)([\w:.-]+)/, (_, open, name) =>
+                        `${open}<span class="fp-x-tag">${name}</span>`)
+                    // attr values
+                    .replace(/(&quot;[^&]*?&quot;)/g, `<span class="fp-x-val">$1</span>`)
+                    // attr names (word before =)
+                    .replace(/\s([\w:.-]+=)/g, ` <span class="fp-x-attr">$1</span>`);
+                html += withAttrs;
+            }
+            last = m.index + tag.length;
+        }
+        if (last < raw.length) html += esc(raw.slice(last));
+        return html;
     }
 
     // ── HTML entity escaper — prevents XSS from file content ─────────────

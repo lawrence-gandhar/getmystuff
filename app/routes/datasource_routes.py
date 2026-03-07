@@ -4,7 +4,7 @@ import asyncio
 from datetime import datetime
 from pathlib import Path
 
-from litestar import post, get, Controller
+from litestar import post, get, delete, Controller
 from litestar.response import Response, Template
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, exists, func
@@ -20,6 +20,8 @@ from app.services.datasource_service import (
     get_datasource_objects,
     get_datasource_table_schema,
     get_user_datasources,
+    delete_datasource,
+    toggle_datasource_active,
     toggle_column_status_service,
     toggle_table_status_service,
     search_sort_tables
@@ -120,10 +122,95 @@ def _read_parquet_chunk(file_path: str, page: int) -> tuple | None:
     return columns, rows, has_next
 
 
-def _read_file_chunk(file_path: str, page: int) -> tuple | None:
+def _read_json_chunk(file_path: str, page: int) -> dict:
+    """Read JSON / JSONL files.
+
+    JSONL and JSON arrays of flat dicts → table view (paginated).
+    Nested structures → formatted text view.
+    Returns a dict with a 'type' key: 'table' or 'json'.
+    """
+    import json as _json
+
+    ext = Path(file_path).suffix.lower().lstrip(".")
+
+    if ext == "jsonl":
+        records = []
+        with open(file_path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if line:
+                    records.append(_json.loads(line))
+        start = (page - 1) * _PREVIEW_PAGE_SIZE
+        end = start + _PREVIEW_PAGE_SIZE
+        page_records = records[start:end]
+        has_next = len(records) > end
+        if not page_records:
+            return {"type": "json", "content": "[]", "page": page, "has_next": False}
+        if all(
+            isinstance(r, dict) and all(not isinstance(v, (dict, list)) for v in r.values())
+            for r in page_records
+        ):
+            columns = list(dict.fromkeys(k for r in page_records for k in r.keys()))
+            rows = [[str(r.get(c, "")) for c in columns] for r in page_records]
+            return {"type": "table", "columns": columns, "rows": rows, "page": page, "has_next": has_next}
+        return {
+            "type": "json",
+            "content": _json.dumps(page_records, indent=2, ensure_ascii=False),
+            "page": page,
+            "has_next": has_next,
+        }
+
+    # Regular .json
+    with open(file_path, "r", encoding="utf-8") as fh:
+        data = _json.load(fh)
+
+    if isinstance(data, list):
+        start = (page - 1) * _PREVIEW_PAGE_SIZE
+        end = start + _PREVIEW_PAGE_SIZE
+        has_next = len(data) > end
+        page_data = data[start:end]
+        if page_data and all(
+            isinstance(r, dict) and all(not isinstance(v, (dict, list)) for v in r.values())
+            for r in page_data
+        ):
+            columns = list(dict.fromkeys(k for r in page_data for k in r.keys()))
+            rows = [[str(r.get(c, "")) for c in columns] for r in page_data]
+            return {"type": "table", "columns": columns, "rows": rows, "page": page, "has_next": has_next}
+        return {
+            "type": "json",
+            "content": _json.dumps(page_data, indent=2, ensure_ascii=False),
+            "page": page,
+            "has_next": has_next,
+        }
+
+    # Object / scalar — render the whole thing formatted
+    return {"type": "json", "content": _json.dumps(data, indent=2, ensure_ascii=False), "page": 1, "has_next": False}
+
+
+def _read_xml_chunk(file_path: str, page: int) -> dict:
+    """Read XML file and return pretty-printed content."""
+    import xml.dom.minidom
+
+    with open(file_path, "r", encoding="utf-8") as fh:
+        raw = fh.read()
+    try:
+        dom = xml.dom.minidom.parseString(raw.encode("utf-8"))
+        pretty = dom.toprettyxml(indent="  ")
+        # minidom adds a spurious blank first line — remove it
+        lines = [ln for ln in pretty.splitlines() if ln.strip()]
+        raw = "\n".join(lines)
+    except Exception:
+        pass  # Fall back to raw content if parsing fails
+    return {"type": "xml", "content": raw, "page": 1, "has_next": False}
+
+
+def _read_file_chunk(file_path: str, page: int) -> tuple | dict | None:
     """Dispatch to the correct reader based on file extension.
 
-    Returns (columns, rows, has_next) or None when the page is empty.
+    Returns:
+      - (columns, rows, has_next) tuple for CSV / XLS / Parquet
+      - dict with 'type' key for JSON / JSONL / XML
+      - None when the page is empty
     Raises FileNotFoundError / ValueError for unrecoverable conditions.
     """
     path = Path(file_path)
@@ -136,6 +223,10 @@ def _read_file_chunk(file_path: str, page: int) -> tuple | None:
         return _read_excel_chunk(file_path, page)
     if ext == "parquet":
         return _read_parquet_chunk(file_path, page)
+    if ext in ("json", "jsonl"):
+        return _read_json_chunk(file_path, page)
+    if ext == "xml":
+        return _read_xml_chunk(file_path, page)
     raise ValueError(f"Unsupported file format: .{ext}")
 
 
@@ -424,6 +515,7 @@ class DataSourceController(Controller):
         configuration_data = datasource.get("configuration_data") or {}
         table_schema = configuration_data.get(table_name, {})
         column_data = table_schema.get("column_data") or {}
+        table_status = table_schema.get("status", "active")
 
         if not column_data:
             # configuration_data was never populated (e.g. existing datasources
@@ -446,6 +538,7 @@ class DataSourceController(Controller):
                 "table_name": table_name,
                 "schema": column_data,
                 "datasource_id": str(datasource_id),
+                "table_status": table_status,
             },
         )
 
@@ -478,12 +571,18 @@ class DataSourceController(Controller):
         if not updated_column:
             raise HTTPException(status_code=404)
 
+        # Re-read the datasource to get the current table status for rendering
+        datasource_obj = await db.get(DataSource, datasource_id)
+        config = (datasource_obj.configuration_data or {}) if datasource_obj else {}
+        table_status = config.get(table_name, {}).get("status", "active")
+
         return Template(
             template_name="datasources/column_row.htm",
             context={
                 "col": updated_column,
                 "datasource_id": str(datasource_id),
                 "table_name": table_name,
+                "table_status": table_status,
             },
         )
 
@@ -551,6 +650,55 @@ class DataSourceController(Controller):
                 "datasource_id": datasource_id,
             }
         )
+
+    # --------------------------
+    # DELETE DATASOURCE
+    # --------------------------
+    @post("/{datasource_id:uuid}/delete")
+    async def delete_ds(
+        self,
+        datasource_id: uuid.UUID,
+        db: AsyncSession,
+        user: User,
+    ) -> Response:
+        try:
+            await delete_datasource(db=db, datasource_id=datasource_id, user_id=user.id)
+            return Response("", media_type="text/html")
+        except HTTPException as e:
+            return Response(
+                f"<div class='alert alert-danger'>{e.detail}</div>",
+                status_code=e.status_code,
+                media_type="text/html",
+            )
+
+    # --------------------------
+    # TOGGLE DATASOURCE ACTIVE / INACTIVE
+    # --------------------------
+    @post("/{datasource_id:uuid}/toggle-active")
+    async def toggle_active(
+        self,
+        datasource_id: uuid.UUID,
+        db: AsyncSession,
+        user: User,
+    ) -> Template:
+        try:
+            datasource = await toggle_datasource_active(
+                db=db, datasource_id=datasource_id, user_id=user.id
+            )
+            return Template(
+                template_name="datasources/ds_row.htm",
+                context={
+                    "datasource": datasource,
+                    "file_types": list(FILE_BASED_TYPES),
+                    "nosql_types": ["mongodb"],
+                },
+            )
+        except HTTPException as e:
+            return Response(
+                f"<div class='alert alert-danger'>{e.detail}</div>",
+                status_code=e.status_code,
+                media_type="text/html",
+            )
 
     # --------------------------
     # CHECK FILE EXISTS
@@ -793,13 +941,22 @@ class DataSourceController(Controller):
                 )
             }
 
+        base = {
+            "file_id": str(target_file.id),
+            "filename": target_file.original_filename,
+            "files": files_list,
+        }
+
+        # JSON / XML readers return a dict; tabular readers return a tuple
+        if isinstance(chunk, dict):
+            return {**chunk, **base}
+
         columns, rows, has_next = chunk
         return {
+            "type": "table",
             "columns": columns,
             "rows": rows,
             "page": page,
             "has_next": has_next,
-            "file_id": str(target_file.id),
-            "filename": target_file.original_filename,
-            "files": files_list,
+            **base,
         }

@@ -286,6 +286,38 @@ async def get_user_datasources(
     )
 
 
+async def delete_datasource(
+    db: AsyncSession,
+    datasource_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> None:
+    datasource = await datasource_crud.get_one(
+        db,
+        filters={"id": datasource_id, "user_id": user_id},
+    )
+    if not datasource:
+        raise HTTPException(status_code=404, detail="Datasource not found")
+    await db.delete(datasource)
+    await db.commit()
+
+
+async def toggle_datasource_active(
+    db: AsyncSession,
+    datasource_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> DataSource:
+    datasource = await datasource_crud.get_one(
+        db,
+        filters={"id": datasource_id, "user_id": user_id},
+    )
+    if not datasource:
+        raise HTTPException(status_code=404, detail="Datasource not found")
+    datasource.is_active = not datasource.is_active
+    await db.commit()
+    await db.refresh(datasource)
+    return datasource
+
+
 async def get_tables_columns(datasource, table_name):
     schema = await get_table_schema(datasource, table_name)
 
@@ -351,13 +383,23 @@ async def toggle_column_status_service(
 
     configuration = datasource.configuration_data or {}
 
+    # Upsert table entry
     if table_name not in configuration:
+        configuration[table_name] = {}
+
+    table_config = configuration[table_name]
+
+    # Block activating a column when its table is inactive
+    if table_config.get("status", "active") == "inactive" and new_status == "active":
         return None
 
-    if column_name not in configuration[table_name]["column_data"]:
-        return None
-
-    configuration[table_name]["column_data"][column_name]["status"] = new_status
+    # Upsert column entry
+    column_data = table_config.get("column_data", {})
+    if column_name not in column_data:
+        column_data[column_name] = {"column_name": column_name, "status": "active"}
+    column_data[column_name]["status"] = new_status
+    table_config["column_data"] = column_data
+    configuration[table_name] = table_config
 
     datasource.configuration_data = configuration
     flag_modified(datasource, "configuration_data")
@@ -384,10 +426,18 @@ async def toggle_table_status_service(
 
     configuration = datasource.configuration_data or {}
 
+    # Upsert — create entry if this table has never been configured yet
     if table_name not in configuration:
-        return None
+        configuration[table_name] = {}
 
     configuration[table_name]["status"] = new_status
+
+    # Cascade: deactivate all columns when the table is deactivated
+    if new_status == "inactive":
+        column_data = configuration[table_name].get("column_data", {})
+        for col_name in column_data:
+            column_data[col_name]["status"] = "inactive"
+        configuration[table_name]["column_data"] = column_data
 
     datasource.configuration_data = configuration
     flag_modified(datasource, "configuration_data")

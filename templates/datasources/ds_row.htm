@@ -1,0 +1,132 @@
+{% if datasource.db_type in file_types %}
+{# ── FILE-BASED ROW (4 columns) ── #}
+<tr id="ds-row-{{ datasource.id }}">
+    <td>
+        <span class="fw-semibold text-success">
+            <i class="las la-tag"></i>
+            {{ datasource.datasource_name }}
+        </span>
+    </td>
+    <td>
+        <span class="badge bg-success-subtle text-success-emphasis border border-success-subtle">
+            {{ datasource.db_type | upper }}
+        </span>
+    </td>
+    <td>
+        {% if datasource.is_active %}
+            <span class="badge bg-success me-1">Active</span>
+        {% else %}
+            <span class="badge bg-secondary me-1">Inactive</span>
+        {% endif %}
+    </td>
+    <td>
+        
+        <button
+            class="btn btn-sm {% if datasource.is_active %}btn-outline-warning{% else %}btn-outline-success{% endif %}"
+            hx-post="/datasource/{{ datasource.id }}/toggle-active"
+            hx-target="#ds-row-{{ datasource.id }}"
+            hx-swap="outerHTML"
+        >
+            {% if datasource.is_active %}
+                Deactivate
+            {% else %}
+                Activate
+            {% endif %}
+        </button>
+        {% if datasource.is_active %}
+            <button
+                class="btn btn-sm btn-outline-primary"
+                onclick="fpOpen('{{ datasource.id }}', '{{ datasource.datasource_name }}')"
+            >
+                Preview
+            </button>
+        {% else %}
+            <button
+                class="btn btn-sm btn-outline-secondary"
+                onclick="openRenameModal('{{ datasource.id }}', '{{ datasource.datasource_name }}')"
+            >
+                Rename
+            </button>
+            
+            <button
+                class="btn btn-sm btn-outline-danger"
+                hx-post="/datasource/{{ datasource.id }}/delete"
+                hx-target="#ds-row-{{ datasource.id }}"
+                hx-swap="outerHTML"
+                hx-confirm="Delete '{{ datasource.datasource_name }}'? This cannot be undone."
+            >
+                Delete
+            </button>
+        {% endif %}
+    </td>
+</tr>
+
+{% else %}
+{# ── RDBMS / NOSQL ROW (7 columns) ── #}
+{% set badge_class = "bg-warning-subtle text-warning-emphasis border border-warning-subtle" if datasource.db_type in nosql_types else "bg-primary-subtle text-primary-emphasis border border-primary-subtle" %}
+<tr id="ds-row-{{ datasource.id }}">
+    <td>
+        <span class="fw-semibold {% if datasource.db_type not in nosql_types %}text-primary{% endif %}"
+              {% if datasource.db_type in nosql_types %}style="color:#fd7e14;"{% endif %}>
+            <i class="las la-tag"></i>
+            {{ datasource.datasource_name }}
+        </span>
+    </td>
+    <td>
+        <span class="badge {{ badge_class }}">
+            {{ datasource.db_type | upper }}
+        </span>
+    </td>
+    <td>{{ datasource.host }}</td>
+    <td>{{ datasource.port }}</td>
+    <td>{{ datasource.database_name }}</td>
+    <td>
+        {% if datasource.is_active %}
+            <span class="badge bg-success me-1">Active</span>
+        {% else %}
+            <span class="badge bg-secondary me-1">Inactive</span>
+        {% endif %}
+    </td>    
+    <td>
+        <button
+            class="btn btn-sm {% if datasource.is_active %}btn-outline-warning{% else %}btn-outline-success{% endif %}"
+            hx-post="/datasource/{{ datasource.id }}/toggle-active"
+            hx-target="#ds-row-{{ datasource.id }}"
+            hx-swap="outerHTML"
+        >
+            {% if datasource.is_active %}
+                Deactivate
+            {% else %}
+                Activate
+            {% endif %}
+        </button>
+        {% if datasource.is_active %}
+        <button
+            class="btn btn-sm btn-outline-primary"
+            hx-get="/datasource/{{ datasource.id }}"
+            hx-target="#preview-container"
+            hx-swap="innerHTML"
+            hx-on="htmx:afterOnLoad: bootstrap.Offcanvas.getOrCreateInstance(document.getElementById('previewOffcanvas')).show()"
+        >
+            Preview
+        </button>
+        {% else %}
+        <button
+            class="btn btn-sm btn-outline-secondary"
+            onclick="openRenameModal('{{ datasource.id }}', '{{ datasource.datasource_name }}')"
+        >
+            Rename
+        </button>
+        <button
+            class="btn btn-sm btn-outline-danger"
+            hx-post="/datasource/{{ datasource.id }}/delete"
+            hx-target="#ds-row-{{ datasource.id }}"
+            hx-swap="outerHTML"
+            hx-confirm="Delete '{{ datasource.datasource_name }}'? This cannot be undone."
+        >
+            Delete
+        </button>
+        {% endif %}
+    </td>
+</tr>
+{% endif %}
