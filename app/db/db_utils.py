@@ -4,6 +4,7 @@ import asyncio
 import time
 from typing import Dict, Optional, Any, TypeVar, Type, List
 from dataclasses import dataclass
+from urllib.parse import quote_plus
 
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, AsyncEngine
 from sqlalchemy import text, select, and_
@@ -69,16 +70,24 @@ def build_rdbms_url(
     password: str,
 ) -> str:
 
+    u = quote_plus(username or "")
+    p = quote_plus(password or "")
+
     if db_type == "postgres":
-        return f"postgresql+asyncpg://{username}:{password}@{host}:{port}/{database}"
+        return f"postgresql+asyncpg://{u}:{p}@{host}:{port}/{database}"
 
     if db_type == "mysql":
-        return f"mysql+aiomysql://{username}:{password}@{host}:{port}/{database}"
+        return f"mysql+aiomysql://{u}:{p}@{host}:{port}/{database}"
 
     if db_type == "sqlite":
         return f"sqlite+aiosqlite:///{database}"
 
-    raise ValueError("Unsupported RDBMS")
+    if db_type == "oracle":
+        raise ValueError(
+            "Oracle is not yet supported. Please choose PostgreSQL, MySQL, or SQLite."
+        )
+
+    raise ValueError(f"Unsupported database type: {db_type!r}")
 
 
 def build_mongo_uri(host: str, port: str, username: str, password: str) -> str:
@@ -196,7 +205,8 @@ async def test_rdbms_connection(url: str) -> bool:
         await _register_success(wrapper)
         return True
 
-    except SQLAlchemyError:
+    except Exception as e:
+        print(f"[test_rdbms_connection] Connection failed: {type(e).__name__}: {e}")
         await _register_failure(wrapper)
         return False
 

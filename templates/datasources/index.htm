@@ -525,7 +525,6 @@ Datasources | GetMyStuff
                         <div class="spinner-border text-primary"></div>
                     </div>
                 </div>
-
             </div>
         </div>
     </div>
@@ -844,7 +843,9 @@ Datasources | GetMyStuff
     // ── Upload progress bar ───────────────────────────────────────────────
     // htmx:configRequest fires before the XHR is sent, giving us the raw
     // XMLHttpRequest so we can attach an upload-phase progress listener.
-    addDatasourceForm.addEventListener("htmx:configRequest", function (evt) {
+    addDatasourceForm.addEventListener("htmx:beforeRequest", function (evt) {
+        // Ignore bubbled events from child elements (e.g. name-validation blur)
+        if (evt.detail.elt !== addDatasourceForm) return;
         evt.detail.xhr.upload.addEventListener("progress", function (e) {
             if (e.lengthComputable) {
                 const pct = Math.round((e.loaded / e.total) * 100);
@@ -854,13 +855,15 @@ Datasources | GetMyStuff
         });
     });
 
-    addDatasourceForm.addEventListener("htmx:beforeRequest", function () {
+    addDatasourceForm.addEventListener("htmx:beforeRequest", function (evt) {
+        if (evt.detail.elt !== addDatasourceForm) return;
         progressBar.value = 0;
         progressPct.textContent = "0%";
         progressWrap.classList.remove("d-none");
     });
 
-    addDatasourceForm.addEventListener("htmx:afterRequest", function () {
+    addDatasourceForm.addEventListener("htmx:afterRequest", function (evt) {
+        if (evt.detail.elt !== addDatasourceForm) return;
         progressWrap.classList.add("d-none");
         progressBar.value = 0;
         progressPct.textContent = "0%";

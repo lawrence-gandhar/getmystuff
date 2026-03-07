@@ -43,6 +43,8 @@ async def test_connection(db_type, host, port, database, username, password):
         else:
             url = build_rdbms_url(db_type, host, port, database, username, password)
             return await test_rdbms_connection(url)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception:
         return False
 
@@ -83,7 +85,14 @@ async def create_datasource(
         )
 
         if not is_valid:
-            raise HTTPException(status_code=400, detail="Connection Failed")
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Could not connect to the database. "
+                    "Please double-check the host, port, database name, username, and password, "
+                    "and make sure the database server is running and reachable."
+                ),
+            )
 
     encrypted_password = encrypt_password(password) if password else ""
 
