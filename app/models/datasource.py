@@ -108,6 +108,12 @@ class DatasourceToolBaseConfig(Base):
         index=True
     )
 
+    table_name: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+        index=True
+    )
+
     base_config: Mapped[dict] = mapped_column(
         MutableDict.as_mutable(JSONB),
         nullable=False,
@@ -146,8 +152,9 @@ class DatasourceToolBaseConfig(Base):
     __table_args__ = (
         UniqueConstraint(
             "datasource_id",
+            "table_name",
             "tool_name",
-            name="uq_ds_tool_base"
+            name="uq_ds_table_tool_base"
         ),
     )
 
@@ -171,6 +178,18 @@ class DataSourceAgentConfig(Base):
         String(255),
         nullable=False,
         index=True
+    )
+
+    table_column: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        nullable=True,
+        index=True
+    )
+
+    config: Mapped[dict] = mapped_column(
+        MutableDict.as_mutable(JSONB),
+        nullable=False,
+        default=dict
     )
 
     policy_json: Mapped[dict] = mapped_column(

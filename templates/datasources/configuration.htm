@@ -410,12 +410,36 @@
             <strong>{{ table_name }}</strong> datasource object.
         </p>
 
+        <!-- INLINE ERROR/SUCCESS BANNER (inside offcanvas so it's visible) -->
+        <div id="toolConfigResponse" class="mb-3"></div>
+
         <form
             hx-post="/datasource/{{ datasource_id }}/config/create"
-            hx-target="#config-response"
+            hx-target="#toolConfigResponse"
             hx-swap="innerHTML"
-            hx-on::after-request="if(event.detail.successful){ this.reset(); bootstrap.Offcanvas.getInstance(document.getElementById('toolConfigOffcanvas')).hide(); }"
+            hx-on::before-request="
+                const subqs = [];
+                queryState.aggregations.forEach(function(_, idx) {
+                    const saved = localStorage.getItem('subquery_agg_' + idx);
+                    if (saved) {
+                        const parsed = JSON.parse(saved);
+                        parsed.agg_index = idx;
+                        subqs.push(parsed);
+                    }
+                });
+                document.getElementById('subqueryConfigsInput').value = JSON.stringify(subqs);
+            "
+            hx-on::after-request="
+                const el = document.getElementById('toolConfigResponse');
+                if (el && el.querySelector('[data-success=true]')) {
+                    this.reset();
+                    bootstrap.Offcanvas.getInstance(document.getElementById('toolConfigOffcanvas')).hide();
+                }
+            "
         >
+            <!-- table_name is set dynamically when the offcanvas opens -->
+            <input type="hidden" name="table_name" id="configTableName">
+            <input type="hidden" name="subquery_configs" id="subqueryConfigsInput" value="[]">
 
             <!-- TOOL NAME -->
             <div class="mb-3">
@@ -526,6 +550,100 @@
     </div>
 </div>
 
+
+<!-- ============================================
+     OFFCANVAS 3 — SUBQUERY / COLUMN CONFIG
+     ============================================ -->
+<div
+    class="offcanvas offcanvas-end"
+    tabindex="-1"
+    id="subqueryConfigOffcanvas"
+    aria-labelledby="subqueryConfigOffcanvasLabel"
+    style="width: 70vw;"
+    data-bs-backdrop="false"
+    data-bs-keyboard="false"
+>
+    <div class="offcanvas-header border-bottom">
+        <h5 class="offcanvas-title" id="subqueryConfigOffcanvasLabel">
+            <i class="las la-code-branch text-warning"></i> Subquery/Column Configurations
+        </h5>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+    </div>
+
+    <div class="offcanvas-body">
+
+        <p class="text-muted small mb-4">
+            Configure a subquery for the selected aggregation column. The result will be
+            embedded as a correlated subquery in the main SQL.
+        </p>
+
+        <div id="subqueryResponse" class="mb-3"></div>
+
+        <div class="query-builder">
+
+            <!-- SQ COLUMNS -->
+            <div class="card mb-3">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <strong>Columns</strong>
+                    <button type="button" class="btn btn-sm btn-outline-primary"
+                            onclick="sqAddColumn()">+ Add Column</button>
+                </div>
+                <div class="card-body" id="sqColumnsContainer">
+                    <p class="text-muted small mb-0">No columns selected — defaults to <code>*</code></p>
+                </div>
+            </div>
+
+            <!-- SQ AGGREGATIONS (no subquery button per requirement 7) -->
+            <div class="card mb-3">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <strong>Aggregations</strong>
+                    <button type="button" class="btn btn-sm btn-outline-primary"
+                            onclick="sqAddAggregation()">+ Add Aggregation</button>
+                </div>
+                <div class="card-body" id="sqAggregationContainer"></div>
+            </div>
+
+            <!-- SQ GROUP BY -->
+            <div class="card mb-3">
+                <div class="card-header d-flex justify-content-between">
+                    <strong>Group By</strong>
+                    <button type="button" class="btn btn-sm btn-outline-primary"
+                            onclick="sqAddGroupBy()">+ Add Group</button>
+                </div>
+                <div class="card-body" id="sqGroupByContainer"></div>
+            </div>
+
+            <!-- SQ FILTERS -->
+            <div class="card mb-3">
+                <div class="card-header d-flex justify-content-between">
+                    <strong>Filters</strong>
+                    <button type="button" class="btn btn-sm btn-outline-primary"
+                            onclick="sqAddFilter()">+ Add Filter</button>
+                </div>
+                <div class="card-body" id="sqFilterContainer"></div>
+            </div>
+
+            <!-- SQ SQL PREVIEW -->
+            <div class="card">
+                <div class="card-header"><strong>Subquery SQL Preview</strong></div>
+                <div class="card-body bg-dark text-light font-monospace small">
+                    <pre id="sqSqlPreview" class="mb-0"></pre>
+                </div>
+            </div>
+
+        </div>
+
+        <div class="d-flex gap-2 mt-4">
+            <button type="button" class="btn btn-primary" onclick="saveSubqueryConfig()">
+                <i class="las la-save"></i> Save Subquery
+            </button>
+            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="offcanvas">
+                Cancel
+            </button>
+        </div>
+
+    </div>
+</div>
 
 <!-- ============================================
      OFFCANVAS 2 — CREATE AGENT CONFIG
@@ -863,6 +981,9 @@ document
 
         queryState.table = currentTableName;
 
+        const tableNameInput = document.getElementById("configTableName");
+        if (tableNameInput) tableNameInput.value = currentTableName || "";
+
         if (queryState.aggregations.length === 0) {
             addAggregation();
         }
@@ -907,8 +1028,11 @@ document
         if (preview) preview.textContent = "";
 
         // Clear response banner
-        const resp = document.getElementById("config-response");
+        const resp = document.getElementById("toolConfigResponse");
         if (resp) resp.innerHTML = "";
+
+        // Clear all subquery localStorage entries for this session
+        Object.keys(localStorage).filter(k => k.startsWith("subquery_agg_")).forEach(k => localStorage.removeItem(k));
     });
 
 
@@ -923,6 +1047,299 @@ function updateBaseConfigJSON() {
     const textarea = document.querySelector("textarea[name='base_config']");
     if (textarea) textarea.value = JSON.stringify(config, null, 2);
 }
+
+// =========================================================
+// SUBQUERY STATE & FUNCTIONS
+// =========================================================
+
+let subqueryState = {
+    aggIndex: null,
+    table: "",
+    columns: [],
+    aggregations: [],
+    groupBy: [],
+    filters: []
+};
+
+function openSubqueryCanvas(aggIndex) {
+    subqueryState.aggIndex = aggIndex;
+    subqueryState.table = currentTableName || "";
+
+    const saved = localStorage.getItem(`subquery_agg_${aggIndex}`);
+    if (saved) {
+        const parsed = JSON.parse(saved);
+        subqueryState.columns = parsed.columns || [];
+        subqueryState.aggregations = parsed.aggregations || [];
+        subqueryState.groupBy = parsed.groupBy || [];
+        subqueryState.filters = parsed.filters || [];
+    } else {
+        subqueryState.columns = [];
+        subqueryState.aggregations = [];
+        subqueryState.groupBy = [];
+        subqueryState.filters = [];
+    }
+
+    sqRenderColumns();
+    sqRenderAggregations();
+    sqRenderGroupBy();
+    sqRenderFilters();
+    sqUpdateSQLPreview();
+
+    bootstrap.Offcanvas.getOrCreateInstance(
+        document.getElementById("subqueryConfigOffcanvas")
+    ).show();
+}
+
+function saveSubqueryConfig() {
+    const idx = subqueryState.aggIndex;
+    if (idx === null) return;
+
+    localStorage.setItem(`subquery_agg_${idx}`, JSON.stringify({
+        table: subqueryState.table,
+        columns: subqueryState.columns,
+        aggregations: subqueryState.aggregations,
+        groupBy: subqueryState.groupBy,
+        filters: subqueryState.filters
+    }));
+
+    bootstrap.Offcanvas.getInstance(
+        document.getElementById("subqueryConfigOffcanvas")
+    ).hide();
+
+    // Refresh parent aggregations (button highlight) and SQL preview
+    renderAggregations();
+    updateSQLPreview();
+}
+
+// ── Subquery: Columns ──────────────────────────────────────
+
+function sqAddColumn() {
+    subqueryState.columns.push({ column: currentTableColumns[0] || "", alias: "" });
+    sqRenderColumns();
+}
+
+function sqRemoveColumn(index) {
+    subqueryState.columns.splice(index, 1);
+    sqRenderColumns();
+    sqUpdateSQLPreview();
+}
+
+function sqUpdateColumn(index, field, value) {
+    subqueryState.columns[index][field] = value;
+    if (field !== "alias") sqRenderColumns();
+    sqUpdateSQLPreview();
+}
+
+function sqRenderColumns() {
+    const container = document.getElementById("sqColumnsContainer");
+    if (!container) return;
+
+    if (subqueryState.columns.length === 0) {
+        container.innerHTML = `<p class="text-muted small mb-0">No columns selected — defaults to <code>*</code></p>`;
+        sqUpdateSQLPreview();
+        return;
+    }
+
+    container.innerHTML = subqueryState.columns.map((col, index) => `
+        <div class="row g-2 mb-2 align-items-center">
+            <div class="col-5">
+                ${buildColumnDropdown(col.column, `sqUpdateColumn(${index}, 'column', this.value)`)}
+            </div>
+            <div class="col-5">
+                <input type="text" class="form-control" placeholder="Alias (optional)"
+                    value="${col.alias || ""}"
+                    oninput="sqUpdateColumn(${index}, 'alias', this.value)">
+            </div>
+            <div class="col-2">
+                <button type="button" class="btn btn-sm btn-danger"
+                    onclick="sqRemoveColumn(${index})">✕</button>
+            </div>
+        </div>
+    `).join("");
+
+    sqUpdateSQLPreview();
+}
+
+// ── Subquery: Aggregations ────────────────────────────────
+
+function sqAddAggregation() {
+    subqueryState.aggregations.push({
+        type: "count",
+        column: currentTableColumns[0] || "",
+        alias: ""
+    });
+    sqRenderAggregations();
+}
+
+function sqRemoveAggregation(index) {
+    subqueryState.aggregations.splice(index, 1);
+    sqRenderAggregations();
+    sqUpdateSQLPreview();
+}
+
+function sqUpdateAggregation(index, field, value) {
+    subqueryState.aggregations[index][field] = value;
+    if (field !== "alias") sqRenderAggregations();
+    sqUpdateSQLPreview();
+}
+
+function sqRenderAggregations() {
+    const container = document.getElementById("sqAggregationContainer");
+    if (!container) return;
+
+    const aggTypes = ["count", "sum", "avg", "min", "max"];
+
+    container.innerHTML = subqueryState.aggregations.map((agg, index) => {
+        const typeOptions = aggTypes.map(t =>
+            `<option value="${t}" ${agg.type === t ? "selected" : ""}>${t.toUpperCase()}</option>`
+        ).join("");
+        return `
+            <div class="row g-2 mb-2 align-items-center">
+                <div class="col-3">
+                    <select class="form-select"
+                        onchange="sqUpdateAggregation(${index}, 'type', this.value)">
+                        ${typeOptions}
+                    </select>
+                </div>
+                <div class="col-4">
+                    ${buildColumnDropdown(agg.column, `sqUpdateAggregation(${index}, 'column', this.value)`)}
+                </div>
+                <div class="col-4">
+                    <input type="text" class="form-control" placeholder="Alias (optional)"
+                        value="${agg.alias || ""}"
+                        oninput="sqUpdateAggregation(${index}, 'alias', this.value)">
+                </div>
+                <div class="col-1">
+                    <button type="button" class="btn btn-sm btn-danger"
+                        onclick="sqRemoveAggregation(${index})">✕</button>
+                </div>
+            </div>
+        `;
+    }).join("");
+
+    sqUpdateSQLPreview();
+}
+
+// ── Subquery: Group By ────────────────────────────────────
+
+function sqAddGroupBy() {
+    subqueryState.groupBy.push(currentTableColumns[0] || "");
+    sqRenderGroupBy();
+    sqUpdateSQLPreview();
+}
+
+function sqRemoveGroupBy(index) {
+    subqueryState.groupBy.splice(index, 1);
+    sqRenderGroupBy();
+    sqUpdateSQLPreview();
+}
+
+function sqUpdateGroupBy(index, value) {
+    subqueryState.groupBy[index] = value;
+    sqUpdateSQLPreview();
+}
+
+function sqRenderGroupBy() {
+    const container = document.getElementById("sqGroupByContainer");
+    if (!container) return;
+    container.innerHTML = subqueryState.groupBy.map((column, index) => `
+        <div class="row g-2 mb-2">
+            <div class="col-10">
+                ${buildColumnDropdown(column, `sqUpdateGroupBy(${index}, this.value)`)}
+            </div>
+            <div class="col-2">
+                <button type="button" class="btn btn-sm btn-danger"
+                    onclick="sqRemoveGroupBy(${index})">✕</button>
+            </div>
+        </div>
+    `).join("");
+    sqUpdateSQLPreview();
+}
+
+// ── Subquery: Filters ─────────────────────────────────────
+
+function sqAddFilter() {
+    subqueryState.filters.push({
+        column: currentTableColumns[0] || "",
+        operator: "=",
+        value: ""
+    });
+    sqRenderFilters();
+    sqUpdateSQLPreview();
+}
+
+function sqRemoveFilter(index) {
+    subqueryState.filters.splice(index, 1);
+    sqRenderFilters();
+    sqUpdateSQLPreview();
+}
+
+function sqUpdateFilter(index, field, value) {
+    subqueryState.filters[index][field] = value;
+    sqUpdateSQLPreview();
+}
+
+function sqRenderFilters() {
+    const container = document.getElementById("sqFilterContainer");
+    if (!container) return;
+    container.innerHTML = subqueryState.filters.map((f, index) => `
+        <div class="row g-2 mb-2">
+            <div class="col-4">
+                ${buildColumnDropdown(f.column, `sqUpdateFilter(${index}, 'column', this.value)`)}
+            </div>
+            <div class="col-3">
+                <select class="form-select"
+                    onchange="sqUpdateFilter(${index}, 'operator', this.value)">
+                    <option>=</option>
+                    <option>!=</option>
+                    <option>&gt;</option>
+                    <option>&lt;</option>
+                    <option>LIKE</option>
+                </select>
+            </div>
+            <div class="col-4">
+                <input class="form-control"
+                    value="${f.value}"
+                    onchange="sqUpdateFilter(${index}, 'value', this.value)">
+            </div>
+            <div class="col-1">
+                <button type="button" class="btn btn-sm btn-danger"
+                    onclick="sqRemoveFilter(${index})">✕</button>
+            </div>
+        </div>
+    `).join("");
+    sqUpdateSQLPreview();
+}
+
+// ── Subquery: SQL Preview ─────────────────────────────────
+
+function sqUpdateSQLPreview() {
+    const preview = document.getElementById("sqSqlPreview");
+    if (!preview) return;
+    preview.textContent = buildSubquerySQL(subqueryState);
+}
+
+// ── Subquery: hidden.bs.offcanvas reset ───────────────────
+document
+    .getElementById("subqueryConfigOffcanvas")
+    .addEventListener("hidden.bs.offcanvas", function () {
+        subqueryState.aggIndex = null;
+        subqueryState.columns = [];
+        subqueryState.aggregations = [];
+        subqueryState.groupBy = [];
+        subqueryState.filters = [];
+
+        const resp = document.getElementById("subqueryResponse");
+        if (resp) resp.innerHTML = "";
+
+        ["sqColumnsContainer", "sqAggregationContainer", "sqGroupByContainer", "sqFilterContainer"].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.innerHTML = "";
+        });
+
+        const sqPreview = document.getElementById("sqSqlPreview");
+        if (sqPreview) sqPreview.textContent = "";
+    });
 
 function renderGroupBy() {
     const container = document.getElementById("groupByContainer");
@@ -1077,15 +1494,18 @@ function renderAggregations() {
         const typeOptions = aggTypes.map(t =>
             `<option value="${t}" ${agg.type === t ? "selected" : ""}>${t.toUpperCase()}</option>`
         ).join("");
+        const hasSq = localStorage.getItem(`subquery_agg_${index}`) !== null;
+        const sqBtnClass = hasSq ? "btn-warning" : "btn-outline-secondary";
+        const sqBtnTitle = hasSq ? "Subquery configured — click to edit" : "Add subquery for this column";
         return `
             <div class="row g-2 mb-2 align-items-center">
-                <div class="col-3">
+                <div class="col-2">
                     <select class="form-select"
                         onchange="updateAggregation(${index}, 'type', this.value)">
                         ${typeOptions}
                     </select>
                 </div>
-                <div class="col-4">
+                <div class="col-3">
                     ${buildColumnDropdown(agg.column, `updateAggregation(${index}, 'column', this.value)`)}
                 </div>
                 <div class="col-4">
@@ -1094,10 +1514,14 @@ function renderAggregations() {
                         oninput="updateAggregation(${index}, 'alias', this.value)">
                 </div>
                 <div class="col-1">
-                    <button type="button" class="btn btn-sm btn-danger"
-                        onclick="removeAggregation(${index})">
-                        ✕
+                    <button type="button" class="btn btn-sm ${sqBtnClass}" title="${sqBtnTitle}"
+                        onclick="openSubqueryCanvas(${index})">
+                        <i class="las la-code-branch"></i>
                     </button>
+                </div>
+                <div class="col-1">
+                    <button type="button" class="btn btn-sm btn-danger"
+                        onclick="removeAggregation(${index})">✕</button>
                 </div>
             </div>
         `;
@@ -1158,6 +1582,27 @@ function renderFilters() {
     updateSQLPreview();
 }
 
+function buildSubquerySQL(sqData) {
+    const parts = [];
+    (sqData.columns || []).forEach(c => {
+        parts.push(c.alias ? `${c.column} AS ${c.alias}` : c.column);
+    });
+    (sqData.aggregations || []).forEach(a => {
+        const expr = `${a.type.toUpperCase()}(${a.column})`;
+        parts.push(a.alias ? `${expr} AS ${a.alias}` : expr);
+    });
+    let sql = "SELECT " + (parts.length > 0 ? parts.join(", ") : "*");
+    sql += `\n    FROM ${sqData.table || ""}`;
+    if (sqData.filters && sqData.filters.length > 0) {
+        sql += "\n    WHERE " + sqData.filters
+            .map(f => `${f.column} ${f.operator} '${f.value}'`).join(" AND ");
+    }
+    if (sqData.groupBy && sqData.groupBy.length > 0) {
+        sql += "\n    GROUP BY " + sqData.groupBy.join(", ");
+    }
+    return sql;
+}
+
 function updateSQLPreview() {
     const parts = [];
 
@@ -1165,8 +1610,16 @@ function updateSQLPreview() {
         parts.push(c.alias ? `${c.column} AS ${c.alias}` : c.column);
     });
 
-    queryState.aggregations.forEach(a => {
-        const expr = `${a.type.toUpperCase()}(${a.column})`;
+    queryState.aggregations.forEach((a, index) => {
+        const saved = localStorage.getItem(`subquery_agg_${index}`);
+        let colExpr;
+        if (saved) {
+            const sqData = JSON.parse(saved);
+            colExpr = `(\n    ${buildSubquerySQL(sqData)}\n  )`;
+        } else {
+            colExpr = a.column;
+        }
+        const expr = `${a.type.toUpperCase()}(${colExpr})`;
         parts.push(a.alias ? `${expr} AS ${a.alias}` : expr);
     });
 

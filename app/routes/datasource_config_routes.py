@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.auth import require_auth
 from app.models.user import User
-from app.services.datasource_config_service import create_config
+from app.services.datasource_config_service import create_config_with_subqueries
 
 from app.services.datasource_service import (
     get_datasource_table_schema,
@@ -113,7 +113,9 @@ class DataSourceConfigurations(Controller):
         form = await request.form()
 
         tool_name = form.get("tool_name")
+        table_name = form.get("table_name")
         base_config_raw = form.get("base_config", "{}")
+        subquery_configs_raw = form.get("subquery_configs", "[]")
 
         try:
             base_config = json.loads(base_config_raw)
@@ -121,19 +123,30 @@ class DataSourceConfigurations(Controller):
             base_config = {}
 
         try:
-            await create_config(
+            subquery_configs = json.loads(subquery_configs_raw)
+            if not isinstance(subquery_configs, list):
+                subquery_configs = []
+        except (json.JSONDecodeError, TypeError):
+            subquery_configs = []
+
+        try:
+            await create_config_with_subqueries(
                 db=db,
                 user_id=user.id,
                 datasource_id=datasource_id,
                 tool_name=tool_name,
+                table_name=table_name,
                 base_config=base_config,
+                subquery_configs=subquery_configs,
             )
             return Response(
-                "<div class='alert alert-success'>Configuration Created Successfully</div>",
+                "<div class='alert alert-success' data-success='true'>Configuration Created Successfully</div>",
                 media_type="text/html",
+                status_code=200,
             )
         except HTTPException as e:
             return Response(
-                f"<div class='alert alert-danger'>{e.detail}</div>",
+                f"<div class='alert alert-danger' data-success='false'>{e.detail}</div>",
                 media_type="text/html",
+                status_code=200,
             )
