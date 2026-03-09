@@ -183,3 +183,5 @@ cython_debug/
 migrations/
 alembic/versions/
 uploads/
+
+alembic.ini

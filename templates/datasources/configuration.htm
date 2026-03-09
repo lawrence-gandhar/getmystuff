@@ -73,6 +73,11 @@
         display: block;
     }
 
+    /* File upload modal must sit above open offcanvases (offcanvas z-index: 1045) */
+    #fileUploadModal {
+        z-index: 1065 !important;
+    }
+
 </style>
 
 <div class="container-fluid mt-4">
@@ -448,12 +453,25 @@
                 </label>
                 <input
                     type="text"
+                    id="toolNameInput"
                     name="tool_name"
                     class="form-control"
                     placeholder="e.g. sql_query_tool"
                     required
+                    autocomplete="off"
+                    pattern="[a-z0-9_]+"
+                    title="Lowercase letters, digits, and underscores only"
+                    hx-post="/datasource/{{ datasource_id }}/config/validate-tool-name"
+                    hx-trigger="blur"
+                    hx-target="#toolNameFeedback"
+                    hx-swap="innerHTML"
+                    hx-params="tool_name"
                 >
-                <div class="form-text">Unique identifier for this tool within the datasource.</div>
+                <div id="toolNameFeedback"></div>
+                <div class="form-text">
+                    Unique identifier. Allowed: <code>a-z</code>, <code>0-9</code>,
+                    <code>_</code>. Automatically lowercased.
+                </div>
             </div>
 
             <div class="mb-4 border rounded p-3 bg-light-subtle">
@@ -734,6 +752,78 @@
     </div>
 </div>
 
+<!-- ============================================
+     MODAL — FILE UPLOAD
+     ============================================ -->
+<div class="modal fade" id="fileUploadModal" tabindex="-1" aria-labelledby="fileUploadModalLabel" aria-hidden="true" data-bs-backdrop="static" data-bs-keyboard="false">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+
+            <div class="modal-header">
+                <h5 class="modal-title" id="fileUploadModalLabel">
+                    <i class="las la-upload text-success"></i> Upload Files
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+
+            <div class="modal-body">
+
+                <p class="text-muted small mb-3" id="uploadAllowedTypesNote"></p>
+
+                <!-- FILE INPUT -->
+                <div class="mb-3">
+                    <label class="form-label fw-semibold">Select Files</label>
+                    <input type="file" class="form-control" id="modalFileInput" multiple>
+                    <div class="form-text">You can select multiple files at once.</div>
+                </div>
+
+                <!-- PER-FILE CHECK RESULTS -->
+                <div id="modalFileCheckList" class="mb-3"></div>
+
+                <!-- OVERRIDE TOGGLE (shown when a conflict is detected) -->
+                <div id="modalOverrideToggle" class="alert alert-warning py-2 mb-3" style="display:none;">
+                    <div class="form-check form-switch mb-0">
+                        <input class="form-check-input" type="checkbox" id="modalOverrideSwitch">
+                        <label class="form-check-label fw-semibold small" for="modalOverrideSwitch">
+                            Replace existing files
+                        </label>
+                    </div>
+                    <div class="small mt-1 text-muted">
+                        Turn this on to overwrite your existing files. Leave it off to keep all versions side by side.
+                    </div>
+                </div>
+
+                <!-- OVERALL PROGRESS BAR -->
+                <div id="modalProgressWrap" class="mb-3 d-none">
+                    <div class="d-flex justify-content-between small fw-semibold mb-1">
+                        <span><i class="las la-spinner la-spin"></i> Uploading your files, please wait…</span>
+                        <span id="modalProgressPct">0%</span>
+                    </div>
+                    <div class="progress" style="height: 14px;">
+                        <div class="progress-bar progress-bar-striped progress-bar-animated bg-success"
+                             id="modalProgressBar" role="progressbar" style="width:0%"
+                             aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
+                    </div>
+                </div>
+
+                <!-- PER-FILE UPLOAD RESULTS -->
+                <div id="modalUploadResults"></div>
+
+            </div>
+
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">
+                    <i class="las la-times"></i> Close
+                </button>
+                <button type="button" class="btn btn-success" id="modalUploadBtn" disabled>
+                    <i class="las la-upload"></i> Upload Files
+                </button>
+            </div>
+
+        </div>
+    </div>
+</div>
+
 <script>
 
 // ── Side-nav tab switching (no page reload) ──────────────────────
@@ -754,6 +844,9 @@ let globalConfigurationData = {};
 let globalDatasourceId = null;
 let currentTableColumns = [];
 currentTableName = null;
+
+let _subqueryClosing = false;
+let _subqueryJustClosed = false;
 
 let queryState = {
     table: "",
@@ -814,34 +907,46 @@ function renderDatasourceDetails(contentEl, data, category) {
         const objects   = details.objects || [];
         const colHeader = OBJECT_HEADER[category] || "File / Sheet";
         let html = `
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h6 class="fw-semibold mb-0">
+                    <i class="las la-file-alt text-success"></i>
+                    Uploaded Files
+                    <span class="badge bg-success-subtle text-success-emphasis border border-success-subtle ms-1">${details.type ? details.type.toUpperCase() : "File"}</span>
+                </h6>
+                <button class="btn btn-success btn-sm" onclick="openUploadModal('${details.type}')">
+                    <i class="las la-upload"></i> Upload Files
+                </button>
+            </div>
             <div class="table-responsive">
                 <table class="table table-bordered table-hover align-middle">
                     <thead class="table-light">
-                        <tr>
-                            <th>Type</th>
-                            <td colspan="2">${details.type ? details.type.toUpperCase() : "File"}</td>
-                        </tr>
                         <tr class="custom_table_header">
-                            <th>#</th>
-                            <th style="width:100px;">${colHeader}</th>
-                            <th class="text-center" style="width:150px;">Action</th>
+                            <th>${colHeader}</th>
+                            <th class="text-center" style="width:200px;">Action</th>
                         </tr>
                     </thead>
                     <tbody>
         `;
         if (objects.length === 0) {
-            html += `<tr><td colspan="3" class="text-center text-muted">No files uploaded yet.</td></tr>`;
+            html += `<tr><td colspan="2" class="text-center text-muted py-4"><i class="las la-info-circle fs-5 d-block mb-1"></i>No files uploaded yet. Click "Upload Files" to get started.</td></tr>`;
         } else {
-            objects.forEach((name, idx) => {
+            objects.forEach((obj) => {
                 html += `
                     <tr style="font-size:12px;">
-                        <td>${idx + 1}</td>
-                        <td>${name}</td>
+                        <td>${obj.name}</td>
                         <td class="text-center">
-                            <button class="btn btn-sm btn-outline-primary"
-                                onclick="openFileCanvas('${name}')">
-                                View
-                            </button>
+                            <div class="d-flex gap-1 justify-content-center">
+                                <button class="btn btn-sm btn-outline-primary"
+                                    onclick="openFileCanvas('${obj.name}', '${obj.file_id}')">
+                                    View
+                                </button>
+                                <button class="btn btn-sm btn-outline-danger"
+                                    hx-delete="/datasource/${globalDatasourceId}/file/${obj.file_id}/delete"
+                                    hx-confirm="Delete '${obj.name}'? This cannot be undone."
+                                    hx-on::after-request="if(event.detail.successful){ openCategoryCanvas('file', globalDatasourceId); }">
+                                    <i class="las la-trash"></i> Delete
+                                </button>
+                            </div>
                         </td>
                     </tr>
                 `;
@@ -849,6 +954,7 @@ function renderDatasourceDetails(contentEl, data, category) {
         }
         html += `</tbody></table></div>`;
         contentEl.innerHTML = html;
+        htmx.process(contentEl);
         return;
     }
 
@@ -967,36 +1073,101 @@ document
         }
     });
 
+function resetToolConfigForm() {
+    // Close & reset subquery canvas if it's open
+    const sqEl = document.getElementById("subqueryConfigOffcanvas");
+    if (sqEl && sqEl.classList.contains("show")) {
+        _subqueryClosing = false;
+        bootstrap.Offcanvas.getInstance(sqEl)?.hide();
+    }
+
+    // Reset subquery UI containers regardless
+    ["sqColumnsContainer", "sqAggregationContainer", "sqGroupByContainer", "sqFilterContainer"].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.innerHTML = "";
+    });
+    const sqPreview = document.getElementById("sqSqlPreview");
+    if (sqPreview) sqPreview.textContent = "";
+    const sqResp = document.getElementById("subqueryResponse");
+    if (sqResp) sqResp.innerHTML = "";
+
+    // Reset queryState
+    queryState.table = currentTableName || "";
+    queryState.columns = [];
+    queryState.aggregations = [];
+    queryState.groupBy = [];
+    queryState.filters = [];
+    queryState.orderBy = [];
+    queryState.limit = null;
+
+    // Clear form inputs
+    const tcForm = document.querySelector("#toolConfigOffcanvas form");
+    if (tcForm) {
+        tcForm.querySelectorAll("input[type=text], input[type=number], textarea").forEach(el => {
+            el.value = el.tagName === "TEXTAREA" && el.name === "base_config" ? "{}" : "";
+        });
+    }
+
+    // Clear dynamic builder containers
+    const columnsEl = document.getElementById("columnsContainer");
+    if (columnsEl) columnsEl.innerHTML = `<p class="text-muted small mb-0">No columns selected — defaults to <code>*</code></p>`;
+
+    ["aggregationContainer", "groupByContainer", "filterContainer"].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.innerHTML = "";
+    });
+
+    // Clear SQL preview and response banners
+    const preview = document.getElementById("sqlPreview");
+    if (preview) preview.textContent = "";
+
+    const resp = document.getElementById("toolConfigResponse");
+    if (resp) resp.innerHTML = "";
+
+    const feedback = document.getElementById("toolNameFeedback");
+    if (feedback) feedback.innerHTML = "";
+
+    // Clear subquery localStorage entries
+    Object.keys(localStorage).filter(k => k.startsWith("subquery_agg_")).forEach(k => localStorage.removeItem(k));
+
+    // Set table name, add initial aggregation and render
+    const tableNameInput = document.getElementById("configTableName");
+    if (tableNameInput) tableNameInput.value = currentTableName || "";
+
+    addAggregation();
+    renderAggregations();
+    renderFilters();
+    renderGroupBy();
+    updateSQLPreview();
+}
+
 document
     .getElementById("toolConfigOffcanvas")
     .addEventListener("shown.bs.offcanvas", function () {
 
         if (globalDatasourceId) {
-            const form = this.querySelector("form[hx-post]");
-            if (form) {
-                form.setAttribute("hx-post", `/datasource/${globalDatasourceId}/config/create`);
-                htmx.process(form);
+            const htmxForm = this.querySelector("form[hx-post]");
+            if (htmxForm) {
+                htmxForm.setAttribute("hx-post", `/datasource/${globalDatasourceId}/config/create`);
+                htmx.process(htmxForm);
+            }
+            const toolNameInput = document.getElementById("toolNameInput");
+            if (toolNameInput) {
+                toolNameInput.setAttribute("hx-post", `/datasource/${globalDatasourceId}/config/validate-tool-name`);
+                htmx.process(toolNameInput);
             }
         }
 
-        queryState.table = currentTableName;
-
-        const tableNameInput = document.getElementById("configTableName");
-        if (tableNameInput) tableNameInput.value = currentTableName || "";
-
-        if (queryState.aggregations.length === 0) {
-            addAggregation();
-        }
-
-        renderAggregations();
-        renderFilters();
-        renderGroupBy();
-        updateSQLPreview();
+        resetToolConfigForm();
     });
 
 document
     .getElementById("toolConfigOffcanvas")
     .addEventListener("hidden.bs.offcanvas", function () {
+        // Skip cleanup if subquery canvas is closing (Bootstrap fires this spuriously)
+        if (_subqueryClosing || _subqueryJustClosed) {
+            return;
+        }
         // Reset queryState (dynamic builder state)
         queryState.table = "";
         queryState.columns = [];
@@ -1027,13 +1198,26 @@ document
         const preview = document.getElementById("sqlPreview");
         if (preview) preview.textContent = "";
 
-        // Clear response banner
+        // Clear response banners
         const resp = document.getElementById("toolConfigResponse");
         if (resp) resp.innerHTML = "";
+
+        const feedback = document.getElementById("toolNameFeedback");
+        if (feedback) feedback.innerHTML = "";
 
         // Clear all subquery localStorage entries for this session
         Object.keys(localStorage).filter(k => k.startsWith("subquery_agg_")).forEach(k => localStorage.removeItem(k));
     });
+
+// When "New Tool Config" is clicked while the offcanvas is already open, reset the forms manually
+// (Bootstrap won't re-fire shown.bs.offcanvas on an already-visible offcanvas)
+document.addEventListener("click", function (e) {
+    if (!e.target.closest('[data-bs-target="#toolConfigOffcanvas"]')) return;
+    const tcCanvas = document.getElementById("toolConfigOffcanvas");
+    if (tcCanvas.classList.contains("show")) {
+        resetToolConfigForm();
+    }
+});
 
 
 function updateBaseConfigJSON() {
@@ -1102,13 +1286,11 @@ function saveSubqueryConfig() {
         filters: subqueryState.filters
     }));
 
+    _subqueryClosing = true;
     bootstrap.Offcanvas.getInstance(
         document.getElementById("subqueryConfigOffcanvas")
     ).hide();
-
-    // Refresh parent aggregations (button highlight) and SQL preview
-    renderAggregations();
-    updateSQLPreview();
+    // renderAggregations/updateSQLPreview are called in the hidden.bs.offcanvas handler below
 }
 
 // ── Subquery: Columns ──────────────────────────────────────
@@ -1323,6 +1505,11 @@ function sqUpdateSQLPreview() {
 document
     .getElementById("subqueryConfigOffcanvas")
     .addEventListener("hidden.bs.offcanvas", function () {
+        const wasSave = _subqueryClosing;
+        _subqueryClosing = false;
+        _subqueryJustClosed = true;
+        setTimeout(() => { _subqueryJustClosed = false; }, 0);
+
         subqueryState.aggIndex = null;
         subqueryState.columns = [];
         subqueryState.aggregations = [];
@@ -1339,6 +1526,12 @@ document
 
         const sqPreview = document.getElementById("sqSqlPreview");
         if (sqPreview) sqPreview.textContent = "";
+
+        // Refresh parent aggregations and SQL preview after a save
+        if (wasSave) {
+            renderAggregations();
+            updateSQLPreview();
+        }
     });
 
 function renderGroupBy() {
@@ -1640,7 +1833,7 @@ function updateSQLPreview() {
 }
 
 
-function openFileCanvas(fileName) {
+function openFileCanvas(fileName, fileId) {
     const offcanvasElement = document.getElementById("tableCanvas");
     const tableCanvas = new bootstrap.Offcanvas(offcanvasElement);
     const content = document.getElementById("tableCanvasContent");
@@ -1652,18 +1845,34 @@ function openFileCanvas(fileName) {
     content.innerHTML = `
         <div class="d-flex justify-content-between align-items-start mb-3">
             <h5 class="mb-0">${fileName}</h5>
-            <button
-                class="btn btn-primary btn-sm"
-                type="button"
-                data-bs-toggle="offcanvas"
-                data-bs-target="#toolConfigOffcanvas"
-            >
-                <i class="las la-plus"></i> New Tool Config
-            </button>
+            <div class="d-flex gap-2">
+                <button
+                    class="btn btn-primary btn-sm"
+                    type="button"
+                    data-bs-toggle="offcanvas"
+                    data-bs-target="#toolConfigOffcanvas"
+                >
+                    <i class="las la-plus"></i> New Tool Config
+                </button>
+                <button
+                    class="btn btn-outline-danger btn-sm"
+                    hx-delete="/datasource/${globalDatasourceId}/file/${fileId}/delete"
+                    hx-confirm="Delete '${fileName}'? This cannot be undone."
+                    hx-on::after-request="
+                        if (event.detail.successful) {
+                            bootstrap.Offcanvas.getInstance(document.getElementById('tableCanvas')).hide();
+                            openCategoryCanvas('file', globalDatasourceId);
+                        }
+                    "
+                >
+                    <i class="las la-trash"></i> Delete
+                </button>
+            </div>
         </div>
         <p class="text-muted small">File-based datasource — schema preview is available after upload.</p>
     `;
 
+    htmx.process(content);
     tableCanvas.show();
 }
 
@@ -1750,6 +1959,193 @@ function openTableCanvas(tableName) {
 
     tableCanvas.show();
 }
+
+
+// =========================================================
+// FILE UPLOAD MODAL
+// =========================================================
+
+const UPLOAD_ACCEPT = {
+    csv:     ".csv",
+    xls:     ".xls,.xlsx",
+    json:    ".json,.jsonl",
+    parquet: ".parquet",
+    avro:    ".avro",
+};
+
+const UPLOAD_LABEL = {
+    csv:     "CSV files (.csv)",
+    xls:     "Excel files (.xls, .xlsx)",
+    json:    "JSON files (.json, .jsonl)",
+    parquet: "Parquet files (.parquet)",
+    avro:    "Avro files (.avro)",
+};
+
+function openUploadModal(dbType) {
+    const fileInput     = document.getElementById("modalFileInput");
+    const checkList     = document.getElementById("modalFileCheckList");
+    const overToggle    = document.getElementById("modalOverrideToggle");
+    const overSwitch    = document.getElementById("modalOverrideSwitch");
+    const progressWrap  = document.getElementById("modalProgressWrap");
+    const progressBar   = document.getElementById("modalProgressBar");
+    const progressPct   = document.getElementById("modalProgressPct");
+    const uploadResults = document.getElementById("modalUploadResults");
+    const uploadBtn     = document.getElementById("modalUploadBtn");
+    const typesNote     = document.getElementById("uploadAllowedTypesNote");
+
+    // Reset everything
+    fileInput.accept  = UPLOAD_ACCEPT[dbType] || "";
+    fileInput.value   = "";
+    typesNote.textContent = "Accepted format: " + (UPLOAD_LABEL[dbType] || dbType.toUpperCase());
+    checkList.innerHTML   = "";
+    overToggle.style.display = "none";
+    overSwitch.checked    = false;
+    progressWrap.classList.add("d-none");
+    progressBar.style.width = "0%";
+    progressPct.textContent = "0%";
+    uploadResults.innerHTML = "";
+    uploadBtn.disabled = true;
+
+    const uploadModal = bootstrap.Modal.getOrCreateInstance(document.getElementById("fileUploadModal"));
+    uploadModal.show();
+}
+
+// ── Check files on selection change ──────────────────────
+document.getElementById("modalFileInput").addEventListener("change", async function () {
+    const files         = Array.from(this.files);
+    const checkList     = document.getElementById("modalFileCheckList");
+    const overToggle    = document.getElementById("modalOverrideToggle");
+    const uploadBtn     = document.getElementById("modalUploadBtn");
+
+    if (!files.length) {
+        checkList.innerHTML = "";
+        overToggle.style.display = "none";
+        uploadBtn.disabled = true;
+        return;
+    }
+
+    // Show a loading row for each file
+    checkList.innerHTML = `
+        <div class="list-group mb-1">
+            ${files.map(f => `
+                <div class="list-group-item d-flex align-items-center gap-2 py-2 small">
+                    <div class="spinner-border spinner-border-sm text-muted flex-shrink-0" role="status"></div>
+                    <span class="text-muted text-truncate">${f.name} — checking…</span>
+                </div>
+            `).join("")}
+        </div>
+    `;
+    uploadBtn.disabled = true;
+
+    // Check each file against the server
+    const results = await Promise.all(files.map(f =>
+        fetch("/datasource/" + globalDatasourceId + "/check-file", {
+            method: "POST",
+            body: new URLSearchParams({ filename: f.name }),
+        }).then(r => r.text())
+    ));
+
+    checkList.innerHTML = '<div class="list-group mb-1">' + results.join("") + "</div>";
+    htmx.process(checkList);
+
+    const hasConflict = checkList.querySelector("[data-conflict]") !== null;
+    overToggle.style.display = hasConflict ? "block" : "none";
+    uploadBtn.disabled = false;
+});
+
+// ── Upload on button click ────────────────────────────────
+document.getElementById("modalUploadBtn").addEventListener("click", function () {
+    const files         = Array.from(document.getElementById("modalFileInput").files);
+    if (!files.length) return;
+
+    const overSwitch    = document.getElementById("modalOverrideSwitch");
+    const progressWrap  = document.getElementById("modalProgressWrap");
+    const progressBar   = document.getElementById("modalProgressBar");
+    const progressPct   = document.getElementById("modalProgressPct");
+    const uploadResults = document.getElementById("modalUploadResults");
+    const uploadBtn     = document.getElementById("modalUploadBtn");
+
+    uploadBtn.disabled  = true;
+    uploadResults.innerHTML = "";
+
+    const fd = new FormData();
+    files.forEach(f => fd.append("files", f));
+    fd.append("override", overSwitch.checked ? "yes" : "no");
+
+    const xhr = new XMLHttpRequest();
+
+    xhr.upload.addEventListener("progress", function (e) {
+        if (e.lengthComputable) {
+            const pct = Math.round((e.loaded / e.total) * 100);
+            progressBar.style.width = pct + "%";
+            progressBar.setAttribute("aria-valuenow", pct);
+            progressPct.textContent = pct + "%";
+        }
+    });
+
+    xhr.addEventListener("loadstart", function () {
+        progressBar.style.width = "0%";
+        progressPct.textContent = "0%";
+        progressWrap.classList.remove("d-none");
+    });
+
+    xhr.addEventListener("loadend", function () {
+        progressWrap.classList.add("d-none");
+        progressBar.style.width = "0%";
+
+        if (xhr.status >= 200 && xhr.status < 300) {
+            // Render friendly per-file results
+            uploadResults.innerHTML = xhr.responseText;
+
+            // Reset file input and check list
+            document.getElementById("modalFileInput").value = "";
+            document.getElementById("modalFileCheckList").innerHTML = "";
+            document.getElementById("modalOverrideToggle").style.display = "none";
+
+            // Refresh the file list in the open canvas
+            setTimeout(() => openCategoryCanvas("file", globalDatasourceId), 400);
+        } else {
+            uploadResults.innerHTML = `
+                <div class="alert alert-danger">
+                    <i class="las la-exclamation-triangle"></i>
+                    Something went wrong while uploading your files. Please try again.
+                    If the problem continues, check that your files are the correct format.
+                </div>
+            `;
+        }
+
+        uploadBtn.disabled = false;
+    });
+
+    xhr.open("POST", "/datasource/" + globalDatasourceId + "/upload-files");
+    xhr.send(fd);
+});
+
+// Force modal above any open offcanvas when it begins to show
+document.getElementById("fileUploadModal").addEventListener("show.bs.modal", function () {
+    this.style.zIndex = "1065";
+});
+
+// Force all modal backdrops above offcanvas once they exist in the DOM
+document.getElementById("fileUploadModal").addEventListener("shown.bs.modal", function () {
+    document.querySelectorAll(".modal-backdrop").forEach(function (el) {
+        el.style.zIndex = "1064";
+    });
+});
+
+// Reset modal state when it is fully closed
+document.getElementById("fileUploadModal").addEventListener("hidden.bs.modal", function () {
+    this.style.removeProperty("z-index");
+    document.getElementById("modalFileInput").value = "";
+    document.getElementById("modalFileCheckList").innerHTML = "";
+    document.getElementById("modalOverrideToggle").style.display = "none";
+    document.getElementById("modalOverrideSwitch").checked = false;
+    document.getElementById("modalProgressWrap").classList.add("d-none");
+    document.getElementById("modalProgressBar").style.width = "0%";
+    document.getElementById("modalProgressPct").textContent = "0%";
+    document.getElementById("modalUploadResults").innerHTML = "";
+    document.getElementById("modalUploadBtn").disabled = true;
+});
 
 
 </script>

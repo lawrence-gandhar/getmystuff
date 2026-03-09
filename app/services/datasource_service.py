@@ -1,4 +1,5 @@
 import uuid
+import os
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -226,7 +227,8 @@ async def get_datasource_objects(
             objects = []
             for f in files:
                 listing = await fetch_file_listing(path=f.file_path, file_type=datasource.db_type)
-                objects.extend(listing)
+                for name in listing:
+                    objects.append({"name": name, "file_id": str(f.id)})
         else:
             objects = await get_rdbms_tables(datasource)
     except Exception as e:
@@ -308,6 +310,42 @@ async def delete_datasource(
         raise HTTPException(status_code=404, detail="Datasource not found")
     await db.delete(datasource)
     await db.commit()
+
+
+async def delete_datasource_file(
+    db: AsyncSession,
+    datasource_id: uuid.UUID,
+    file_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> None:
+    datasource = await datasource_crud.get_one(
+        db,
+        filters={"id": datasource_id, "user_id": user_id},
+    )
+    if not datasource:
+        raise HTTPException(status_code=404, detail="Datasource not found")
+
+    result = await db.execute(
+        select(DatasourceFile)
+        .where(DatasourceFile.id == file_id)
+        .where(DatasourceFile.datasource_id == datasource_id)
+    )
+    file = result.scalar_one_or_none()
+    if not file:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    file_path = file.file_path
+    await db.delete(file)
+    await db.commit()
+
+    try:
+        if file_path and os.path.exists(file_path):
+            os.remove(file_path)
+    except OSError as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"File record deleted but could not remove file from disk: {e}",
+        )
 
 
 async def toggle_datasource_active(

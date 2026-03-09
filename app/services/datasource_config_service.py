@@ -142,6 +142,30 @@ async def create_config_with_subqueries(
 
 
 # -----------------------------------
+# CHECK TOOL NAME EXISTS
+# -----------------------------------
+async def check_tool_name_exists(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    datasource_id: uuid.UUID,
+    tool_name: str,
+) -> bool:
+    """Return True if a config with the given tool_name already exists for this datasource."""
+    datasource = await datasource_crud.get_one(
+        db,
+        filters={"id": datasource_id, "user_id": user_id},
+    )
+    if not datasource:
+        raise HTTPException(status_code=404, detail="Datasource not found")
+
+    existing = await config_crud.get_one(
+        db,
+        filters={"datasource_id": datasource_id, "tool_name": tool_name},
+    )
+    return existing is not None
+
+
+# -----------------------------------
 # DELETE CONFIG
 # -----------------------------------
 async def delete_config(

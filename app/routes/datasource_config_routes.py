@@ -1,7 +1,8 @@
+import re
 import uuid
 import json
 
-from litestar import Controller, get, post
+from litestar import Controller, get, post, delete
 from litestar.response import Response, Template
 from litestar.connection import Request
 from litestar.exceptions import HTTPException
@@ -9,13 +10,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.auth import require_auth
 from app.models.user import User
-from app.services.datasource_config_service import create_config_with_subqueries
+from app.services.datasource_config_service import (
+    create_config_with_subqueries,
+    check_tool_name_exists,
+)
 
 from app.services.datasource_service import (
     get_datasource_table_schema,
     get_user_datasources,
-    get_datasource_objects
+    get_datasource_objects,
+    delete_datasource_file,
 )
+
+# Compiled once at import time — reused on every validation request.
+_TOOL_NAME_RE = re.compile(r'^[a-z0-9_]+$')
 
 
 class DataSourceConfigurations(Controller):
@@ -99,6 +107,76 @@ class DataSourceConfigurations(Controller):
         )
 
     # --------------------------
+    # VALIDATE TOOL NAME
+    # (called on blur via HTMX — returns an HTML fragment, never JSON)
+    # --------------------------
+    @post("/{datasource_id:uuid}/config/validate-tool-name")
+    async def validate_tool_name(
+        self,
+        datasource_id: uuid.UUID,
+        request: Request,
+        db: AsyncSession,
+        user: User,
+    ) -> Response:
+        form = await request.form()
+        raw = form.get("tool_name", "")
+        name = raw.strip().lower()
+
+        # ── 1. Empty ────────────────────────────────────────────────────────
+        if not name:
+            return Response(
+                "<div class='text-danger small mt-1'>"
+                "<i class='las la-times-circle'></i> Tool name is required."
+                "</div>",
+                media_type="text/html",
+            )
+
+        # ── 2. Length ────────────────────────────────────────────────────────
+        if len(name) > 255:
+            return Response(
+                "<div class='text-danger small mt-1'>"
+                "<i class='las la-times-circle'></i> "
+                "Tool name must not exceed 255 characters."
+                "</div>",
+                media_type="text/html",
+            )
+
+        # ── 3. Character set ─────────────────────────────────────────────────
+        if not _TOOL_NAME_RE.match(name):
+            return Response(
+                "<div class='text-danger small mt-1'>"
+                "<i class='las la-times-circle'></i> "
+                "Only lowercase letters (a–z), digits (0–9), "
+                "and underscores (_) are allowed."
+                "</div>",
+                media_type="text/html",
+            )
+
+        # ── 4. Uniqueness check ───────────────────────────────────────────────
+        exists = await check_tool_name_exists(
+            db=db,
+            user_id=user.id,
+            datasource_id=datasource_id,
+            tool_name=name,
+        )
+        if exists:
+            return Response(
+                "<div class='text-danger small mt-1'>"
+                "<i class='las la-times-circle'></i> "
+                "This tool name is already taken. Please choose a different one."
+                "</div>",
+                media_type="text/html",
+            )
+
+        # ── All checks passed ────────────────────────────────────────────────
+        return Response(
+            "<div class='text-success small mt-1'>"
+            "<i class='las la-check-circle'></i> Tool name is available."
+            "</div>",
+            media_type="text/html",
+        )
+
+    # --------------------------
     # CREATE CONFIG
     # --------------------------
     @post("/{datasource_id:uuid}/config/create")
@@ -150,3 +228,21 @@ class DataSourceConfigurations(Controller):
                 media_type="text/html",
                 status_code=200,
             )
+
+    # --------------------------
+    # DELETE DATASOURCE FILE
+    # --------------------------
+    @delete("/{datasource_id:uuid}/file/{file_id:uuid}/delete", status_code=204)
+    async def delete_file(
+        self,
+        datasource_id: uuid.UUID,
+        file_id: uuid.UUID,
+        db: AsyncSession,
+        user: User,
+    ) -> None:
+        await delete_datasource_file(
+            db=db,
+            datasource_id=datasource_id,
+            file_id=file_id,
+            user_id=user.id,
+        )

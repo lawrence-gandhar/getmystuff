@@ -422,14 +422,3 @@ Claude MUST follow the existing project pattern.
 
 
 Never introduce a different architecture.
-
-## Additional AI Reference Guides
-
-Claude should also follow the rules defined in:
-
-ARCHITECTURE.md
-ERROR_HANDLING.md
-HTMX_PATTERNS.md
-SERVICE_PATTERNS.md
-
-These documents define architectural patterns and must be respected when generating code.
