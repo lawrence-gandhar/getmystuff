@@ -73,10 +73,21 @@
         display: block;
     }
 
-    /* File upload modal must sit above open offcanvases (offcanvas z-index: 1045) */
-    #fileUploadModal {
-        z-index: 1065 !important;
+    /* ── Custom backdrop (replaces Bootstrap's backdrop on main canvases) ── */
+    #canvasBackdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.5);
+        z-index: 1040;
+        opacity: 0;
+        transition: opacity 0.3s ease;
+        pointer-events: none;
     }
+    #canvasBackdrop.show {
+        opacity: 1;
+        pointer-events: auto;
+    }
+
 
 </style>
 
@@ -332,7 +343,11 @@
 <!-- ============================================
      OFFCANVAS — FILE DATASOURCE DETAILS
      ============================================ -->
-<div class="offcanvas offcanvas-end" tabindex="-1" id="fileCanvas" style="width: 75vw;">
+<!-- Custom backdrop — shown/hidden by JS instead of Bootstrap -->
+<div id="canvasBackdrop"></div>
+
+<div class="offcanvas offcanvas-end" tabindex="-1" id="fileCanvas" style="width: 75vw;"
+     data-bs-backdrop="false" data-bs-scroll="true">
     <div class="offcanvas-header" style="border-bottom:1px solid #eee;">
         <h5 class="offcanvas-title">
             <i class="las la-file-alt text-success"></i>
@@ -346,7 +361,8 @@
 <!-- ============================================
      OFFCANVAS — RDBMS DATASOURCE DETAILS
      ============================================ -->
-<div class="offcanvas offcanvas-end" tabindex="-1" id="rdbmsCanvas" style="width: 75vw;">
+<div class="offcanvas offcanvas-end" tabindex="-1" id="rdbmsCanvas" style="width: 75vw;"
+     data-bs-backdrop="false" data-bs-scroll="true">
     <div class="offcanvas-header" style="border-bottom:1px solid #eee;">
         <h5 class="offcanvas-title">
             <i class="las la-database text-primary"></i>
@@ -360,7 +376,8 @@
 <!-- ============================================
      OFFCANVAS — COLLECTION DATASOURCE DETAILS
      ============================================ -->
-<div class="offcanvas offcanvas-end" tabindex="-1" id="nosqlCanvas" style="width: 75vw;">
+<div class="offcanvas offcanvas-end" tabindex="-1" id="nosqlCanvas" style="width: 75vw;"
+     data-bs-backdrop="false" data-bs-scroll="true">
     <div class="offcanvas-header" style="border-bottom:1px solid #eee;">
         <h5 class="offcanvas-title">
             <i class="las la-leaf text-warning"></i>
@@ -377,7 +394,8 @@
 
 <div class="offcanvas offcanvas-end offcanvas-75"
      tabindex="-1"
-     id="tableCanvas" style="width: 75vw;">
+     id="tableCanvas" style="width: 75vw;"
+     data-bs-backdrop="false" data-bs-scroll="true">
 
     <div class="offcanvas-header">
         <h5 class="offcanvas-title" id="tableCanvasTitle">Table Details</h5>
@@ -529,7 +547,7 @@
             </div>
 
             <!-- SQL PREVIEW -->
-            <div class="card">
+            <div class="card" id="sqlPreviewSection">
                 <div class="card-header">
                     <strong>Generated SQL</strong>
                 </div>
@@ -755,11 +773,10 @@
 <!-- ============================================
      MODAL — FILE UPLOAD
      ============================================ -->
-<div class="modal fade" id="fileUploadModal" tabindex="-1" aria-labelledby="fileUploadModalLabel" aria-hidden="true" data-bs-backdrop="static" data-bs-keyboard="false">
+<div class="modal fade" tabindex="-1" id="fileUploadModal" aria-labelledby="fileUploadModalLabel" aria-hidden="true">
     <div class="modal-dialog modal-lg modal-dialog-scrollable">
         <div class="modal-content">
-
-            <div class="modal-header">
+            <div class="modal-header border-bottom">
                 <h5 class="modal-title" id="fileUploadModalLabel">
                     <i class="las la-upload text-success"></i> Upload Files
                 </h5>
@@ -768,61 +785,61 @@
 
             <div class="modal-body">
 
-                <p class="text-muted small mb-3" id="uploadAllowedTypesNote"></p>
+        <p class="text-muted small mb-3" id="uploadAllowedTypesNote"></p>
 
-                <!-- FILE INPUT -->
-                <div class="mb-3">
-                    <label class="form-label fw-semibold">Select Files</label>
-                    <input type="file" class="form-control" id="modalFileInput" multiple>
-                    <div class="form-text">You can select multiple files at once.</div>
-                </div>
-
-                <!-- PER-FILE CHECK RESULTS -->
-                <div id="modalFileCheckList" class="mb-3"></div>
-
-                <!-- OVERRIDE TOGGLE (shown when a conflict is detected) -->
-                <div id="modalOverrideToggle" class="alert alert-warning py-2 mb-3" style="display:none;">
-                    <div class="form-check form-switch mb-0">
-                        <input class="form-check-input" type="checkbox" id="modalOverrideSwitch">
-                        <label class="form-check-label fw-semibold small" for="modalOverrideSwitch">
-                            Replace existing files
-                        </label>
-                    </div>
-                    <div class="small mt-1 text-muted">
-                        Turn this on to overwrite your existing files. Leave it off to keep all versions side by side.
-                    </div>
-                </div>
-
-                <!-- OVERALL PROGRESS BAR -->
-                <div id="modalProgressWrap" class="mb-3 d-none">
-                    <div class="d-flex justify-content-between small fw-semibold mb-1">
-                        <span><i class="las la-spinner la-spin"></i> Uploading your files, please wait…</span>
-                        <span id="modalProgressPct">0%</span>
-                    </div>
-                    <div class="progress" style="height: 14px;">
-                        <div class="progress-bar progress-bar-striped progress-bar-animated bg-success"
-                             id="modalProgressBar" role="progressbar" style="width:0%"
-                             aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
-                    </div>
-                </div>
-
-                <!-- PER-FILE UPLOAD RESULTS -->
-                <div id="modalUploadResults"></div>
-
-            </div>
-
-            <div class="modal-footer">
-                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">
-                    <i class="las la-times"></i> Close
-                </button>
-                <button type="button" class="btn btn-success" id="modalUploadBtn" disabled>
-                    <i class="las la-upload"></i> Upload Files
-                </button>
-            </div>
-
+        <!-- FILE INPUT -->
+        <div class="mb-3">
+            <label class="form-label fw-semibold">Select Files</label>
+            <input type="file" class="form-control" id="modalFileInput" multiple>
+            <div class="form-text">You can select multiple files at once.</div>
         </div>
-    </div>
-</div>
+
+        <!-- PER-FILE CHECK RESULTS -->
+        <div id="modalFileCheckList" class="mb-3"></div>
+
+        <!-- OVERRIDE TOGGLE (shown when a conflict is detected) -->
+        <div id="modalOverrideToggle" class="alert alert-warning py-2 mb-3" style="display:none;">
+            <div class="form-check form-switch mb-0">
+                <input class="form-check-input" type="checkbox" id="modalOverrideSwitch">
+                <label class="form-check-label fw-semibold small" for="modalOverrideSwitch">
+                    Replace existing files
+                </label>
+            </div>
+            <div class="small mt-1 text-muted">
+                Turn this on to overwrite your existing files. Leave it off to keep all versions side by side.
+            </div>
+        </div>
+
+        <!-- OVERALL PROGRESS BAR -->
+        <div id="modalProgressWrap" class="mb-3 d-none">
+            <div class="d-flex justify-content-between small fw-semibold mb-1">
+                <span><i class="las la-spinner la-spin"></i> Uploading your files, please wait…</span>
+                <span id="modalProgressPct">0%</span>
+            </div>
+            <div class="progress" style="height: 14px;">
+                <div class="progress-bar progress-bar-striped progress-bar-animated bg-success"
+                     id="modalProgressBar" role="progressbar" style="width:0%"
+                     aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
+            </div>
+        </div>
+
+        <!-- PER-FILE UPLOAD RESULTS -->
+        <div id="modalUploadResults"></div>
+
+        </div><!-- end modal-body -->
+
+        <div class="modal-footer">
+            <button type="button" class="btn btn-success" id="modalUploadBtn" disabled>
+                <i class="las la-upload"></i> Upload Files
+            </button>
+            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">
+                <i class="las la-times"></i> Close
+            </button>
+        </div>
+
+        </div><!-- end modal-content -->
+    </div><!-- end modal-dialog -->
+</div><!-- end modal -->
 
 <script>
 
@@ -842,6 +859,8 @@ document.querySelectorAll('.dsv-nav-btn').forEach(function (btn) {
 
 let globalConfigurationData = {};
 let globalDatasourceId = null;
+let globalDatasourceName = null;
+let globalDbType = null;
 let currentTableColumns = [];
 currentTableName = null;
 
@@ -872,7 +891,7 @@ const canvasInstances = {};
 
 // Close any open category canvas, then run callback
 function closeAllAndThen(callback) {
-    const openEl = document.querySelector("#fileCanvas.show, #rdbmsCanvas.show, #nosqlCanvas.show");
+    const openEl = document.querySelector("#fileCanvas.show, #rdbmsCanvas.show, #nosqlCanvas.show, #tableCanvas.show");
     if (!openEl) {
         callback();
         return;
@@ -889,6 +908,8 @@ function renderDatasourceDetails(contentEl, data, category) {
     globalConfigurationData = data.datasource_details.configuration_data;
 
     const details        = data.datasource_details;
+    globalDatasourceName = details.datasource_name || null;
+    globalDbType         = details.db_type || null;
     const database_name  = details.database;
     const host           = details.host;
     const port           = details.port;
@@ -911,9 +932,9 @@ function renderDatasourceDetails(contentEl, data, category) {
                 <h6 class="fw-semibold mb-0">
                     <i class="las la-file-alt text-success"></i>
                     Uploaded Files
-                    <span class="badge bg-success-subtle text-success-emphasis border border-success-subtle ms-1">${details.type ? details.type.toUpperCase() : "File"}</span>
+                    <span class="badge bg-success-subtle text-success-emphasis border border-success-subtle ms-1">${details.db_type ? details.db_type.toUpperCase() : "File"}</span>
                 </h6>
-                <button class="btn btn-success btn-sm" onclick="openUploadModal('${details.type}')">
+                <button class="btn btn-success btn-sm" onclick="openUploadModal('${details.db_type}')">
                     <i class="las la-upload"></i> Upload Files
                 </button>
             </div>
@@ -1017,7 +1038,7 @@ function openCategoryCanvas(category, datasourceId) {
 
     function fetchAndRender() {
         contentEl.innerHTML = "Loading...";
-        fetch(`/datasource/${datasourceId}/details`)
+        safeFetch(`/datasource/${datasourceId}/details`)
             .then(r => r.json())
             .then(data => {
                 globalDatasourceId = datasourceId;
@@ -1040,11 +1061,37 @@ function openCategoryCanvas(category, datasourceId) {
 }
 
 // =========================================================
+// ── Custom backdrop helpers ──────────────────────────────
+const _backdrop = document.getElementById("canvasBackdrop");
+
+function _showBackdrop() { _backdrop.classList.add("show"); }
+function _hideBackdrop() { _backdrop.classList.remove("show"); }
+
+_backdrop.addEventListener("click", function () {
+    // Close the top-most visible canvas when backdrop is clicked
+    const uploadEl = document.getElementById("fileUploadCanvas");
+    if (uploadEl.classList.contains("show")) {
+        bootstrap.Offcanvas.getInstance(uploadEl)?.hide();
+        return;
+    }
+    closeAllAndThen(function () {});
+    _hideBackdrop();
+});
+
+// =========================================================
 document.addEventListener("DOMContentLoaded", function () {
 
     // Initialise Bootstrap offcanvas instances
     Object.entries(CATEGORY_CANVAS).forEach(function ([cat, cfg]) {
-        canvasInstances[cat] = new bootstrap.Offcanvas(document.getElementById(cfg.id));
+        const el = document.getElementById(cfg.id);
+        canvasInstances[cat] = new bootstrap.Offcanvas(el);
+
+        // Show backdrop when a main canvas opens; hide when all are closed
+        el.addEventListener("show.bs.offcanvas",   _showBackdrop);
+        el.addEventListener("hidden.bs.offcanvas", function () {
+            const anyOpen = document.querySelector("#fileCanvas.show, #rdbmsCanvas.show, #nosqlCanvas.show");
+            if (!anyOpen) _hideBackdrop();
+        });
     });
 
     // Attach click handler to every datasource row
@@ -1156,6 +1203,12 @@ document
                 toolNameInput.setAttribute("hx-post", `/datasource/${globalDatasourceId}/config/validate-tool-name`);
                 htmx.process(toolNameInput);
             }
+        }
+
+        const FILE_BASED_TYPES = ["csv", "xls", "xlsx", "json", "parquet", "avro"];
+        const sqlSection = document.getElementById("sqlPreviewSection");
+        if (sqlSection) {
+            sqlSection.style.display = FILE_BASED_TYPES.includes(globalDbType) ? "none" : "";
         }
 
         resetToolConfigForm();
@@ -1835,16 +1888,16 @@ function updateSQLPreview() {
 
 function openFileCanvas(fileName, fileId) {
     const offcanvasElement = document.getElementById("tableCanvas");
-    const tableCanvas = new bootstrap.Offcanvas(offcanvasElement);
+    const tableCanvas = bootstrap.Offcanvas.getOrCreateInstance(offcanvasElement, { backdrop: false, scroll: true });
     const content = document.getElementById("tableCanvasContent");
     const title = document.getElementById("tableCanvasTitle");
 
-    title.textContent = fileName;
+    title.textContent = globalDatasourceName || fileName;
     currentTableName = fileName;
 
     content.innerHTML = `
         <div class="d-flex justify-content-between align-items-start mb-3">
-            <h5 class="mb-0">${fileName}</h5>
+            <span class="text-muted small"><i class="las la-file-alt"></i> ${fileName}</span>
             <div class="d-flex gap-2">
                 <button
                     class="btn btn-primary btn-sm"
@@ -1869,18 +1922,85 @@ function openFileCanvas(fileName, fileId) {
                 </button>
             </div>
         </div>
-        <p class="text-muted small">File-based datasource — schema preview is available after upload.</p>
+        <div id="fileDataContent">
+            <div class="text-center text-muted py-4">
+                <i class="las la-spinner la-spin la-2x"></i>
+                <p class="mt-2 small">Loading data…</p>
+            </div>
+        </div>
     `;
 
     htmx.process(content);
     tableCanvas.show();
+    loadFilePreviewPage(fileId, 1);
+}
+
+function loadFilePreviewPage(fileId, page) {
+    safeFetch(`/datasource/${globalDatasourceId}/file-preview?file_id=${fileId}&page=${page}`)
+        .then(r => r.json())
+        .then(data => {
+            const container = document.getElementById("fileDataContent");
+            if (!container) return;
+
+            if (data.error) {
+                container.innerHTML = `<div class="alert alert-warning">${data.error}</div>`;
+                return;
+            }
+
+            if (data.type !== "table") {
+                container.innerHTML = `<pre class="small bg-light p-3 rounded">${JSON.stringify(data, null, 2)}</pre>`;
+                return;
+            }
+
+            currentTableColumns = data.columns;
+
+            const headerCells = data.columns.map(c => `<th class="text-nowrap">${c}</th>`).join("");
+            const bodyRows = data.rows.map(row =>
+                `<tr>${row.map(cell => `<td class="text-nowrap">${cell ?? ""}</td>`).join("")}</tr>`
+            ).join("");
+
+            const prevBtn = page > 1
+                ? `<button class="btn btn-sm btn-outline-secondary" onclick="loadFilePreviewPage('${fileId}', ${page - 1})">
+                       <i class="las la-angle-left"></i> Prev
+                   </button>`
+                : `<button class="btn btn-sm btn-outline-secondary" disabled>
+                       <i class="las la-angle-left"></i> Prev
+                   </button>`;
+
+            const nextBtn = data.has_next
+                ? `<button class="btn btn-sm btn-outline-secondary" onclick="loadFilePreviewPage('${fileId}', ${page + 1})">
+                       Next <i class="las la-angle-right"></i>
+                   </button>`
+                : `<button class="btn btn-sm btn-outline-secondary" disabled>
+                       Next <i class="las la-angle-right"></i>
+                   </button>`;
+
+            container.innerHTML = `
+                <div class="table-responsive" style="max-height:65vh; overflow-y:auto;">
+                    <table class="table table-sm table-bordered table-hover align-middle small">
+                        <thead class="table-light sticky-top">
+                            <tr>${headerCells}</tr>
+                        </thead>
+                        <tbody>${bodyRows}</tbody>
+                    </table>
+                </div>
+                <div class="d-flex justify-content-between align-items-center mt-2">
+                    <span class="text-muted small">Page ${page}</span>
+                    <div class="d-flex gap-2">${prevBtn}${nextBtn}</div>
+                </div>
+            `;
+        })
+        .catch(() => {
+            const container = document.getElementById("fileDataContent");
+            if (container) container.innerHTML = `<div class="alert alert-danger">Failed to load file data.</div>`;
+        });
 }
 
 
 function openTableCanvas(tableName) {
 
     const offcanvasElement = document.getElementById("tableCanvas");
-    const tableCanvas = new bootstrap.Offcanvas(offcanvasElement);
+    const tableCanvas = bootstrap.Offcanvas.getOrCreateInstance(offcanvasElement, { backdrop: false, scroll: true });
     const content = document.getElementById("tableCanvasContent");
     const title = document.getElementById("tableCanvasTitle");
 
@@ -1982,32 +2102,41 @@ const UPLOAD_LABEL = {
 };
 
 function openUploadModal(dbType) {
-    const fileInput     = document.getElementById("modalFileInput");
-    const checkList     = document.getElementById("modalFileCheckList");
-    const overToggle    = document.getElementById("modalOverrideToggle");
-    const overSwitch    = document.getElementById("modalOverrideSwitch");
-    const progressWrap  = document.getElementById("modalProgressWrap");
-    const progressBar   = document.getElementById("modalProgressBar");
-    const progressPct   = document.getElementById("modalProgressPct");
-    const uploadResults = document.getElementById("modalUploadResults");
-    const uploadBtn     = document.getElementById("modalUploadBtn");
-    const typesNote     = document.getElementById("uploadAllowedTypesNote");
+    try {
+        const fileInput     = document.getElementById("modalFileInput");
+        const checkList     = document.getElementById("modalFileCheckList");
+        const overToggle    = document.getElementById("modalOverrideToggle");
+        const overSwitch    = document.getElementById("modalOverrideSwitch");
+        const progressWrap  = document.getElementById("modalProgressWrap");
+        const progressBar   = document.getElementById("modalProgressBar");
+        const progressPct   = document.getElementById("modalProgressPct");
+        const uploadResults = document.getElementById("modalUploadResults");
+        const uploadBtn     = document.getElementById("modalUploadBtn");
+        const typesNote     = document.getElementById("uploadAllowedTypesNote");
 
-    // Reset everything
-    fileInput.accept  = UPLOAD_ACCEPT[dbType] || "";
-    fileInput.value   = "";
-    typesNote.textContent = "Accepted format: " + (UPLOAD_LABEL[dbType] || dbType.toUpperCase());
-    checkList.innerHTML   = "";
-    overToggle.style.display = "none";
-    overSwitch.checked    = false;
-    progressWrap.classList.add("d-none");
-    progressBar.style.width = "0%";
-    progressPct.textContent = "0%";
-    uploadResults.innerHTML = "";
-    uploadBtn.disabled = true;
+        // Reset everything
+        fileInput.accept  = UPLOAD_ACCEPT[dbType] || "";
+        fileInput.value   = "";
+        typesNote.textContent = "Accepted format: " + (UPLOAD_LABEL[dbType] || (dbType ? dbType.toUpperCase() : "Unknown"));
+        checkList.innerHTML   = "";
+        overToggle.style.display = "none";
+        overSwitch.checked    = false;
+        progressWrap.classList.add("d-none");
+        progressBar.style.width = "0%";
+        progressPct.textContent = "0%";
+        uploadResults.innerHTML = "";
+        uploadBtn.disabled = true;
 
-    const uploadModal = bootstrap.Modal.getOrCreateInstance(document.getElementById("fileUploadModal"));
-    uploadModal.show();
+        // Ensure modal is a direct child of <body> so Bootstrap can stack it
+        // correctly above the open offcanvas (avoids stacking-context trapping).
+        const modalEl = document.getElementById("fileUploadModal");
+        if (modalEl.parentElement !== document.body) {
+            document.body.appendChild(modalEl);
+        }
+        bootstrap.Modal.getOrCreateInstance(modalEl).show();
+    } catch (err) {
+        console.error("[openUploadModal] Error:", err);
+    }
 }
 
 // ── Check files on selection change ──────────────────────
@@ -2039,7 +2168,7 @@ document.getElementById("modalFileInput").addEventListener("change", async funct
 
     // Check each file against the server
     const results = await Promise.all(files.map(f =>
-        fetch("/datasource/" + globalDatasourceId + "/check-file", {
+        safeFetch("/datasource/" + globalDatasourceId + "/check-file", {
             method: "POST",
             body: new URLSearchParams({ filename: f.name }),
         }).then(r => r.text())
@@ -2121,21 +2250,8 @@ document.getElementById("modalUploadBtn").addEventListener("click", function () 
     xhr.send(fd);
 });
 
-// Force modal above any open offcanvas when it begins to show
-document.getElementById("fileUploadModal").addEventListener("show.bs.modal", function () {
-    this.style.zIndex = "1065";
-});
-
-// Force all modal backdrops above offcanvas once they exist in the DOM
-document.getElementById("fileUploadModal").addEventListener("shown.bs.modal", function () {
-    document.querySelectorAll(".modal-backdrop").forEach(function (el) {
-        el.style.zIndex = "1064";
-    });
-});
-
-// Reset modal state when it is fully closed
+// Reset upload modal state when closed; refresh the parent file canvas
 document.getElementById("fileUploadModal").addEventListener("hidden.bs.modal", function () {
-    this.style.removeProperty("z-index");
     document.getElementById("modalFileInput").value = "";
     document.getElementById("modalFileCheckList").innerHTML = "";
     document.getElementById("modalOverrideToggle").style.display = "none";
@@ -2145,6 +2261,10 @@ document.getElementById("fileUploadModal").addEventListener("hidden.bs.modal", f
     document.getElementById("modalProgressPct").textContent = "0%";
     document.getElementById("modalUploadResults").innerHTML = "";
     document.getElementById("modalUploadBtn").disabled = true;
+
+    if (globalDatasourceId) {
+        openCategoryCanvas("file", globalDatasourceId);
+    }
 });
 
 

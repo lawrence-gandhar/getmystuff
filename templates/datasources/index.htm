@@ -502,6 +502,32 @@ Datasources | GetMyStuff
         </div>
     </div>
 
+    <!-- ============================================================
+         OFFCANVAS — FILE LIST (Data Sources > Preview)
+         ============================================================ -->
+    <div
+        class="offcanvas offcanvas-end"
+        tabindex="-1"
+        id="fileListOffcanvas"
+        aria-labelledby="fileListOffcanvasLabel"
+        style="width: 65vw;"
+    >
+        <div class="offcanvas-header border-bottom">
+            <h5 class="offcanvas-title" id="fileListOffcanvasLabel">
+                <i class="las la-file-alt text-primary"></i> File Datasource Details
+            </h5>
+            <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+        </div>
+        <div class="offcanvas-body">
+            <div id="flSpinner" style="display:none; text-align:center; padding:48px 0;">
+                <div class="spinner-border text-primary"></div>
+                <div class="small text-muted mt-2">Loading files…</div>
+            </div>
+            <div id="flError" class="alert alert-danger" style="display:none;" role="alert"></div>
+            <div id="flContent" style="display:none;"></div>
+        </div>
+    </div>
+
     <!-- View Table Schema Modal -->
     <div class="modal fade" id="viewModal" tabindex="-1" aria-hidden="true">
         <div class="modal-dialog modal-xl modal-dialog-scrollable">

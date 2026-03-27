@@ -244,7 +244,7 @@ async def get_datasource_objects(
         "host": datasource.host,
         "port": datasource.port,
         "user": datasource.username,
-        "type": datasource.db_type,
+        "db_type": datasource.db_type,
         "objects": objects,
         "configuration_data": datasource.configuration_data
     }

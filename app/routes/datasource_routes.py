@@ -29,6 +29,7 @@ from app.services.datasource_service import (
 from app.services.file_service import check_file_exists, upload_datasource_files
 from app.utils.file_utils import FILE_BASED_TYPES, ACCEPT_ATTRS, ALLOWED_EXTENSIONS
 from app.db.auth import require_auth
+from app.db.db_utils import fetch_file_schema
 
 # Compiled once at import time — reused on every validation request.
 _NAME_RE = re.compile(r'^[a-z0-9_]+$')
@@ -539,6 +540,45 @@ class DataSourceController(Controller):
                 "schema": column_data,
                 "datasource_id": str(datasource_id),
                 "table_status": table_status,
+            },
+        )
+
+    @get("/{datasource_id:uuid}/file/{file_id:uuid}/view")
+    async def view_file_schema(
+        self,
+        datasource_id: uuid.UUID,
+        file_id: uuid.UUID,
+        db: AsyncSession,
+        user: User,
+    ) -> Template:
+        datasource = await db.get(DataSource, datasource_id)
+        if not datasource or datasource.user_id != user.id:
+            raise HTTPException(status_code=404, detail="Datasource not found")
+
+        result = await db.execute(
+            select(DatasourceFile).where(
+                DatasourceFile.id == file_id,
+                DatasourceFile.datasource_id == datasource_id,
+                DatasourceFile.is_active == True,  # noqa: E712
+            )
+        )
+        file = result.scalar_one_or_none()
+        if not file:
+            raise HTTPException(status_code=404, detail="File not found")
+
+        columns = await fetch_file_schema(file.file_path, datasource.db_type)
+        schema = {
+            col["column"]: {"column_name": col["column"], "status": "active"}
+            for col in columns
+        }
+
+        return Template(
+            template_name="datasources/column_view.htm",
+            context={
+                "table_name": file.original_filename,
+                "schema": schema,
+                "datasource_id": str(datasource_id),
+                "table_status": "active",
             },
         )
 

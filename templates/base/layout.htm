@@ -195,6 +195,31 @@ body {
 <script src="https://unpkg.com/htmx.org@1.9.10"></script>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
 
+<script>
+    /**
+     * Session-aware fetch wrapper.
+     * When the server redirects to /auth/login (expired session), performs a full
+     * window navigation instead of silently loading the login page into a partial.
+     */
+    function safeFetch(url, options) {
+        return fetch(url, options).then(function (response) {
+            if (response.redirected && response.url.includes('/auth/login')) {
+                window.location.href = '/auth/login';
+                return Promise.reject(new Error('Session expired'));
+            }
+            return response;
+        });
+    }
+
+    // Belt-and-suspenders: redirect on any HTMX 401 not caught by the backend
+    // HX-Redirect header (e.g. error events that bypass the normal swap path).
+    document.addEventListener('htmx:responseError', function (event) {
+        if (event.detail.xhr.status === 401) {
+            window.location.href = '/auth/login';
+        }
+    });
+</script>
+
 {% block extra_js %}{% endblock %}
 
 </body>
