@@ -1000,3 +1000,38 @@ class DataSourceController(Controller):
             "has_next": has_next,
             **base,
         }
+
+    # --------------------------
+    # FILE LIST (for file-based datasource Preview offcanvas)
+    # --------------------------
+    @get("/{datasource_id:uuid}/file-list")
+    async def file_list(
+        self,
+        datasource_id: uuid.UUID,
+        db: AsyncSession,
+        user: User,
+    ) -> Template:
+        """Return an HTML partial listing all active uploaded files for a
+        file-based datasource. No action buttons — read-only view."""
+        datasource = await db.get(DataSource, datasource_id)
+        if not datasource or datasource.user_id != user.id:
+            raise HTTPException(status_code=404, detail="Datasource not found")
+
+        stmt = (
+            select(DatasourceFile)
+            .where(
+                DatasourceFile.datasource_id == datasource_id,
+                DatasourceFile.is_active == True,  # noqa: E712
+            )
+            .order_by(DatasourceFile.uploaded_at.desc())
+        )
+        result = await db.execute(stmt)
+        files = result.scalars().all()
+
+        return Template(
+            template_name="datasources/file_list.htm",
+            context={
+                "files": files,
+                "datasource_name": datasource.datasource_name,
+            },
+        )

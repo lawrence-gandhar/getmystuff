@@ -192,9 +192,9 @@ Datasources | GetMyStuff
                                     </button>
                                     
                                     {% if datasource.is_active %}
-                                        <button 
-                                            class="btn btn-sm btn-outline-primary" 
-                                            onclick="fpOpen('{{ datasource.id }}', '{{ datasource.datasource_name }}')"
+                                        <button
+                                            class="btn btn-sm btn-outline-primary"
+                                            onclick="flOpen('{{ datasource.id }}', '{{ datasource.datasource_name }}')"
                                         >
                                             Preview
                                         </button>
@@ -440,8 +440,8 @@ Datasources | GetMyStuff
         aria-labelledby="previewOffcanvasLabel"
         style="width: 75vw;"
     >
-        <div class="offcanvas-header">
-            <h5 id="previewOffcanvasLabel">Datasource Preview</h5>
+        <div class="offcanvas-header border-bottom">
+            <h5 class="offcanvas-title" id="previewOffcanvasLabel">Datasource Preview</h5>
             <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
         </div>
 
@@ -458,7 +458,7 @@ Datasources | GetMyStuff
         tabindex="-1"
         id="fpOffcanvas"
         aria-labelledby="fpOffcanvasLabel"
-        style="width: 85vw;"
+        style="width: 75vw;"
     >
         <div class="offcanvas-header border-bottom">
             <h5 class="offcanvas-title" id="fpOffcanvasLabel">
@@ -510,7 +510,7 @@ Datasources | GetMyStuff
         tabindex="-1"
         id="fileListOffcanvas"
         aria-labelledby="fileListOffcanvasLabel"
-        style="width: 65vw;"
+        style="width: 75vw;"
     >
         <div class="offcanvas-header border-bottom">
             <h5 class="offcanvas-title" id="fileListOffcanvasLabel">
@@ -562,7 +562,7 @@ Datasources | GetMyStuff
      ============================================================ -->
 <!-- OFFCANVAS SETTINGS PANEL -->
 <div class="offcanvas offcanvas-end" tabindex="-1" id="settingsOffcanvas" style="width:85vw">
-    <div class="offcanvas-header">
+    <div class="offcanvas-header border-bottom">
         <h5 class="offcanvas-title">
             <i class="las la-database"></i> Add Data Source
         </h5>
@@ -938,21 +938,31 @@ Datasources | GetMyStuff
     };
 
     // ── Public: called by the Preview button on file-based datasources ────
-    window.fpOpen = function (datasourceId, name) {
-        fp.dsId   = datasourceId;
-        fp.page   = 1;
-        fp.fileId = null;
-        fp.hasNext = false;
+    window.flOpen = function (datasourceId, name) {
+        $('fileListOffcanvasLabel').innerHTML =
+            '<i class="las la-file-alt text-primary"></i> ' +
+            'Datasource: <span class="fw-bold">' + _esc(name) + '</span>';
+        $('flError').style.display   = 'none';
+        $('flContent').style.display = 'none';
+        $('flSpinner').style.display = 'block';
 
-        $('fpDsName').textContent = name;
-        $('fpError').style.display        = 'none';
-        $('fpTable').style.display        = 'none';
-        $('fpPagination').style.display   = 'none';
-        $('fpFileSelector').style.display = 'none';
-        $('fpSpinner').style.display      = 'none';
+        bootstrap.Offcanvas.getOrCreateInstance($('fileListOffcanvas')).show();
 
-        bootstrap.Offcanvas.getOrCreateInstance($('fpOffcanvas')).show();
-        _fpFetch();
+        fetch(`/datasource/${datasourceId}/file-list`)
+            .then(r => {
+                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                return r.text();
+            })
+            .then(html => {
+                $('flSpinner').style.display = 'none';
+                $('flContent').innerHTML     = html;
+                $('flContent').style.display = 'block';
+            })
+            .catch(() => {
+                $('flSpinner').style.display = 'none';
+                $('flError').textContent     = 'Failed to load file list. Please try again.';
+                $('flError').style.display   = 'block';
+            });
     };
 
     // ── Fetch one page from the backend ──────────────────────────────────

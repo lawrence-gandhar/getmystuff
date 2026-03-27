@@ -1,0 +1,45 @@
+<!-- FILE LIST PARTIAL
+     Rendered by GET /datasource/{id}/file-list
+     Shows uploaded files for a file-based datasource. No action buttons.
+-->
+<!-- {% if datasource_name %}
+<div class="mb-3">
+    <span class="badge bg-success fs-6 px-3 py-2">
+        <i class="las la-tag"></i> {{ datasource_name }}
+    </span>
+</div>
+{% endif %} -->
+
+{% if files %}
+<div class="table-responsive">
+    <table class="table table-hover align-middle">
+        <thead class="table-light">
+            <tr>
+                <th>File Name</th>
+                <th>Stored As</th>
+                <th style="width:80px">Version</th>
+                <th style="width:180px">Uploaded At</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for file in files %}
+            <tr>
+                <td>
+                    <i class="las la-file-alt text-success"></i>
+                    <span class="fw-semibold">{{ file.original_filename }}</span>
+                </td>
+                <td class="text-muted small">{{ file.stored_filename }}</td>
+                <td>
+                    <span class="badge bg-secondary">v{{ file.version }}</span>
+                </td>
+                <td class="small text-muted">
+                    {{ file.uploaded_at.strftime('%Y-%m-%d %H:%M') if file.uploaded_at else '—' }}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<div class="text-muted">No files uploaded yet.</div>
+{% endif %}
