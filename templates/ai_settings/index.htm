@@ -1,0 +1,265 @@
+{% extends "base/layout.htm" %}
+{% block title %}AI Settings | GetMyStuff{% endblock %}
+
+{% block content %}
+<div class="container mt-4" style="max-width: 100%;">
+
+    <!-- PAGE HEADER -->
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h5 class="fw-semibold mb-0">
+            <i class="las la-key text-primary"></i> AI Settings
+        </h5>
+        <button
+            class="btn btn-primary btn-sm"
+            type="button"
+            data-bs-toggle="offcanvas"
+            data-bs-target="#aiKeyOffcanvas"
+            onclick="openAddKeyForm()"
+        >
+            <i class="las la-plus"></i> Add API Key
+        </button>
+    </div>
+
+    <p class="text-muted small mb-3">
+        Manage the API keys GetMyStuff uses to power AI features like
+        <strong>Ask AI</strong>. Only one key per provider can be active at a time —
+        that's the key used when generating analytics.
+    </p>
+
+    <!-- RESPONSE AREA (HTMX out-of-band target for toggle / delete errors) -->
+    <div id="ai-settings-response" class="mb-3"></div>
+
+    <div class="card shadow-sm">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Provider</th>
+                        <th>Label</th>
+                        <th>Key</th>
+                        <th style="width:110px;">Status</th>
+                        <th style="width:260px;">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="aiKeysTableBody">
+                    {% include "ai_settings/key_rows_body.htm" %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+</div>
+
+<!-- ============================================
+     OFFCANVAS — ADD / EDIT API KEY
+     ============================================ -->
+<div
+    class="offcanvas offcanvas-end"
+    tabindex="-1"
+    id="aiKeyOffcanvas"
+    aria-labelledby="aiKeyOffcanvasLabel"
+    style="width: 30vw;"
+>
+    <div class="offcanvas-header border-bottom">
+        <h5 class="offcanvas-title" id="aiKeyOffcanvasLabel">
+            <i class="las la-key text-primary"></i>
+            <span id="aiKeyOffcanvasTitleText">Add API Key</span>
+        </h5>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+    </div>
+
+    <div class="offcanvas-body">
+
+        <div id="aiKeyFormResponse" class="mb-3"></div>
+
+        <form
+            id="aiKeyForm"
+            hx-post="/ai-settings/create"
+            hx-target="#aiKeyFormResponse"
+            hx-swap="innerHTML"
+            hx-on::after-request="
+                const el = document.getElementById('aiKeyFormResponse');
+                if (el && el.querySelector('[data-success=true]')) {
+                    this.reset();
+                    bootstrap.Offcanvas.getInstance(document.getElementById('aiKeyOffcanvas')).hide();
+                }
+            "
+        >
+            <div class="mb-3">
+                <label for="aiKeyProvider" class="form-label fw-semibold">
+                    Provider <span class="text-danger">*</span>
+                </label>
+                <select id="aiKeyProvider" name="provider" class="form-select" required onchange="updateProviderFields()">
+                    {% for value, display in providers %}
+                    <option value="{{ value }}">{{ display }}</option>
+                    {% endfor %}
+                </select>
+                <div class="form-text" id="aiKeyProviderNote"></div>
+            </div>
+
+            <div id="aiKeyProviderExtra" style="display:none;">
+                <div class="mb-3">
+                    <label for="aiKeyBaseUrl" class="form-label fw-semibold">
+                        Base URL <span id="aiKeyBaseUrlRequired" class="text-danger" style="display:none;">*</span>
+                    </label>
+                    <input
+                        type="url"
+                        id="aiKeyBaseUrl"
+                        name="base_url"
+                        class="form-control"
+                        placeholder="e.g. https://api.cerebras.ai/v1"
+                        autocomplete="off"
+                    >
+                    <div class="form-text">
+                        OpenAI-compatible API base URL. Leave blank to use OpenAI's own endpoint.
+                    </div>
+                </div>
+
+                <div class="mb-3">
+                    <label for="aiKeyModelName" class="form-label fw-semibold">
+                        Model Name <span id="aiKeyModelNameRequired" class="text-danger" style="display:none;">*</span>
+                    </label>
+                    <input
+                        type="text"
+                        id="aiKeyModelName"
+                        name="model_name"
+                        class="form-control"
+                        placeholder="e.g. llama-4-scout-17b-16e-instruct"
+                        autocomplete="off"
+                    >
+                    <div class="form-text">
+                        Exact model name this provider expects in API requests.
+                    </div>
+                </div>
+            </div>
+
+            <div class="mb-3">
+                <label for="aiKeyLabel" class="form-label fw-semibold">
+                    Label <span class="text-danger">*</span>
+                </label>
+                <input
+                    type="text"
+                    id="aiKeyLabel"
+                    name="label"
+                    class="form-control"
+                    placeholder="e.g. Personal Anthropic Key"
+                    required
+                    autocomplete="off"
+                >
+            </div>
+
+            <div class="mb-3">
+                <label for="aiKeyValue" class="form-label fw-semibold">
+                    API Key <span class="text-danger">*</span>
+                </label>
+                <input
+                    type="password"
+                    id="aiKeyValue"
+                    name="api_key"
+                    class="form-control"
+                    placeholder="sk-..."
+                    required
+                    autocomplete="off"
+                >
+                <div class="form-text" id="aiKeyValueHelp">
+                    Stored encrypted. Only the last 4 characters are ever shown again.
+                </div>
+            </div>
+
+            <div class="form-check form-switch mb-4">
+                <input class="form-check-input" type="checkbox" id="aiKeyActive" name="is_active">
+                <label class="form-check-label" for="aiKeyActive">
+                    Set as the active key for this provider
+                </label>
+            </div>
+
+            <div class="d-flex gap-2">
+                <button type="submit" class="btn btn-primary">
+                    <i class="las la-save"></i> Save Key
+                </button>
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="offcanvas">
+                    Cancel
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+function updateProviderFields() {
+    const provider   = document.getElementById("aiKeyProvider").value;
+    const extra      = document.getElementById("aiKeyProviderExtra");
+    const baseUrlReq = document.getElementById("aiKeyBaseUrlRequired");
+    const modelReq   = document.getElementById("aiKeyModelNameRequired");
+    const modelInput = document.getElementById("aiKeyModelName");
+    const baseInput  = document.getElementById("aiKeyBaseUrl");
+    const note       = document.getElementById("aiKeyProviderNote");
+
+    if (provider === "other" || provider === "openai") {
+        extra.style.display = "";
+        modelInput.required = true;
+        modelReq.style.display = "";
+        if (provider === "other") {
+            baseInput.required = true;
+            baseUrlReq.style.display = "";
+            note.textContent = "";
+        } else {
+            baseInput.required = false;
+            baseUrlReq.style.display = "none";
+            note.textContent = "This key will be used by Ask AI / Query Runner if it's the highest-priority active key.";
+        }
+    } else {
+        extra.style.display = "none";
+        baseInput.required = false;
+        modelInput.required = false;
+        baseUrlReq.style.display = "none";
+        modelReq.style.display = "none";
+        note.textContent = provider === "anthropic"
+            ? "This key will be used by Ask AI / Query Runner if it's the highest-priority active key."
+            : "Stored for future use — not called by any AI feature yet.";
+    }
+}
+
+function openAddKeyForm() {
+    const form = document.getElementById("aiKeyForm");
+    form.reset();
+    form.setAttribute("hx-post", "/ai-settings/create");
+
+    document.getElementById("aiKeyOffcanvasTitleText").textContent = "Add API Key";
+    document.getElementById("aiKeyProvider").disabled = false;
+    document.getElementById("aiKeyValue").required = true;
+    document.getElementById("aiKeyValue").placeholder = "sk-...";
+    document.getElementById("aiKeyValueHelp").textContent =
+        "Stored encrypted. Only the last 4 characters are ever shown again.";
+    document.getElementById("aiKeyFormResponse").innerHTML = "";
+    document.getElementById("aiKeyBaseUrl").value = "";
+    document.getElementById("aiKeyModelName").value = "";
+
+    updateProviderFields();
+    htmx.process(form);
+}
+
+function openEditKeyForm(keyId, provider, label, baseUrl, modelName) {
+    const form = document.getElementById("aiKeyForm");
+    form.reset();
+    form.setAttribute("hx-post", `/ai-settings/${keyId}/update`);
+
+    document.getElementById("aiKeyOffcanvasTitleText").textContent = "Edit API Key";
+    document.getElementById("aiKeyProvider").value = provider;
+    document.getElementById("aiKeyProvider").disabled = true;
+    document.getElementById("aiKeyLabel").value = label;
+    document.getElementById("aiKeyValue").required = false;
+    document.getElementById("aiKeyValue").placeholder = "Leave blank to keep the current key";
+    document.getElementById("aiKeyValueHelp").textContent =
+        "Leave blank to keep the current key. Entering a new value replaces it.";
+    document.getElementById("aiKeyFormResponse").innerHTML = "";
+    document.getElementById("aiKeyBaseUrl").value = baseUrl || "";
+    document.getElementById("aiKeyModelName").value = modelName || "";
+
+    updateProviderFields();
+    htmx.process(form);
+    bootstrap.Offcanvas.getOrCreateInstance(document.getElementById("aiKeyOffcanvas")).show();
+}
+</script>
+
+{% endblock %}

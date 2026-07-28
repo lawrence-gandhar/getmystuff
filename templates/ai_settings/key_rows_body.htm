@@ -1,0 +1,52 @@
+{% for key in keys %}
+<tr id="ai-key-row-{{ key.id }}">
+    <td>
+        <span class="badge bg-primary-subtle text-primary-emphasis border border-primary-subtle">
+            {{ key.provider_display }}
+        </span>
+    </td>
+    <td class="fw-semibold">{{ key.label }}</td>
+    <td><code class="small">{{ key.masked_key }}</code></td>
+    <td>
+        {% if key.is_active %}
+            <span class="badge bg-success">Active</span>
+        {% else %}
+            <span class="badge bg-secondary">Inactive</span>
+        {% endif %}
+    </td>
+    <td>
+        <div class="d-flex gap-1">
+            <button
+                class="btn btn-sm {% if key.is_active %}btn-outline-warning{% else %}btn-outline-success{% endif %}"
+                hx-post="/ai-settings/{{ key.id }}/toggle-active"
+                hx-target="#aiKeysTableBody"
+                hx-swap="innerHTML"
+            >
+                {% if key.is_active %}Deactivate{% else %}Activate{% endif %}
+            </button>
+            <button
+                class="btn btn-sm btn-outline-secondary"
+                type="button"
+                onclick="openEditKeyForm('{{ key.id }}', '{{ key.provider }}', '{{ key.label }}', '{{ key.base_url or '' }}', '{{ key.model_name or '' }}')"
+            >
+                Edit
+            </button>
+            <button
+                class="btn btn-sm btn-outline-danger"
+                hx-post="/ai-settings/{{ key.id }}/delete"
+                hx-target="#aiKeysTableBody"
+                hx-swap="innerHTML"
+                hx-confirm="Delete API key '{{ key.label }}'? This cannot be undone."
+            >
+                Delete
+            </button>
+        </div>
+    </td>
+</tr>
+{% else %}
+<tr>
+    <td colspan="5" class="text-center text-muted py-4">
+        <i class="las la-key fs-4 d-block mb-1"></i> No API keys added yet.
+    </td>
+</tr>
+{% endfor %}

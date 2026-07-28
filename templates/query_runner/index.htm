@@ -1,0 +1,237 @@
+{% extends "base/layout.htm" %}
+{% block title %}Query Runner | GetMyStuff{% endblock %}
+
+{% block content %}
+{% set file_types = ["csv", "xls", "json", "parquet", "avro"] %}
+
+<div class="container-fluid mt-4" style="max-width: 100%;">
+
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h4 class="mb-0 fw-semibold">
+            <i class="las la-code text-primary"></i> Query Runner
+        </h4>
+    </div>
+
+    <p class="text-muted small mb-4">
+        Pick a data source and a file, table, or collection, then ask a question in
+        plain English. Claude analyzes a real, computed profile of that data
+        (exact stats, not guesses) to answer it.
+    </p>
+
+    <div class="row g-4">
+
+        <!-- LEFT: PROMPT PANEL -->
+        <div class="col-lg-7">
+            <div class="card shadow-sm">
+                <div class="card-body">
+
+                    <div class="row g-3 mb-3">
+                        <div class="col-md-6">
+                            <label for="qrDatasourceSelect" class="form-label fw-semibold">Data Source</label>
+                            <select id="qrDatasourceSelect" class="form-select">
+                                <option value="">Select a data source&hellip;</option>
+                                {% for ds in datasources %}
+                                <option value="{{ ds.id }}" data-db-type="{{ ds.db_type }}">
+                                    {{ ds.datasource_name }} ({{ ds.db_type | upper }})
+                                </option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="qrTargetSelect" class="form-label fw-semibold">File / Table / Collection</label>
+                            <select id="qrTargetSelect" class="form-select" disabled>
+                                <option value="">Select a data source first&hellip;</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div id="qrTargetEmptyNote" class="text-muted small mb-3" style="display:none;">
+                        <i class="las la-info-circle"></i> No queryable objects found for this data source yet.
+                    </div>
+
+                    <form
+                        id="qrPromptForm"
+                        hx-post=""
+                        hx-target="#qrResult"
+                        hx-swap="innerHTML"
+                        hx-indicator="#qrSpinner"
+                        hx-on::after-request="
+                            if (event.detail.successful) {
+                                loadQRHistory();
+                            }
+                        "
+                    >
+                        <input type="hidden" name="target_type" id="qrTargetType">
+                        <input type="hidden" name="target_name" id="qrTargetName">
+                        <input type="hidden" name="file_id" id="qrFileId">
+
+                        <div class="mb-3">
+                            <label for="qrPromptInput" class="form-label fw-semibold">Your prompt</label>
+                            <textarea
+                                id="qrPromptInput"
+                                name="prompt"
+                                class="form-control"
+                                rows="4"
+                                maxlength="2000"
+                                required
+                                disabled
+                                placeholder="e.g. What's the average study time by gender, and which group has the highest final exam score?"
+                            ></textarea>
+                        </div>
+
+                        <div class="d-flex align-items-center gap-2">
+                            <button type="submit" class="btn btn-primary btn-sm" id="qrSubmitBtn" disabled>
+                                <i class="las la-magic"></i> Run Query
+                            </button>
+                            <span id="qrSpinner" class="htmx-indicator text-muted small">
+                                <i class="las la-spinner la-spin"></i> Analyzing your data&hellip;
+                            </span>
+                        </div>
+                    </form>
+
+                    <div id="qrResult" class="mt-4"></div>
+
+                </div>
+            </div>
+        </div>
+
+        <!-- RIGHT: HISTORY PANEL -->
+        <div class="col-lg-5">
+            <div class="card shadow-sm">
+                <div class="card-body">
+                    <h6 class="fw-semibold mb-3">
+                        <i class="las la-history text-muted"></i> Recent Prompts
+                    </h6>
+                    <div id="qrHistory">
+                        <p class="text-muted small text-center py-3 mb-0">
+                            <i class="las la-comment-dots fs-5 d-block mb-1"></i>
+                            Select a data source and target to see its prompt history.
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+</div>
+
+<style>
+    .htmx-indicator { display: none; }
+    .htmx-request.htmx-indicator, .htmx-request .htmx-indicator { display: inline-block; }
+</style>
+
+<script>
+const QR_FILE_TYPES = {{ file_types | tojson }};
+
+const qrDatasourceSelect = document.getElementById("qrDatasourceSelect");
+const qrTargetSelect     = document.getElementById("qrTargetSelect");
+const qrTargetEmptyNote  = document.getElementById("qrTargetEmptyNote");
+const qrPromptInput      = document.getElementById("qrPromptInput");
+const qrSubmitBtn        = document.getElementById("qrSubmitBtn");
+const qrPromptForm       = document.getElementById("qrPromptForm");
+
+function qrResetTarget() {
+    qrTargetSelect.innerHTML = '<option value="">Select a data source first&hellip;</option>';
+    qrTargetSelect.disabled = true;
+    qrTargetEmptyNote.style.display = "none";
+    qrPromptInput.disabled = true;
+    qrPromptInput.value = "";
+    qrSubmitBtn.disabled = true;
+    document.getElementById("qrResult").innerHTML = "";
+    document.getElementById("qrHistory").innerHTML =
+        '<p class="text-muted small text-center py-3 mb-0">' +
+        '<i class="las la-comment-dots fs-5 d-block mb-1"></i>' +
+        'Select a data source and target to see its prompt history.</p>';
+}
+
+qrDatasourceSelect.addEventListener("change", function () {
+    const datasourceId = this.value;
+    qrResetTarget();
+
+    if (!datasourceId) return;
+
+    qrTargetSelect.innerHTML = '<option value="">Loading&hellip;</option>';
+
+    safeFetch(`/datasource/${datasourceId}/details`)
+        .then(r => r.json())
+        .then(data => {
+            const details  = data.datasource_details;
+            const dbType   = details.db_type;
+            const isFile   = QR_FILE_TYPES.includes(dbType);
+            const objects  = details.objects || [];
+
+            if (objects.length === 0) {
+                qrTargetSelect.innerHTML = '<option value="">No objects available</option>';
+                qrTargetEmptyNote.style.display = "";
+                return;
+            }
+
+            let html = '<option value="">Select&hellip;</option>';
+            objects.forEach(obj => {
+                if (isFile) {
+                    html += `<option value="${obj.name}" data-file-id="${obj.file_id}">${obj.name}</option>`;
+                } else {
+                    html += `<option value="${obj}">${obj}</option>`;
+                }
+            });
+            qrTargetSelect.innerHTML = html;
+            qrTargetSelect.disabled = false;
+            qrTargetSelect.dataset.dbType = dbType;
+        })
+        .catch(() => {
+            qrTargetSelect.innerHTML = '<option value="">Failed to load</option>';
+        });
+});
+
+qrTargetSelect.addEventListener("change", function () {
+    const datasourceId = qrDatasourceSelect.value;
+    const targetName   = this.value;
+
+    if (!targetName) {
+        qrPromptInput.disabled = true;
+        qrSubmitBtn.disabled = true;
+        return;
+    }
+
+    const dbType   = this.dataset.dbType;
+    const isFile   = QR_FILE_TYPES.includes(dbType);
+    const targetType = isFile ? "file" : (dbType === "mongodb" ? "collection" : "table");
+    const fileId = isFile ? (this.selectedOptions[0].dataset.fileId || "") : "";
+
+    document.getElementById("qrTargetType").value = targetType;
+    document.getElementById("qrTargetName").value = targetName;
+    document.getElementById("qrFileId").value = fileId;
+
+    qrPromptForm.setAttribute("hx-post", `/datasource/${datasourceId}/ai-analytics`);
+    htmx.process(qrPromptForm);
+
+    qrPromptInput.disabled = false;
+    qrSubmitBtn.disabled = false;
+    document.getElementById("qrResult").innerHTML = "";
+
+    loadQRHistory();
+});
+
+function loadQRHistory() {
+    const datasourceId = qrDatasourceSelect.value;
+    const targetType    = document.getElementById("qrTargetType").value;
+    const targetName    = document.getElementById("qrTargetName").value;
+    const historyEl      = document.getElementById("qrHistory");
+
+    if (!datasourceId || !targetName) return;
+
+    historyEl.innerHTML = '<div class="text-center text-muted py-2"><i class="las la-spinner la-spin"></i></div>';
+
+    const params = new URLSearchParams({ target_type: targetType, target_name: targetName });
+    safeFetch(`/datasource/${datasourceId}/ai-analytics/history?${params.toString()}`)
+        .then(r => {
+            if (!r.ok) throw new Error("History request failed");
+            return r.text();
+        })
+        .then(html => { historyEl.innerHTML = html; })
+        .catch(() => { historyEl.innerHTML = '<p class="text-danger small mb-0">Failed to load history.</p>'; });
+}
+</script>
+
+{% endblock %}

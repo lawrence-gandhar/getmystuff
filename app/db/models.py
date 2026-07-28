@@ -13,3 +13,5 @@ from app.models.datasource import (  # noqa: F401
     DataSourceAgentConfig,
     DatasourceFile,
 )
+from app.models.prompt_history import PromptHistory  # noqa: F401
+from app.models.ai_settings import AIApiKey  # noqa: F401

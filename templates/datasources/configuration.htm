@@ -841,6 +841,137 @@
     </div><!-- end modal-dialog -->
 </div><!-- end modal -->
 
+<!-- ============================================
+     MODAL — ASK AI (ANALYTICS)
+     ============================================ -->
+<div class="modal fade" tabindex="-1" id="aiAnalyticsModal" aria-labelledby="aiAnalyticsModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header border-bottom">
+                <h5 class="modal-title" id="aiAnalyticsModalLabel">
+                    <i class="las la-magic text-primary"></i>
+                    Ask AI &mdash; <span id="aiAnalyticsTitle">Generate Analytics</span>
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+
+            <div class="modal-body">
+
+                <p class="text-muted small mb-3">
+                    Ask a question in plain English. Claude analyzes a real, computed
+                    profile of this data (exact stats, not guesses) to answer it.
+                </p>
+
+                <form
+                    id="aiAnalyticsForm"
+                    hx-post=""
+                    hx-target="#aiAnalyticsResult"
+                    hx-swap="innerHTML"
+                    hx-indicator="#aiAnalyticsSpinner"
+                    hx-on::after-request="
+                        if (event.detail.successful) {
+                            loadAIHistory(
+                                document.getElementById('aiTargetType').value,
+                                document.getElementById('aiTargetName').value
+                            );
+                        }
+                    "
+                >
+                    <input type="hidden" name="target_type" id="aiTargetType">
+                    <input type="hidden" name="target_name" id="aiTargetName">
+                    <input type="hidden" name="file_id" id="aiFileId">
+
+                    <div class="mb-3">
+                        <label for="aiPromptInput" class="form-label fw-semibold">Your prompt</label>
+                        <textarea
+                            id="aiPromptInput"
+                            name="prompt"
+                            class="form-control"
+                            rows="3"
+                            maxlength="2000"
+                            required
+                            placeholder="e.g. What's the average study time by gender, and which group has the highest final exam score?"
+                        ></textarea>
+                    </div>
+
+                    <div class="d-flex align-items-center gap-2 mb-3">
+                        <button type="submit" class="btn btn-primary btn-sm">
+                            <i class="las la-magic"></i> Generate Analytics
+                        </button>
+                        <span id="aiAnalyticsSpinner" class="htmx-indicator text-muted small">
+                            <i class="las la-spinner la-spin"></i> Analyzing your data&hellip;
+                        </span>
+                    </div>
+                </form>
+
+                <div id="aiAnalyticsResult" class="mb-4"></div>
+
+                <hr>
+
+                <h6 class="fw-semibold mb-2">
+                    <i class="las la-history text-muted"></i> Recent Prompts
+                </h6>
+                <div id="aiAnalyticsHistory"></div>
+
+            </div><!-- end modal-body -->
+
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">
+                    <i class="las la-times"></i> Close
+                </button>
+            </div>
+
+        </div><!-- end modal-content -->
+    </div><!-- end modal-dialog -->
+</div><!-- end modal -->
+
+<style>
+    .htmx-indicator { display: none; }
+    .htmx-request.htmx-indicator, .htmx-request .htmx-indicator { display: inline-block; }
+</style>
+
+<script>
+// =========================================================
+// ASK AI (ANALYTICS)
+// =========================================================
+
+function openAIAnalyticsModal(targetType, targetName, fileId) {
+    if (!globalDatasourceId) return;
+
+    document.getElementById("aiTargetType").value = targetType;
+    document.getElementById("aiTargetName").value = targetName;
+    document.getElementById("aiFileId").value = fileId || "";
+    document.getElementById("aiAnalyticsTitle").textContent = targetName;
+
+    const form = document.getElementById("aiAnalyticsForm");
+    form.setAttribute("hx-post", `/datasource/${globalDatasourceId}/ai-analytics`);
+    htmx.process(form);
+
+    document.getElementById("aiPromptInput").value = "";
+    document.getElementById("aiAnalyticsResult").innerHTML = "";
+
+    loadAIHistory(targetType, targetName);
+
+    bootstrap.Modal.getOrCreateInstance(document.getElementById("aiAnalyticsModal")).show();
+}
+
+function loadAIHistory(targetType, targetName) {
+    const historyEl = document.getElementById("aiAnalyticsHistory");
+    if (!historyEl || !globalDatasourceId) return;
+
+    historyEl.innerHTML = '<div class="text-center text-muted py-2"><i class="las la-spinner la-spin"></i></div>';
+
+    const params = new URLSearchParams({ target_type: targetType, target_name: targetName });
+    safeFetch(`/datasource/${globalDatasourceId}/ai-analytics/history?${params.toString()}`)
+        .then(r => {
+            if (!r.ok) throw new Error("History request failed");
+            return r.text();
+        })
+        .then(html => { historyEl.innerHTML = html; })
+        .catch(() => { historyEl.innerHTML = '<p class="text-danger small mb-0">Failed to load history.</p>'; });
+}
+</script>
+
 <script>
 
 // ── Side-nav tab switching (no page reload) ──────────────────────
@@ -1900,6 +2031,13 @@ function openFileCanvas(fileName, fileId) {
             <span class="text-muted small"><i class="las la-file-alt"></i> ${fileName}</span>
             <div class="d-flex gap-2">
                 <button
+                    class="btn btn-outline-primary btn-sm"
+                    type="button"
+                    onclick="openAIAnalyticsModal('file', '${fileName}', '${fileId}')"
+                >
+                    <i class="las la-magic"></i> Ask AI
+                </button>
+                <button
                     class="btn btn-primary btn-sm"
                     type="button"
                     data-bs-toggle="offcanvas"
@@ -2046,8 +2184,15 @@ function openTableCanvas(tableName) {
                 </span>
             </div>
 
-            <!-- Right: Button -->
-            <div>
+            <!-- Right: Buttons -->
+            <div class="d-flex gap-2">
+                <button
+                    class="btn btn-outline-primary btn-sm"
+                    type="button"
+                    onclick="openAIAnalyticsModal('${globalDbType === 'mongodb' ? 'collection' : 'table'}', '${tableName}', '')"
+                >
+                    <i class="las la-magic"></i> Ask AI
+                </button>
                 <button
                     class="btn btn-primary btn-sm"
                     type="button"

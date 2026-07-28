@@ -17,3 +17,5 @@ fastavro
 asyncpg
 aiosqlite
 psycopg2-binary
+anthropic
+openai

@@ -1,6 +1,7 @@
 # app/db/db_utils.py
 
 import asyncio
+import re
 import time
 from typing import Dict, Optional, Any, TypeVar, Type, List
 from dataclasses import dataclass
@@ -351,6 +352,74 @@ async def fetch_mongo_schema(uri: str, database: str, collection: str):
 
         await _register_success(wrapper)
         return schema
+
+    except Exception:
+        await _register_failure(wrapper)
+        raise
+
+
+# ==========================================================
+# ROW SAMPLING (for data profiling / AI analytics)
+# ==========================================================
+
+# Table/collection names reaching these functions were already discovered via
+# fetch_rdbms_tables / fetch_mongo_collections, but the name still cannot be
+# parameterized in SQL — validate against a strict identifier charset before
+# quoting and embedding it, as defense in depth against injection.
+_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9_]+$")
+
+
+def _quote_identifier(db_type: str, name: str) -> str:
+    if not _IDENTIFIER_RE.match(name):
+        raise ValueError(f"Invalid table identifier: {name!r}")
+    if db_type == "mysql":
+        return f"`{name}`"
+    return f'"{name}"'  # postgres / sqlite
+
+
+async def fetch_rdbms_rows(
+    url: str,
+    db_type: str,
+    table_name: str,
+    limit: int = 500,
+) -> List[Dict[str, Any]]:
+    """Fetch a bounded sample of rows from an RDBMS table as plain dicts."""
+
+    quoted = _quote_identifier(db_type, table_name)
+    query = f"SELECT * FROM {quoted} LIMIT :row_limit"
+
+    engine = await get_engine(url)
+    wrapper = _engine_cache[url]
+
+    try:
+        async with engine.connect() as conn:
+            result = await conn.execute(text(query), {"row_limit": limit})
+            rows = result.mappings().all()
+
+        await _register_success(wrapper)
+        return [dict(row) for row in rows]
+
+    except SQLAlchemyError:
+        await _register_failure(wrapper)
+        raise
+
+
+async def fetch_mongo_rows(
+    uri: str,
+    database: str,
+    collection: str,
+    limit: int = 500,
+) -> List[Dict[str, Any]]:
+    """Fetch a bounded sample of documents from a MongoDB collection."""
+
+    client = await get_mongo_client(uri)
+    wrapper = _mongo_cache[uri]
+
+    try:
+        cursor = client[database][collection].find({}, {"_id": 0}).limit(limit)
+        rows = await cursor.to_list(length=limit)
+        await _register_success(wrapper)
+        return rows
 
     except Exception:
         await _register_failure(wrapper)

@@ -1,0 +1,9 @@
+<div id="ai-settings-response" hx-swap-oob="true">
+{% if error %}
+    <div class="alert alert-danger alert-dismissible fade show mb-3">
+        {{ error }}
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+{% endif %}
+</div>
+{% include "ai_settings/key_rows_body.htm" %}
