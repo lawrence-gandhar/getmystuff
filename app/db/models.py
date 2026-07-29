@@ -15,3 +15,4 @@ from app.models.datasource import (  # noqa: F401
 )
 from app.models.prompt_history import PromptHistory  # noqa: F401
 from app.models.ai_settings import AIApiKey  # noqa: F401
+from app.models.chatbot import ChatbotApiKey, ChatbotMessage  # noqa: F401

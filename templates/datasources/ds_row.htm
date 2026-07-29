@@ -1,6 +1,6 @@
 {% if datasource.db_type in file_types %}
 {# ── FILE-BASED ROW (4 columns) ── #}
-<tr id="ds-row-{{ datasource.id }}">
+<tr id="ds-row-{{ datasource.uuid }}">
     <td>
         <span class="fw-semibold text-success">
             <i class="las la-tag"></i>
@@ -23,8 +23,8 @@
         
         <button
             class="btn btn-sm {% if datasource.is_active %}btn-outline-warning{% else %}btn-outline-success{% endif %}"
-            hx-post="/datasource/{{ datasource.id }}/toggle-active"
-            hx-target="#ds-row-{{ datasource.id }}"
+            hx-post="/datasource/{{ datasource.uuid }}/toggle-active"
+            hx-target="#ds-row-{{ datasource.uuid }}"
             hx-swap="outerHTML"
         >
             {% if datasource.is_active %}
@@ -36,22 +36,22 @@
         {% if datasource.is_active %}
             <button
                 class="btn btn-sm btn-outline-primary"
-                onclick="flOpen('{{ datasource.id }}', '{{ datasource.datasource_name }}')"
+                onclick="flOpen('{{ datasource.uuid }}', '{{ datasource.datasource_name }}')"
             >
                 Preview
             </button>
         {% else %}
             <button
                 class="btn btn-sm btn-outline-secondary"
-                onclick="openRenameModal('{{ datasource.id }}', '{{ datasource.datasource_name }}')"
+                onclick="openRenameModal('{{ datasource.uuid }}', '{{ datasource.datasource_name }}')"
             >
                 Rename
             </button>
             
             <button
                 class="btn btn-sm btn-outline-danger"
-                hx-post="/datasource/{{ datasource.id }}/delete"
-                hx-target="#ds-row-{{ datasource.id }}"
+                hx-post="/datasource/{{ datasource.uuid }}/delete"
+                hx-target="#ds-row-{{ datasource.uuid }}"
                 hx-swap="outerHTML"
                 hx-confirm="Delete '{{ datasource.datasource_name }}'? This cannot be undone."
             >
@@ -64,7 +64,7 @@
 {% else %}
 {# ── RDBMS / NOSQL ROW (7 columns) ── #}
 {% set badge_class = "bg-warning-subtle text-warning-emphasis border border-warning-subtle" if datasource.db_type in nosql_types else "bg-primary-subtle text-primary-emphasis border border-primary-subtle" %}
-<tr id="ds-row-{{ datasource.id }}">
+<tr id="ds-row-{{ datasource.uuid }}">
     <td>
         <span class="fw-semibold {% if datasource.db_type not in nosql_types %}text-primary{% endif %}"
               {% if datasource.db_type in nosql_types %}style="color:#fd7e14;"{% endif %}>
@@ -90,8 +90,8 @@
     <td>
         <button
             class="btn btn-sm {% if datasource.is_active %}btn-outline-warning{% else %}btn-outline-success{% endif %}"
-            hx-post="/datasource/{{ datasource.id }}/toggle-active"
-            hx-target="#ds-row-{{ datasource.id }}"
+            hx-post="/datasource/{{ datasource.uuid }}/toggle-active"
+            hx-target="#ds-row-{{ datasource.uuid }}"
             hx-swap="outerHTML"
         >
             {% if datasource.is_active %}
@@ -103,7 +103,7 @@
         {% if datasource.is_active %}
         <button
             class="btn btn-sm btn-outline-primary"
-            hx-get="/datasource/{{ datasource.id }}"
+            hx-get="/datasource/{{ datasource.uuid }}"
             hx-target="#preview-container"
             hx-swap="innerHTML"
             hx-on="htmx:afterOnLoad: bootstrap.Offcanvas.getOrCreateInstance(document.getElementById('previewOffcanvas')).show()"
@@ -113,14 +113,14 @@
         {% else %}
         <button
             class="btn btn-sm btn-outline-secondary"
-            onclick="openRenameModal('{{ datasource.id }}', '{{ datasource.datasource_name }}')"
+            onclick="openRenameModal('{{ datasource.uuid }}', '{{ datasource.datasource_name }}')"
         >
             Rename
         </button>
         <button
             class="btn btn-sm btn-outline-danger"
-            hx-post="/datasource/{{ datasource.id }}/delete"
-            hx-target="#ds-row-{{ datasource.id }}"
+            hx-post="/datasource/{{ datasource.uuid }}/delete"
+            hx-target="#ds-row-{{ datasource.uuid }}"
             hx-swap="outerHTML"
             hx-confirm="Delete '{{ datasource.datasource_name }}'? This cannot be undone."
         >

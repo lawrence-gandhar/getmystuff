@@ -1,5 +1,5 @@
-import uuid
 import os
+import uuid
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -54,7 +54,7 @@ async def test_connection(db_type, host, port, database, username, password):
 # -----------------------------------
 async def create_datasource(
     db: AsyncSession,
-    user_id: uuid.UUID,
+    user_id: int,
     datasource_name: str,
     db_type: str,
     host: str,
@@ -149,7 +149,7 @@ async def create_datasource(
 async def update_datasource_name(
     db: AsyncSession,
     datasource_id: uuid.UUID,
-    user_id: uuid.UUID,
+    user_id: int,
     datasource_name: str,
 ) -> DataSource:
     """
@@ -163,9 +163,8 @@ async def update_datasource_name(
         HTTPException(422) – validation / normalization failure.
         HTTPException(409) – name already taken (case-insensitive).
     """
-    datasource = await datasource_crud.get_one(
-        db,
-        filters={"id": datasource_id, "user_id": user_id},
+    datasource = await datasource_crud.get_by_uuid(
+        db, datasource_id, extra_filters={"user_id": user_id},
     )
 
     if not datasource:
@@ -182,7 +181,7 @@ async def update_datasource_name(
     try:
         updated = await datasource_crud.update(
             db,
-            datasource_id,
+            datasource.id,
             {"datasource_name": validated.datasource_name},
         )
         return updated
@@ -200,15 +199,11 @@ async def update_datasource_name(
 async def get_datasource_objects(
     db: AsyncSession,
     datasource_id: uuid.UUID,
-    user_id: uuid.UUID,
+    user_id: int,
 ):
 
-    datasource = await datasource_crud.get_one(
-        db,
-        filters={
-            "id": datasource_id,
-            "user_id": user_id,
-        }
+    datasource = await datasource_crud.get_by_uuid(
+        db, datasource_id, extra_filters={"user_id": user_id},
     )
 
     if not datasource:
@@ -220,7 +215,7 @@ async def get_datasource_objects(
         elif datasource.db_type in FILE_BASED_TYPES:
             result = await db.execute(
                 select(DatasourceFile)
-                .where(DatasourceFile.datasource_id == datasource_id)
+                .where(DatasourceFile.datasource_id == datasource.id)
                 .where(DatasourceFile.is_active == True)
             )
             files = result.scalars().all()
@@ -228,7 +223,7 @@ async def get_datasource_objects(
             for f in files:
                 listing = await fetch_file_listing(path=f.file_path, file_type=datasource.db_type)
                 for name in listing:
-                    objects.append({"name": name, "file_id": str(f.id)})
+                    objects.append({"name": name, "file_id": str(f.uuid)})
         else:
             objects = await get_rdbms_tables(datasource)
     except Exception as e:
@@ -238,7 +233,7 @@ async def get_datasource_objects(
         )
 
     return {
-        "datasource_id": str(datasource.id),
+        "datasource_id": str(datasource.uuid),
         "datasource_name": datasource.datasource_name,
         "database": datasource.database_name,
         "host": datasource.host,
@@ -256,16 +251,12 @@ async def get_datasource_objects(
 async def get_datasource_table_schema(
     db: AsyncSession,
     datasource_id: uuid.UUID,
-    user_id: uuid.UUID,
+    user_id: int,
     table_name: str,
 ):
 
-    datasource = await datasource_crud.get_one(
-        db,
-        filters={
-            "id": datasource_id,
-            "user_id": user_id,
-        }
+    datasource = await datasource_crud.get_by_uuid(
+        db, datasource_id, extra_filters={"user_id": user_id},
     )
 
     if not datasource:
@@ -280,7 +271,7 @@ async def get_datasource_table_schema(
         )
 
     return {
-        "datasource_id": str(datasource.id),
+        "datasource_id": str(datasource.uuid),
         "database": datasource.database_name,
         "type": datasource.db_type,
         "table": table_name,
@@ -289,7 +280,7 @@ async def get_datasource_table_schema(
 
 async def get_user_datasources(
     db: AsyncSession,
-    user_id: uuid.UUID
+    user_id: int
 ):
     return await datasource_crud.get_many(
         db,
@@ -300,11 +291,10 @@ async def get_user_datasources(
 async def delete_datasource(
     db: AsyncSession,
     datasource_id: uuid.UUID,
-    user_id: uuid.UUID,
+    user_id: int,
 ) -> None:
-    datasource = await datasource_crud.get_one(
-        db,
-        filters={"id": datasource_id, "user_id": user_id},
+    datasource = await datasource_crud.get_by_uuid(
+        db, datasource_id, extra_filters={"user_id": user_id},
     )
     if not datasource:
         raise HTTPException(status_code=404, detail="Datasource not found")
@@ -316,19 +306,18 @@ async def delete_datasource_file(
     db: AsyncSession,
     datasource_id: uuid.UUID,
     file_id: uuid.UUID,
-    user_id: uuid.UUID,
+    user_id: int,
 ) -> None:
-    datasource = await datasource_crud.get_one(
-        db,
-        filters={"id": datasource_id, "user_id": user_id},
+    datasource = await datasource_crud.get_by_uuid(
+        db, datasource_id, extra_filters={"user_id": user_id},
     )
     if not datasource:
         raise HTTPException(status_code=404, detail="Datasource not found")
 
     result = await db.execute(
         select(DatasourceFile)
-        .where(DatasourceFile.id == file_id)
-        .where(DatasourceFile.datasource_id == datasource_id)
+        .where(DatasourceFile.uuid == file_id)
+        .where(DatasourceFile.datasource_id == datasource.id)
     )
     file = result.scalar_one_or_none()
     if not file:
@@ -351,11 +340,10 @@ async def delete_datasource_file(
 async def toggle_datasource_active(
     db: AsyncSession,
     datasource_id: uuid.UUID,
-    user_id: uuid.UUID,
+    user_id: int,
 ) -> DataSource:
-    datasource = await datasource_crud.get_one(
-        db,
-        filters={"id": datasource_id, "user_id": user_id},
+    datasource = await datasource_crud.get_by_uuid(
+        db, datasource_id, extra_filters={"user_id": user_id},
     )
     if not datasource:
         raise HTTPException(status_code=404, detail="Datasource not found")
@@ -417,13 +405,13 @@ async def collect_datasource_metadata(datasource):
 async def toggle_column_status_service(
     db: AsyncSession,
     datasource_id: uuid.UUID,
-    user_id: uuid.UUID,
+    user_id: int,
     table_name: str,
     column_name: str,
     new_status: str,
 ):
 
-    datasource = await db.get(DataSource, datasource_id)
+    datasource = await datasource_crud.get_by_uuid(db, datasource_id)
 
     if not datasource or datasource.user_id != user_id:
         return None
@@ -461,12 +449,12 @@ async def toggle_column_status_service(
 async def toggle_table_status_service(
     db: AsyncSession,
     datasource_id: uuid.UUID,
-    user_id: uuid.UUID,
+    user_id: int,
     table_name: str,
     new_status: str,
 ):
 
-    datasource = await db.get(DataSource, datasource_id)
+    datasource = await datasource_crud.get_by_uuid(db, datasource_id)
 
     if not datasource or datasource.user_id != user_id:
         return None
@@ -498,12 +486,12 @@ async def toggle_table_status_service(
 async def search_sort_tables(
     db: AsyncSession,
     datasource_id: uuid.UUID,
-    user_id: uuid.UUID,
+    user_id: int,
     search: Optional[str]=None,
     status_filter: Optional[str]=None,
     sort_by: Optional[str]=None
 ):
-    datasource = await db.get(DataSource, datasource_id)
+    datasource = await datasource_crud.get_by_uuid(db, datasource_id)
 
     if not datasource or datasource.user_id != user_id:
         return []

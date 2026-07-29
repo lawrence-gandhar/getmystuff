@@ -7,15 +7,18 @@ check_file_exists     — look up the latest active record for a logical filenam
 upload_datasource_files — save files to disk, record in datasource_files.
 """
 
-import uuid
 import asyncio
+import uuid
 from pathlib import Path
 from typing import List
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
+from app.db.db_utils import CRUDQueryBuilder
 from app.models.datasource import DataSource, DatasourceFile
+
+datasource_crud = CRUDQueryBuilder(DataSource)
 from app.utils.file_utils import (
     normalize_filename,
     versioned_filename,
@@ -32,7 +35,7 @@ from app.utils.file_utils import (
 async def check_file_exists(
     db: AsyncSession,
     datasource_id: uuid.UUID,
-    user_id: uuid.UUID,
+    user_id: int,
     filename: str,
 ) -> dict:
     """
@@ -44,7 +47,7 @@ async def check_file_exists(
       normalized_base_name  str
       stored_filename    str | None
     """
-    datasource = await db.get(DataSource, datasource_id)
+    datasource = await datasource_crud.get_by_uuid(db, datasource_id)
     if not datasource or datasource.user_id != user_id:
         return {"exists": False, "version": 0, "normalized_base_name": normalize_filename(filename)}
 
@@ -53,7 +56,7 @@ async def check_file_exists(
     stmt = (
         select(DatasourceFile)
         .where(
-            DatasourceFile.datasource_id == datasource_id,
+            DatasourceFile.datasource_id == datasource.id,
             DatasourceFile.normalized_base_name == normalized,
             DatasourceFile.is_active == True,  # noqa: E712
         )
@@ -77,7 +80,7 @@ async def check_file_exists(
 async def upload_datasource_files(
     db: AsyncSession,
     datasource_id: uuid.UUID,
-    user_id: uuid.UUID,
+    user_id: int,
     file_payloads: List[dict],
     override: bool = False,
 ) -> List[dict]:
@@ -102,11 +105,11 @@ async def upload_datasource_files(
       original_filename, stored_filename, version, status ("ok" | "error"),
       message (only present on error).
     """
-    datasource = await db.get(DataSource, datasource_id)
+    datasource = await datasource_crud.get_by_uuid(db, datasource_id)
     if not datasource or datasource.user_id != user_id:
         raise ValueError("Datasource not found or access denied")
 
-    upload_dir = ensure_upload_dir(str(datasource_id))
+    upload_dir = ensure_upload_dir(str(datasource.id))
     results: List[dict] = []
 
     for payload in file_payloads:
@@ -132,7 +135,7 @@ async def upload_datasource_files(
         stmt = (
             select(DatasourceFile)
             .where(
-                DatasourceFile.datasource_id == datasource_id,
+                DatasourceFile.datasource_id == datasource.id,
                 DatasourceFile.normalized_base_name == normalized,
                 DatasourceFile.is_active == True,  # noqa: E712
             )
@@ -163,7 +166,7 @@ async def upload_datasource_files(
 
         # ── Persist DB record ─────────────────────────────────────────────
         db.add(DatasourceFile(
-            datasource_id=datasource_id,
+            datasource_id=datasource.id,
             uploaded_by=user_id,
             original_filename=original_name,
             stored_filename=stored_name,

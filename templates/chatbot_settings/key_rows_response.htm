@@ -1,0 +1,7 @@
+<div id="chatbot-settings-response" hx-swap-oob="true" class="mb-3">
+    {% if error %}
+    <div class="alert alert-danger" data-success="false">{{ error }}</div>
+    {% endif %}
+</div>
+{% include "chatbot_settings/widget_download_button.htm" %}
+{% include "chatbot_settings/key_rows_body.htm" %}

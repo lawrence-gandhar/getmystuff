@@ -1,0 +1,403 @@
+{% extends "base/layout.htm" %}
+{% block title %}Chatbot Settings | GetMyStuff{% endblock %}
+
+{% block content %}
+{% set file_types = ["csv", "xls", "json", "parquet", "avro"] %}
+
+<div class="container mt-4" style="max-width: 100%;">
+
+    <!-- PAGE HEADER -->
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h5 class="fw-semibold mb-0">
+            <i class="las la-comments text-primary"></i> Chatbot Settings
+        </h5>
+        <div class="d-flex gap-2">
+            {% include "chatbot_settings/widget_download_button.htm" %}
+            <button
+                class="btn btn-primary btn-sm"
+                type="button"
+                data-bs-toggle="offcanvas"
+                data-bs-target="#chatbotKeyOffcanvas"
+                onclick="openAddKeyForm()"
+            >
+                <i class="las la-plus"></i> Create Chatbot
+            </button>
+        </div>
+    </div>
+
+    <p class="text-muted small mb-3">
+        Each chatbot key powers one embeddable widget scoped to a whole datasource, or to
+        one or more tables, collections, or files within it. Because the key ends up
+        inside a downloadable JS file anyone can view, it's a <strong>publishable</strong>
+        key, not a secret — access is restricted by the datasource it's scoped to and the
+        allowed domains you set, not by hiding the key itself.
+    </p>
+
+    <!-- RESPONSE AREA -->
+    <div id="chatbot-settings-response" class="mb-3"></div>
+
+    <div class="card shadow-sm">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Name</th>
+                        <th>Target</th>
+                        <th>Publishable Key</th>
+                        <th>Allowed Domains</th>
+                        <th style="width:100px;">Status</th>
+                        <th style="width:280px;">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="chatbotKeysTableBody">
+                    {% include "chatbot_settings/key_rows_body.htm" %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+</div>
+
+<!-- ============================================
+     OFFCANVAS — CREATE / EDIT CHATBOT KEY
+     ============================================ -->
+<div
+    class="offcanvas offcanvas-end"
+    tabindex="-1"
+    id="chatbotKeyOffcanvas"
+    aria-labelledby="chatbotKeyOffcanvasLabel"
+    style="width: 32vw;"
+>
+    <div class="offcanvas-header border-bottom">
+        <h5 class="offcanvas-title" id="chatbotKeyOffcanvasLabel">
+            <i class="las la-comments text-primary"></i>
+            <span id="chatbotKeyOffcanvasTitleText">Create Chatbot</span>
+        </h5>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+    </div>
+
+    <div class="offcanvas-body">
+
+        <div id="chatbotKeyFormResponse" class="mb-3"></div>
+
+        <form
+            id="chatbotKeyForm"
+            hx-post="/chatbot-settings/create"
+            hx-target="#chatbotKeyFormResponse"
+            hx-swap="innerHTML"
+            hx-on::after-request="
+                const el = document.getElementById('chatbotKeyFormResponse');
+                if (el && el.querySelector('[data-success=true]')) {
+                    this.reset();
+                    bootstrap.Offcanvas.getInstance(document.getElementById('chatbotKeyOffcanvas')).hide();
+                }
+            "
+        >
+            <input type="hidden" name="target_type" id="cbTargetType">
+
+            <div class="mb-3">
+                <label for="cbName" class="form-label fw-semibold">
+                    Widget Name <span class="text-danger">*</span>
+                </label>
+                <input
+                    type="text"
+                    id="cbName"
+                    name="name"
+                    class="form-control"
+                    placeholder="e.g. Support Site Chatbot"
+                    required
+                    autocomplete="off"
+                >
+            </div>
+
+            <div id="cbTargetPicker">
+                <div class="mb-3">
+                    <label for="cbDatasourceSelect" class="form-label fw-semibold">
+                        Data Source <span class="text-danger">*</span>
+                    </label>
+                    <select id="cbDatasourceSelect" name="datasource_id" class="form-select" required>
+                        <option value="">Select a data source&hellip;</option>
+                        {% for ds in datasources %}
+                        <option value="{{ ds.uuid }}" data-db-type="{{ ds.db_type }}">
+                            {{ ds.datasource_name }} ({{ ds.db_type | upper }})
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <fieldset class="mb-3" id="cbScopeGroup" style="display:none;">
+                    <legend class="form-label fw-semibold h6">Scope <span class="text-danger">*</span></legend>
+                    <div class="form-check">
+                        <input class="form-check-input" type="radio" name="cbScope" id="cbScopeFull" value="full">
+                        <label class="form-check-label" for="cbScopeFull">Full Datasource</label>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="radio" name="cbScope" id="cbScopeSpecific" value="specific" checked>
+                        <label class="form-check-label" for="cbScopeSpecific">
+                            Specific <span id="cbScopeSpecificLabel">Tables</span>
+                        </label>
+                    </div>
+                </fieldset>
+
+                <fieldset class="mb-3" id="cbTargetListWrap" style="display:none;">
+                    <legend class="form-label fw-semibold h6">
+                        <span id="cbTargetListLabel">Tables</span> <span class="text-danger">*</span>
+                    </legend>
+                    <div id="cbTargetCheckboxList" class="border rounded p-2" style="max-height:200px; overflow-y:auto;">
+                        <div class="text-muted small">Select a data source first&hellip;</div>
+                    </div>
+                    <div class="form-text">Select one or more. The widget can only answer questions about the selected data.</div>
+                </fieldset>
+
+                <div class="mb-3 alert alert-secondary py-2 small" id="cbFullDatasourceNote" style="display:none;">
+                    The widget will be able to answer questions about every table, collection, or file
+                    currently in this datasource.
+                </div>
+            </div>
+
+            <div id="cbTargetReadonly" class="mb-3 alert alert-secondary py-2 small" style="display:none;">
+                Target dataset can't be changed after creation. Delete and recreate the
+                widget to point it at a different dataset.
+                <div class="fw-semibold mt-1" id="cbTargetReadonlySummary"></div>
+            </div>
+
+            <div class="mb-4">
+                <label for="cbAllowedOrigins" class="form-label fw-semibold">
+                    Allowed Domains <span class="text-danger">*</span>
+                </label>
+                <textarea
+                    id="cbAllowedOrigins"
+                    name="allowed_origins"
+                    class="form-control font-monospace"
+                    rows="3"
+                    placeholder="https://example.com&#10;https://www.example.com"
+                    required
+                ></textarea>
+                <div class="form-text">
+                    One full origin per line (scheme + host, e.g. <code>https://example.com</code>).
+                    Requests from any other domain are rejected.
+                </div>
+            </div>
+
+            <div class="d-flex gap-2">
+                <button type="submit" class="btn btn-primary" id="cbSubmitBtn" disabled>
+                    <i class="las la-save"></i> Save
+                </button>
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="offcanvas">
+                    Cancel
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- ============================================
+     MODAL — CONVERSATION HISTORY
+     ============================================ -->
+<div class="modal fade" tabindex="-1" id="chatbotHistoryModal" aria-labelledby="chatbotHistoryModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header border-bottom">
+                <h5 class="modal-title" id="chatbotHistoryModalLabel">
+                    <i class="las la-history text-muted"></i>
+                    Conversations &mdash; <span id="chatbotHistoryTitle"></span>
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="chatbotHistoryContent">Loading...</div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">
+                    <i class="las la-times"></i> Close
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+const CB_FILE_TYPES = {{ file_types | tojson }};
+
+const cbDatasourceSelect   = document.getElementById("cbDatasourceSelect");
+const cbScopeGroup         = document.getElementById("cbScopeGroup");
+const cbScopeFull          = document.getElementById("cbScopeFull");
+const cbScopeSpecific      = document.getElementById("cbScopeSpecific");
+const cbScopeSpecificLabel = document.getElementById("cbScopeSpecificLabel");
+const cbTargetListWrap     = document.getElementById("cbTargetListWrap");
+const cbTargetListLabel    = document.getElementById("cbTargetListLabel");
+const cbTargetCheckboxList = document.getElementById("cbTargetCheckboxList");
+const cbFullDatasourceNote = document.getElementById("cbFullDatasourceNote");
+const cbTargetType         = document.getElementById("cbTargetType");
+const cbSubmitBtn          = document.getElementById("cbSubmitBtn");
+
+function cbScopeLabelFor(dbType) {
+    if (CB_FILE_TYPES.includes(dbType)) return "Files";
+    if (dbType === "mongodb") return "Collections";
+    return "Tables";
+}
+
+function cbCheckboxRow(value, label) {
+    const wrap = document.createElement("div");
+    wrap.className = "form-check";
+
+    const id = "cbTarget-" + Math.random().toString(36).slice(2);
+
+    const input = document.createElement("input");
+    input.className = "form-check-input";
+    input.type = "checkbox";
+    input.name = "target_selection";
+    input.value = value;
+    input.id = id;
+
+    const lbl = document.createElement("label");
+    lbl.className = "form-check-label";
+    lbl.setAttribute("for", id);
+    lbl.textContent = label;
+
+    wrap.appendChild(input);
+    wrap.appendChild(lbl);
+    return wrap;
+}
+
+function cbResetTarget() {
+    cbScopeGroup.style.display = "none";
+    cbTargetListWrap.style.display = "none";
+    cbFullDatasourceNote.style.display = "none";
+    cbTargetCheckboxList.innerHTML = '<div class="text-muted small">Select a data source first&hellip;</div>';
+    cbScopeSpecific.checked = true;
+    cbTargetType.value = "";
+    cbSubmitBtn.disabled = true;
+}
+
+function cbUpdateTargetTypeAndSubmit() {
+    const dbType = cbDatasourceSelect.selectedOptions[0] ? cbDatasourceSelect.selectedOptions[0].dataset.dbType : "";
+    const isFile = CB_FILE_TYPES.includes(dbType);
+
+    if (cbScopeFull.checked) {
+        cbTargetType.value = "datasource";
+        cbTargetListWrap.style.display = "none";
+        cbFullDatasourceNote.style.display = "";
+        cbTargetCheckboxList.querySelectorAll("input[type=checkbox]").forEach(cb => { cb.checked = false; });
+        cbSubmitBtn.disabled = false;
+        return;
+    }
+
+    cbTargetType.value = isFile ? "file" : (dbType === "mongodb" ? "collection" : "table");
+    cbTargetListWrap.style.display = "";
+    cbFullDatasourceNote.style.display = "none";
+    cbSubmitBtn.disabled = !cbTargetCheckboxList.querySelector("input[type=checkbox]:checked");
+}
+
+cbDatasourceSelect.addEventListener("change", function () {
+    const datasourceId = this.value;
+    cbResetTarget();
+    if (!datasourceId) return;
+
+    cbTargetCheckboxList.innerHTML = '<div class="text-muted small">Loading&hellip;</div>';
+
+    safeFetch(`/datasource/${datasourceId}/details`)
+        .then(r => r.json())
+        .then(data => {
+            const details = data.datasource_details;
+            const dbType  = details.db_type;
+            const isFile  = CB_FILE_TYPES.includes(dbType);
+            const objects = details.objects || [];
+
+            cbScopeSpecificLabel.textContent = cbScopeLabelFor(dbType);
+            cbTargetListLabel.textContent = cbScopeLabelFor(dbType);
+            cbScopeGroup.style.display = "";
+            cbTargetListWrap.style.display = "";
+
+            if (objects.length === 0) {
+                cbTargetCheckboxList.innerHTML = '<div class="text-muted small">No objects available</div>';
+                return;
+            }
+
+            cbTargetCheckboxList.innerHTML = "";
+            if (isFile) {
+                // A multi-sheet file can list one entry per sheet sharing the
+                // same file_id — loading is keyed off file_id regardless of
+                // sheet name, so collapse to one checkbox per physical file.
+                const seenFileIds = new Set();
+                objects.forEach(obj => {
+                    if (seenFileIds.has(obj.file_id)) return;
+                    seenFileIds.add(obj.file_id);
+                    cbTargetCheckboxList.appendChild(cbCheckboxRow(obj.file_id, obj.name));
+                });
+            } else {
+                objects.forEach(name => {
+                    cbTargetCheckboxList.appendChild(cbCheckboxRow(name, name));
+                });
+            }
+
+            cbUpdateTargetTypeAndSubmit();
+        })
+        .catch(() => {
+            cbTargetCheckboxList.innerHTML = '<div class="text-danger small">Failed to load</div>';
+        });
+});
+
+document.querySelectorAll('input[name="cbScope"]').forEach(radio => {
+    radio.addEventListener("change", cbUpdateTargetTypeAndSubmit);
+});
+
+cbTargetCheckboxList.addEventListener("change", function (e) {
+    if (e.target && e.target.matches("input[type=checkbox]")) {
+        cbUpdateTargetTypeAndSubmit();
+    }
+});
+
+function openAddKeyForm() {
+    const form = document.getElementById("chatbotKeyForm");
+    form.reset();
+    form.setAttribute("hx-post", "/chatbot-settings/create");
+
+    document.getElementById("chatbotKeyOffcanvasTitleText").textContent = "Create Chatbot";
+    document.getElementById("cbTargetPicker").style.display = "";
+    document.getElementById("cbTargetReadonly").style.display = "none";
+    cbDatasourceSelect.disabled = false;
+    cbDatasourceSelect.required = true;
+    cbResetTarget();
+    document.getElementById("chatbotKeyFormResponse").innerHTML = "";
+
+    htmx.process(form);
+}
+
+function openEditKeyForm(keyId, name, allowedOrigins, targetSummary) {
+    const form = document.getElementById("chatbotKeyForm");
+    form.reset();
+    form.setAttribute("hx-post", `/chatbot-settings/${keyId}/update`);
+
+    document.getElementById("chatbotKeyOffcanvasTitleText").textContent = "Edit Chatbot";
+    document.getElementById("cbTargetPicker").style.display = "none";
+    document.getElementById("cbTargetReadonly").style.display = "";
+    document.getElementById("cbTargetReadonlySummary").textContent = targetSummary || "";
+    cbDatasourceSelect.disabled = true;
+    cbDatasourceSelect.required = false;
+
+    document.getElementById("cbName").value = name;
+    document.getElementById("cbAllowedOrigins").value = (allowedOrigins || []).join("\n");
+    document.getElementById("chatbotKeyFormResponse").innerHTML = "";
+    cbSubmitBtn.disabled = false;
+
+    htmx.process(form);
+    bootstrap.Offcanvas.getOrCreateInstance(document.getElementById("chatbotKeyOffcanvas")).show();
+}
+
+function openHistoryPanel(keyId, keyName) {
+    document.getElementById("chatbotHistoryTitle").textContent = keyName;
+    const contentEl = document.getElementById("chatbotHistoryContent");
+    contentEl.innerHTML = '<div class="text-center text-muted py-3"><i class="las la-spinner la-spin"></i></div>';
+
+    bootstrap.Modal.getOrCreateInstance(document.getElementById("chatbotHistoryModal")).show();
+
+    safeFetch(`/chatbot-settings/${keyId}/history`)
+        .then(r => {
+            if (!r.ok) throw new Error("History request failed");
+            return r.text();
+        })
+        .then(html => { contentEl.innerHTML = html; })
+        .catch(() => { contentEl.innerHTML = '<p class="text-danger small mb-0">Failed to load history.</p>'; });
+}
+</script>
+
+{% endblock %}

@@ -158,7 +158,7 @@ Datasources | GetMyStuff
                         </thead>
                         <tbody>
                             {% for datasource in datasources if datasource.db_type in file_types %}
-                            <tr id="ds-row-{{ datasource.id }}">
+                            <tr id="ds-row-{{ datasource.uuid }}">
                                 <td>
                                     <span class="fw-semibold text-success">
                                         <i class="las la-tag"></i>
@@ -180,8 +180,8 @@ Datasources | GetMyStuff
                                 <td>
                                     <button 
                                         class="btn btn-sm {% if datasource.is_active %}btn-outline-warning{% else %}btn-outline-success{% endif %}" 
-                                        hx-post="/datasource/{{ datasource.id }}/toggle-active" 
-                                        hx-target="#ds-row-{{ datasource.id }}" 
+                                        hx-post="/datasource/{{ datasource.uuid }}/toggle-active" 
+                                        hx-target="#ds-row-{{ datasource.uuid }}" 
                                         hx-swap="outerHTML"
                                     >
                                         {% if datasource.is_active %}
@@ -194,7 +194,7 @@ Datasources | GetMyStuff
                                     {% if datasource.is_active %}
                                         <button
                                             class="btn btn-sm btn-outline-primary"
-                                            onclick="flOpen('{{ datasource.id }}', '{{ datasource.datasource_name }}')"
+                                            onclick="flOpen('{{ datasource.uuid }}', '{{ datasource.datasource_name }}')"
                                         >
                                             Preview
                                         </button>
@@ -202,7 +202,7 @@ Datasources | GetMyStuff
                                         <button 
                                             class="btn btn-sm btn-outline-secondary" 
                                             onclick="openRenameModal(
-                                                '{{ datasource.id }}', 
+                                                '{{ datasource.uuid }}', 
                                                 '{{ datasource.datasource_name }}'
                                             )"
                                         >
@@ -210,8 +210,8 @@ Datasources | GetMyStuff
                                         </button>
                                         <button 
                                             class="btn btn-sm btn-outline-danger" 
-                                            hx-post="/datasource/{{ datasource.id }}/delete" 
-                                            hx-target="#ds-row-{{ datasource.id }}" 
+                                            hx-post="/datasource/{{ datasource.uuid }}/delete" 
+                                            hx-target="#ds-row-{{ datasource.uuid }}" 
                                             hx-swap="outerHTML" 
                                             hx-confirm="Delete '{{ datasource.datasource_name }}'? This cannot be undone."
                                         >
@@ -252,7 +252,7 @@ Datasources | GetMyStuff
                         </thead>
                         <tbody>
                             {% for datasource in datasources if datasource.db_type not in file_types and datasource.db_type not in nosql_types %}
-                            <tr id="ds-row-{{ datasource.id }}">
+                            <tr id="ds-row-{{ datasource.uuid }}">
                                 <td>
                                     <span class="fw-semibold text-primary">
                                         <i class="las la-tag"></i>
@@ -282,8 +282,8 @@ Datasources | GetMyStuff
                                             {% else %}
                                                 btn-outline-success
                                             {% endif %}" 
-                                        hx-post="/datasource/{{ datasource.id }}/toggle-active" 
-                                        hx-target="#ds-row-{{ datasource.id }}" 
+                                        hx-post="/datasource/{{ datasource.uuid }}/toggle-active" 
+                                        hx-target="#ds-row-{{ datasource.uuid }}" 
                                         hx-swap="outerHTML"
                                     >
                                         {% if datasource.is_active %}
@@ -296,21 +296,21 @@ Datasources | GetMyStuff
                                     {% if datasource.is_active %}
                                         <button 
                                             class="btn btn-sm btn-outline-primary" 
-                                            onclick="dbOpen('{{ datasource.id }}', '{{ datasource.datasource_name }}')"
+                                            onclick="dbOpen('{{ datasource.uuid }}', '{{ datasource.datasource_name }}')"
                                         >
                                             Preview
                                         </button>
                                     {% else %}
                                         <button 
                                             class="btn btn-sm btn-outline-secondary" 
-                                            onclick="openRenameModal('{{ datasource.id }}', '{{ datasource.datasource_name }}')"
+                                            onclick="openRenameModal('{{ datasource.uuid }}', '{{ datasource.datasource_name }}')"
                                         >
                                             Rename
                                         </button>
                                         <button 
                                             class="btn btn-sm btn-outline-danger" 
-                                            hx-post="/datasource/{{ datasource.id }}/delete" 
-                                            hx-target="#ds-row-{{ datasource.id }}" 
+                                            hx-post="/datasource/{{ datasource.uuid }}/delete" 
+                                            hx-target="#ds-row-{{ datasource.uuid }}" 
                                             hx-swap="outerHTML" 
                                             hx-confirm="Delete '{{ datasource.datasource_name }}'? This cannot be undone."
                                         >
@@ -351,7 +351,7 @@ Datasources | GetMyStuff
                         </thead>
                         <tbody>
                             {% for datasource in datasources if datasource.db_type in nosql_types %}
-                            <tr id="ds-row-{{ datasource.id }}">
+                            <tr id="ds-row-{{ datasource.uuid }}">
                                 <td>
                                     <span class="fw-semibold" style="color:#fd7e14;">
                                         <i class="las la-tag"></i>
@@ -376,14 +376,14 @@ Datasources | GetMyStuff
                                     {% if datasource.is_active %}
                                         <button 
                                             class="btn btn-sm btn-outline-primary" 
-                                            onclick="dbOpen('{{ datasource.id }}', '{{ datasource.datasource_name }}')"
+                                            onclick="dbOpen('{{ datasource.uuid }}', '{{ datasource.datasource_name }}')"
                                         >
                                             Preview
                                         </button>
                                     {% else %}
                                         <button 
                                             class="btn btn-sm btn-outline-secondary" 
-                                            onclick="openRenameModal('{{ datasource.id }}', '{{ datasource.datasource_name }}')"
+                                            onclick="openRenameModal('{{ datasource.uuid }}', '{{ datasource.datasource_name }}')"
                                         >
                                             Rename
                                         </button>
@@ -394,8 +394,8 @@ Datasources | GetMyStuff
                                                 {% else %}
                                                     btn-outline-success
                                                 {% endif %}" 
-                                            hx-post="/datasource/{{ datasource.id }}/toggle-active" 
-                                            hx-target="#ds-row-{{ datasource.id }}" 
+                                            hx-post="/datasource/{{ datasource.uuid }}/toggle-active" 
+                                            hx-target="#ds-row-{{ datasource.uuid }}" 
                                             hx-swap="outerHTML"
                                         >
                                             {% if datasource.is_active %}
@@ -406,8 +406,8 @@ Datasources | GetMyStuff
                                         </button>
                                         <button 
                                             class="btn btn-sm btn-outline-danger" 
-                                            hx-post="/datasource/{{ datasource.id }}/delete" 
-                                            hx-target="#ds-row-{{ datasource.id }}" 
+                                            hx-post="/datasource/{{ datasource.uuid }}/delete" 
+                                            hx-target="#ds-row-{{ datasource.uuid }}" 
                                             hx-swap="outerHTML" 
                                             hx-confirm="Delete '{{ datasource.datasource_name }}'? This cannot be undone."
                                         >

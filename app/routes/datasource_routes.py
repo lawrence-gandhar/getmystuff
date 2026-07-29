@@ -1,6 +1,6 @@
 import re
-import uuid
 import asyncio
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -24,7 +24,8 @@ from app.services.datasource_service import (
     toggle_datasource_active,
     toggle_column_status_service,
     toggle_table_status_service,
-    search_sort_tables
+    search_sort_tables,
+    datasource_crud,
 )
 from app.services.file_service import check_file_exists, upload_datasource_files
 from app.utils.file_utils import FILE_BASED_TYPES, ACCEPT_ATTRS, ALLOWED_EXTENSIONS
@@ -285,7 +286,7 @@ class DataSourceController(Controller):
                     try:
                         upload_results = await upload_datasource_files(
                             db=db,
-                            datasource_id=datasource.id,
+                            datasource_id=datasource.uuid,
                             user_id=user.id,
                             file_payloads=file_payloads,
                         )
@@ -304,7 +305,7 @@ class DataSourceController(Controller):
                 return Template(
                     template_name="datasources/file_upload_widget.htm",
                     context={
-                        "datasource_id": str(datasource.id),
+                        "datasource_id": str(datasource.uuid),
                         "db_type": db_type,
                         "accept_attr": ACCEPT_ATTRS.get(db_type, ""),
                         "allowed_ext": ", ".join(
@@ -551,14 +552,14 @@ class DataSourceController(Controller):
         db: AsyncSession,
         user: User,
     ) -> Template:
-        datasource = await db.get(DataSource, datasource_id)
+        datasource = await datasource_crud.get_by_uuid(db, datasource_id)
         if not datasource or datasource.user_id != user.id:
             raise HTTPException(status_code=404, detail="Datasource not found")
 
         result = await db.execute(
             select(DatasourceFile).where(
-                DatasourceFile.id == file_id,
-                DatasourceFile.datasource_id == datasource_id,
+                DatasourceFile.uuid == file_id,
+                DatasourceFile.datasource_id == datasource.id,
                 DatasourceFile.is_active == True,  # noqa: E712
             )
         )
@@ -612,7 +613,7 @@ class DataSourceController(Controller):
             raise HTTPException(status_code=404)
 
         # Re-read the datasource to get the current table status for rendering
-        datasource_obj = await db.get(DataSource, datasource_id)
+        datasource_obj = await datasource_crud.get_by_uuid(db, datasource_id)
         config = (datasource_obj.configuration_data or {}) if datasource_obj else {}
         table_status = config.get(table_name, {}).get("status", "active")
 
@@ -895,8 +896,8 @@ class DataSourceController(Controller):
 
         Query params
         ------------
-        page     : int  (default 1)
-        file_id  : str  UUID of a specific DatasourceFile record (optional)
+        page     : int   (default 1)
+        file_id  : uuid  public id of a specific DatasourceFile record (optional)
         """
         try:
             page = max(1, int(request.query_params.get("page", "1")))
@@ -906,7 +907,7 @@ class DataSourceController(Controller):
         file_id_str = request.query_params.get("file_id")
 
         # Verify ownership
-        datasource = await db.get(DataSource, datasource_id)
+        datasource = await datasource_crud.get_by_uuid(db, datasource_id)
         if not datasource or datasource.user_id != user.id:
             return {"error": "Datasource not found"}
 
@@ -917,8 +918,8 @@ class DataSourceController(Controller):
             except ValueError:
                 return {"error": "Invalid file ID"}
             stmt = select(DatasourceFile).where(
-                DatasourceFile.id == file_uuid,
-                DatasourceFile.datasource_id == datasource_id,
+                DatasourceFile.uuid == file_uuid,
+                DatasourceFile.datasource_id == datasource.id,
                 DatasourceFile.is_active == True,  # noqa: E712
             )
         else:
@@ -926,7 +927,7 @@ class DataSourceController(Controller):
             stmt = (
                 select(DatasourceFile)
                 .where(
-                    DatasourceFile.datasource_id == datasource_id,
+                    DatasourceFile.datasource_id == datasource.id,
                     DatasourceFile.is_active == True,  # noqa: E712
                 )
                 .order_by(DatasourceFile.uploaded_at.desc())
@@ -948,14 +949,14 @@ class DataSourceController(Controller):
         all_stmt = (
             select(DatasourceFile)
             .where(
-                DatasourceFile.datasource_id == datasource_id,
+                DatasourceFile.datasource_id == datasource.id,
                 DatasourceFile.is_active == True,  # noqa: E712
             )
             .order_by(DatasourceFile.uploaded_at.desc())
         )
         all_result = await db.execute(all_stmt)
         files_list = [
-            {"id": str(f.id), "filename": f.original_filename}
+            {"id": str(f.uuid), "filename": f.original_filename}
             for f in all_result.scalars().all()
         ]
 
@@ -982,7 +983,7 @@ class DataSourceController(Controller):
             }
 
         base = {
-            "file_id": str(target_file.id),
+            "file_id": str(target_file.uuid),
             "filename": target_file.original_filename,
             "files": files_list,
         }
@@ -1013,14 +1014,14 @@ class DataSourceController(Controller):
     ) -> Template:
         """Return an HTML partial listing all active uploaded files for a
         file-based datasource. No action buttons — read-only view."""
-        datasource = await db.get(DataSource, datasource_id)
+        datasource = await datasource_crud.get_by_uuid(db, datasource_id)
         if not datasource or datasource.user_id != user.id:
             raise HTTPException(status_code=404, detail="Datasource not found")
 
         stmt = (
             select(DatasourceFile)
             .where(
-                DatasourceFile.datasource_id == datasource_id,
+                DatasourceFile.datasource_id == datasource.id,
                 DatasourceFile.is_active == True,  # noqa: E712
             )
             .order_by(DatasourceFile.uploaded_at.desc())

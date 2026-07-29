@@ -182,7 +182,7 @@
                         </thead>
                         <tbody>
                             {% for ds in datasources if ds.db_type in file_types %}
-                                <tr class="datasource-row" id="tab-ds-{{ ds.id }}" data-id="{{ ds.id }}" data-category="file" style="cursor:pointer;">
+                                <tr class="datasource-row" id="tab-ds-{{ ds.uuid }}" data-id="{{ ds.uuid }}" data-category="file" style="cursor:pointer;">
                                     <td class="text-muted small">{{ loop.index }}</td>
                                     <td>{{ ds.datasource_name }}</td>
                                     <td><span class="badge bg-success-subtle text-success-emphasis border border-success-subtle">{{ ds.db_type | upper }}</span></td>
@@ -223,7 +223,7 @@
                         </thead>
                         <tbody>
                             {% for ds in datasources if ds.db_type in rdbms_types_tab %}
-                                <tr class="datasource-row" id="tab-ds-{{ ds.id }}-rdbms" data-id="{{ ds.id }}" data-category="rdbms" style="cursor:pointer;">
+                                <tr class="datasource-row" id="tab-ds-{{ ds.uuid }}-rdbms" data-id="{{ ds.uuid }}" data-category="rdbms" style="cursor:pointer;">
                                     <td class="text-muted small">{{ loop.index }}</td>
                                     <td>{{ ds.datasource_name }}</td>
                                     <td><span class="badge bg-primary-subtle text-primary-emphasis border border-primary-subtle">{{ ds.db_type | upper }}</span></td>
@@ -264,7 +264,7 @@
                         </thead>
                         <tbody>
                             {% for ds in datasources if ds.db_type in nosql_types_tab %}
-                                <tr class="datasource-row" id="tab-ds-{{ ds.id }}-nosql" data-id="{{ ds.id }}" data-category="nosql" style="cursor:pointer;">
+                                <tr class="datasource-row" id="tab-ds-{{ ds.uuid }}-nosql" data-id="{{ ds.uuid }}" data-category="nosql" style="cursor:pointer;">
                                     <td class="text-muted small">{{ loop.index }}</td>
                                     <td>{{ ds.datasource_name }}</td>
                                     <td><span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle">{{ ds.db_type | upper }}</span></td>

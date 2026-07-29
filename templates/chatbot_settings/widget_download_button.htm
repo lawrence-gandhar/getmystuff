@@ -1,0 +1,7 @@
+<div id="chatbotWidgetDownloadWrap" hx-swap-oob="true">
+    {% if keys %}
+    <a class="btn btn-outline-primary btn-sm" href="/chatbot-settings/{{ keys[0].uuid }}/widget.js" download>
+        <i class="las la-download"></i> Download Widget
+    </a>
+    {% endif %}
+</div>

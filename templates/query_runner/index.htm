@@ -31,7 +31,7 @@
                             <select id="qrDatasourceSelect" class="form-select">
                                 <option value="">Select a data source&hellip;</option>
                                 {% for ds in datasources %}
-                                <option value="{{ ds.id }}" data-db-type="{{ ds.db_type }}">
+                                <option value="{{ ds.uuid }}" data-db-type="{{ ds.db_type }}">
                                     {{ ds.datasource_name }} ({{ ds.db_type | upper }})
                                 </option>
                                 {% endfor %}

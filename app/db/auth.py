@@ -1,3 +1,4 @@
+import uuid as uuid_pkg
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -60,17 +61,17 @@ def _create_token(data: dict, expires_delta: timedelta, token_type: str) -> str:
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
 
-def create_access_token(user_id: str) -> str:
+def create_access_token(user_uuid: str) -> str:
     return _create_token(
-        data={"sub": str(user_id)},
+        data={"sub": str(user_uuid)},
         expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
         token_type="access",
     )
 
 
-def create_refresh_token(user_id: str) -> str:
+def create_refresh_token(user_uuid: str) -> str:
     return _create_token(
-        data={"sub": str(user_id)},
+        data={"sub": str(user_uuid)},
         expires_delta=timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS),
         token_type="refresh",
     )
@@ -126,12 +127,17 @@ async def get_current_user(
     if payload.get("type") != "access":
         raise HTTPException(status_code=401, detail="Invalid token type")
 
-    user_id = payload.get("sub")
+    user_uuid = payload.get("sub")
 
-    if not user_id:
+    if not user_uuid:
         raise HTTPException(status_code=401, detail="Invalid token payload")
 
-    stmt = select(User).where(User.id == user_id)
+    try:
+        user_uuid = uuid_pkg.UUID(user_uuid)
+    except (ValueError, AttributeError, TypeError):
+        raise HTTPException(status_code=401, detail="Invalid token payload")
+
+    stmt = select(User).where(User.uuid == user_uuid)
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
 

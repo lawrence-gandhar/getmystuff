@@ -1,0 +1,29 @@
+{% if entries %}
+<div class="list-group list-group-flush">
+    {% for e in entries %}
+    <div class="list-group-item px-0 py-2">
+        <div class="d-flex justify-content-between align-items-start gap-2">
+            <span class="fw-semibold small text-truncate">
+                <i class="las la-user"></i> {{ e.visitor_message }}
+            </span>
+            {% if e.created_at %}
+            <span class="text-muted small text-nowrap">{{ e.created_at.strftime('%b %d, %H:%M') }}</span>
+            {% endif %}
+        </div>
+        {% if e.status == "success" and e.ai_response %}
+        <p class="small text-muted mb-0 mt-1">
+            <i class="las la-robot"></i> {{ e.ai_response.summary }}
+        </p>
+        {% else %}
+        <p class="small text-danger mb-0 mt-1">
+            <i class="las la-exclamation-circle"></i> {{ e.error_message }}
+        </p>
+        {% endif %}
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<p class="text-muted small text-center py-3 mb-0">
+    <i class="las la-comments fs-5 d-block mb-1"></i> No conversations yet.
+</p>
+{% endif %}

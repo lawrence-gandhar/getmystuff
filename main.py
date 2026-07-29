@@ -19,6 +19,8 @@ from app.routes.datasource_config_routes import DataSourceConfigurations
 from app.routes.ai_analytics_routes import AIAnalyticsController
 from app.routes.ai_settings_routes import AISettingsController
 from app.routes.query_runner_routes import QueryRunnerController
+from app.routes.chatbot_settings_routes import ChatbotSettingsController
+from app.routes.public_chatbot_routes import PublicChatbotController
 
 from app.db.db_sessions import get_db
 from app.db.base import Base
@@ -103,6 +105,8 @@ app = Litestar(
         AIAnalyticsController,
         AISettingsController,
         QueryRunnerController,
+        ChatbotSettingsController,
+        PublicChatbotController,
     ],
     debug=True,
     request_class=HTMXRequest,

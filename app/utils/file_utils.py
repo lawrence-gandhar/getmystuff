@@ -12,6 +12,18 @@ from typing import Optional
 # Relative to the project root (where the app is started from).
 UPLOAD_BASE = Path("app/uploads")
 
+# Base directory for chatbot widget branding assets (logo, background image,
+# bot icon). Unlike datasource uploads, these live under static/ because the
+# embedded widget script runs on third-party sites and must be able to fetch
+# them over a public URL (see chatbot_widget_settings_service).
+WIDGET_UPLOAD_BASE = Path("static/chatbot_widgets")
+
+# Allowed image extensions for widget branding uploads (lowercase, no dot).
+ALLOWED_IMAGE_EXTENSIONS: frozenset[str] = frozenset({"png", "jpg", "jpeg", "gif", "webp", "svg"})
+
+# Max size for a single widget branding image upload.
+MAX_IMAGE_SIZE_BYTES = 2 * 1024 * 1024  # 2 MB
+
 # db_type values that represent file-based (non-connection) datasources.
 FILE_BASED_TYPES: frozenset[str] = frozenset({"csv", "xls", "json", "parquet", "avro"})
 
@@ -120,5 +132,17 @@ def ensure_upload_dir(datasource_id: str) -> Path:
     Path layout:  <UPLOAD_BASE>/<datasource_id>/
     """
     upload_dir = UPLOAD_BASE / str(datasource_id)
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    return upload_dir
+
+
+def ensure_widget_upload_dir(key_uuid: str) -> Path:
+    """
+    Return (and create if absent) the upload directory for one chatbot
+    widget's branding assets.
+
+    Path layout:  <WIDGET_UPLOAD_BASE>/<key_uuid>/
+    """
+    upload_dir = WIDGET_UPLOAD_BASE / str(key_uuid)
     upload_dir.mkdir(parents=True, exist_ok=True)
     return upload_dir

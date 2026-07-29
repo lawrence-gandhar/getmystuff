@@ -1,8 +1,8 @@
-import uuid
+import uuid as uuid_pkg
 
 from sqlalchemy.orm import Mapped, mapped_column
-from sqlalchemy import String, Text, DateTime, ForeignKey, Index
-from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy import BigInteger, String, Text, DateTime, ForeignKey, Index
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.sql import func
 
 from app.db.base import Base
@@ -16,21 +16,29 @@ class PromptHistory(Base):
     """
     __tablename__ = "prompt_history"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+    id: Mapped[int] = mapped_column(
+        BigInteger,
         primary_key=True,
-        default=uuid.uuid4,
+        autoincrement=True,
     )
 
-    user_id: Mapped[uuid.UUID] = mapped_column(
+    uuid: Mapped[uuid_pkg.UUID] = mapped_column(
         UUID(as_uuid=True),
+        default=uuid_pkg.uuid4,
+        unique=True,
+        index=True,
+        nullable=False,
+    )
+
+    user_id: Mapped[int] = mapped_column(
+        BigInteger,
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
 
-    datasource_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+    datasource_id: Mapped[int] = mapped_column(
+        BigInteger,
         ForeignKey("datasources.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
@@ -44,8 +52,8 @@ class PromptHistory(Base):
 
     # Only set when target_type == "file" — the specific DatasourceFile version
     # the analysis was run against.
-    file_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+    file_id: Mapped[int] = mapped_column(
+        BigInteger,
         ForeignKey("datasource_files.id", ondelete="SET NULL"),
         nullable=True,
     )

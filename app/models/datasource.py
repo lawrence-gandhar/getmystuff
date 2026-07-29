@@ -1,8 +1,8 @@
-import uuid
+import uuid as uuid_pkg
 from typing import Optional, List
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy import String, Boolean, Integer, ForeignKey, UniqueConstraint, DateTime, Index, text
-from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy import BigInteger, String, Boolean, Integer, ForeignKey, UniqueConstraint, DateTime, Index, text
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.sql import func
 
@@ -12,14 +12,22 @@ from app.db.base import Base
 class DataSource(Base):
     __tablename__ = "datasources"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+    id: Mapped[int] = mapped_column(
+        BigInteger,
         primary_key=True,
-        default=uuid.uuid4
+        autoincrement=True,
     )
 
-    user_id: Mapped[uuid.UUID] = mapped_column(
+    uuid: Mapped[uuid_pkg.UUID] = mapped_column(
         UUID(as_uuid=True),
+        default=uuid_pkg.uuid4,
+        unique=True,
+        index=True,
+        nullable=False,
+    )
+
+    user_id: Mapped[int] = mapped_column(
+        BigInteger,
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False
     )
@@ -89,14 +97,22 @@ class DataSource(Base):
 class DatasourceToolBaseConfig(Base):
     __tablename__ = "datasource_base_config"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+    id: Mapped[int] = mapped_column(
+        BigInteger,
         primary_key=True,
-        default=uuid.uuid4
+        autoincrement=True,
     )
 
-    datasource_id: Mapped[uuid.UUID] = mapped_column(
+    uuid: Mapped[uuid_pkg.UUID] = mapped_column(
         UUID(as_uuid=True),
+        default=uuid_pkg.uuid4,
+        unique=True,
+        index=True,
+        nullable=False,
+    )
+
+    datasource_id: Mapped[int] = mapped_column(
+        BigInteger,
         ForeignKey("datasources.id", ondelete="CASCADE"),
         nullable=False,
         index=True
@@ -161,14 +177,22 @@ class DatasourceToolBaseConfig(Base):
 class DataSourceAgentConfig(Base):
     __tablename__ = "datasource_tool_config"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+    id: Mapped[int] = mapped_column(
+        BigInteger,
         primary_key=True,
-        default=uuid.uuid4
+        autoincrement=True,
     )
 
-    datasource_base_config_id: Mapped[uuid.UUID] = mapped_column(
+    uuid: Mapped[uuid_pkg.UUID] = mapped_column(
         UUID(as_uuid=True),
+        default=uuid_pkg.uuid4,
+        unique=True,
+        index=True,
+        nullable=False,
+    )
+
+    datasource_base_config_id: Mapped[int] = mapped_column(
+        BigInteger,
         ForeignKey("datasource_base_config.id", ondelete="CASCADE"),
         nullable=False,
         index=True
@@ -244,21 +268,29 @@ class DatasourceFile(Base):
     """
     __tablename__ = "datasource_files"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+    id: Mapped[int] = mapped_column(
+        BigInteger,
         primary_key=True,
-        default=uuid.uuid4,
+        autoincrement=True,
     )
 
-    datasource_id: Mapped[uuid.UUID] = mapped_column(
+    uuid: Mapped[uuid_pkg.UUID] = mapped_column(
         UUID(as_uuid=True),
+        default=uuid_pkg.uuid4,
+        unique=True,
+        index=True,
+        nullable=False,
+    )
+
+    datasource_id: Mapped[int] = mapped_column(
+        BigInteger,
         ForeignKey("datasources.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
 
-    uploaded_by: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True),
+    uploaded_by: Mapped[Optional[int]] = mapped_column(
+        BigInteger,
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
         index=True,

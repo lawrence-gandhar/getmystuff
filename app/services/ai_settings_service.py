@@ -59,9 +59,9 @@ def _validate_provider_fields(
 
 async def _deactivate_other_keys(
     db: AsyncSession,
-    user_id: uuid.UUID,
+    user_id: int,
     provider: str,
-    exclude_id: Optional[uuid.UUID] = None,
+    exclude_id: Optional[int] = None,
 ) -> None:
     """Clear is_active on every other key for this (user, provider) pair."""
     stmt = (
@@ -82,7 +82,7 @@ async def _deactivate_other_keys(
 # Read
 # --------------------------------------------------------------------------
 
-async def get_user_api_keys(db: AsyncSession, user_id: uuid.UUID) -> List[AIApiKey]:
+async def get_user_api_keys(db: AsyncSession, user_id: int) -> List[AIApiKey]:
     """
     Return every API key belonging to the user, each annotated (as transient,
     non-persisted attributes) with a masked key preview and a human-readable
@@ -104,7 +104,7 @@ async def get_user_api_keys(db: AsyncSession, user_id: uuid.UUID) -> List[AIApiK
 
 async def get_active_key_details(
     db: AsyncSession,
-    user_id: uuid.UUID,
+    user_id: int,
     provider: str,
 ) -> Optional[dict]:
     """
@@ -134,7 +134,7 @@ async def get_active_key_details(
 
 async def create_api_key(
     db: AsyncSession,
-    user_id: uuid.UUID,
+    user_id: int,
     provider: str,
     label: str,
     api_key: str,
@@ -172,7 +172,7 @@ async def create_api_key(
 
 async def update_api_key(
     db: AsyncSession,
-    user_id: uuid.UUID,
+    user_id: int,
     key_id: uuid.UUID,
     label: Optional[str] = None,
     api_key: Optional[str] = None,
@@ -180,7 +180,7 @@ async def update_api_key(
     model_name: Optional[str] = None,
 ) -> AIApiKey:
     """Edit a key's label, secret value, base URL, and/or model name. Provider is immutable."""
-    existing = await ai_key_crud.get_one(db, filters={"id": key_id, "user_id": user_id})
+    existing = await ai_key_crud.get_by_uuid(db, key_id, extra_filters={"user_id": user_id})
     if not existing:
         raise HTTPException(status_code=404, detail="API key not found")
 
@@ -211,27 +211,27 @@ async def update_api_key(
     if not data:
         return existing
 
-    return await ai_key_crud.update(db, key_id, data)
+    return await ai_key_crud.update(db, existing.id, data)
 
 
 async def toggle_active_status(
     db: AsyncSession,
-    user_id: uuid.UUID,
+    user_id: int,
     key_id: uuid.UUID,
 ) -> AIApiKey:
-    existing = await ai_key_crud.get_one(db, filters={"id": key_id, "user_id": user_id})
+    existing = await ai_key_crud.get_by_uuid(db, key_id, extra_filters={"user_id": user_id})
     if not existing:
         raise HTTPException(status_code=404, detail="API key not found")
 
     new_status = not existing.is_active
     if new_status:
-        await _deactivate_other_keys(db, user_id, existing.provider, exclude_id=key_id)
+        await _deactivate_other_keys(db, user_id, existing.provider, exclude_id=existing.id)
 
-    return await ai_key_crud.update(db, key_id, {"is_active": new_status})
+    return await ai_key_crud.update(db, existing.id, {"is_active": new_status})
 
 
-async def delete_api_key(db: AsyncSession, user_id: uuid.UUID, key_id: uuid.UUID) -> None:
-    existing = await ai_key_crud.get_one(db, filters={"id": key_id, "user_id": user_id})
+async def delete_api_key(db: AsyncSession, user_id: int, key_id: uuid.UUID) -> None:
+    existing = await ai_key_crud.get_by_uuid(db, key_id, extra_filters={"user_id": user_id})
     if not existing:
         raise HTTPException(status_code=404, detail="API key not found")
-    await ai_key_crud.delete(db, key_id)
+    await ai_key_crud.delete(db, existing.id)

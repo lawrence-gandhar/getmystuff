@@ -17,7 +17,7 @@ datasource_crud = CRUDQueryBuilder(DataSource)
 # -----------------------------------
 async def create_config(
     db: AsyncSession,
-    user_id: uuid.UUID,
+    user_id: int,
     datasource_id: uuid.UUID,
     tool_name: str,
     table_name: str,
@@ -30,9 +30,8 @@ async def create_config(
     if not table_name:
         raise HTTPException(status_code=400, detail="table_name is required")
 
-    datasource = await datasource_crud.get_one(
-        db,
-        filters={"id": datasource_id, "user_id": user_id},
+    datasource = await datasource_crud.get_by_uuid(
+        db, datasource_id, extra_filters={"user_id": user_id},
     )
 
     if not datasource:
@@ -40,7 +39,7 @@ async def create_config(
 
     try:
         config = await config_crud.create(db, {
-            "datasource_id": datasource_id,
+            "datasource_id": datasource.id,
             "tool_name": tool_name,
             "table_name": table_name,
             "base_config": base_config or {},
@@ -66,7 +65,7 @@ async def create_config(
 # -----------------------------------
 async def create_config_with_subqueries(
     db: AsyncSession,
-    user_id: uuid.UUID,
+    user_id: int,
     datasource_id: uuid.UUID,
     tool_name: str,
     table_name: str,
@@ -80,9 +79,8 @@ async def create_config_with_subqueries(
     if not table_name:
         raise HTTPException(status_code=400, detail="table_name is required")
 
-    datasource = await datasource_crud.get_one(
-        db,
-        filters={"id": datasource_id, "user_id": user_id},
+    datasource = await datasource_crud.get_by_uuid(
+        db, datasource_id, extra_filters={"user_id": user_id},
     )
 
     if not datasource:
@@ -91,7 +89,7 @@ async def create_config_with_subqueries(
     try:
         # Create base config — flush to get its ID without committing yet
         base = DatasourceToolBaseConfig(
-            datasource_id=datasource_id,
+            datasource_id=datasource.id,
             tool_name=tool_name,
             table_name=table_name,
             base_config=base_config or {},
@@ -146,21 +144,20 @@ async def create_config_with_subqueries(
 # -----------------------------------
 async def check_tool_name_exists(
     db: AsyncSession,
-    user_id: uuid.UUID,
+    user_id: int,
     datasource_id: uuid.UUID,
     tool_name: str,
 ) -> bool:
     """Return True if a config with the given tool_name already exists for this datasource."""
-    datasource = await datasource_crud.get_one(
-        db,
-        filters={"id": datasource_id, "user_id": user_id},
+    datasource = await datasource_crud.get_by_uuid(
+        db, datasource_id, extra_filters={"user_id": user_id},
     )
     if not datasource:
         raise HTTPException(status_code=404, detail="Datasource not found")
 
     existing = await config_crud.get_one(
         db,
-        filters={"datasource_id": datasource_id, "tool_name": tool_name},
+        filters={"datasource_id": datasource.id, "tool_name": tool_name},
     )
     return existing is not None
 
@@ -170,11 +167,11 @@ async def check_tool_name_exists(
 # -----------------------------------
 async def delete_config(
     db: AsyncSession,
-    user_id: uuid.UUID,
+    user_id: int,
     config_id: uuid.UUID,
 ) -> bool:
 
-    config = await config_crud.get_one(db, filters={"id": config_id})
+    config = await config_crud.get_by_uuid(db, config_id)
 
     if not config:
         raise HTTPException(status_code=404, detail="Configuration not found")
@@ -187,4 +184,4 @@ async def delete_config(
     if not datasource:
         raise HTTPException(status_code=403, detail="Not authorized")
 
-    return await config_crud.delete(db, config_id)
+    return await config_crud.delete(db, config.id)

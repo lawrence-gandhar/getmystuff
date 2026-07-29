@@ -16,10 +16,11 @@ against user data — keeps the feature accurate without giving the LLM the
 ability to run arbitrary code against the application's data stores.
 """
 
+import asyncio
 import json
 import os
 import uuid
-from typing import Any, List, Optional, Tuple
+from typing import Any, Awaitable, Callable, List, Optional, Tuple, TypeVar
 
 import anthropic
 import openai
@@ -33,6 +34,7 @@ from app.db.db_utils import (
     CRUDQueryBuilder,
     build_mongo_uri,
     build_rdbms_url,
+    fetch_file_listing,
     fetch_file_preview,
     fetch_mongo_rows,
     fetch_rdbms_rows,
@@ -40,7 +42,9 @@ from app.db.db_utils import (
 from app.models.datasource import DataSource, DatasourceFile
 from app.models.prompt_history import PromptHistory
 from app.services.ai_settings_service import get_active_key_details
+from app.services.metadata_service import get_mongo_collections, get_rdbms_tables
 from app.utils.crypto import decrypt_password
+from app.utils.file_utils import FILE_BASED_TYPES
 
 datasource_crud = CRUDQueryBuilder(DataSource)
 prompt_history_crud = CRUDQueryBuilder(PromptHistory)
@@ -50,6 +54,19 @@ _SAMPLE_ROW_LIMIT = 500
 _MAX_PROMPT_LEN = 2000
 _VALID_TARGET_TYPES = {"file", "table", "collection"}
 _HISTORY_PAGE_SIZE = 10
+
+# Safety cap on how many tables/collections/files get profiled in a single
+# prompt (relevant to "whole datasource" targets, and to explicit multi-select
+# targets) — keeps prompt size/cost bounded. Truncation is always disclosed to
+# the AI via a "note" field rather than silently dropped.
+_MAX_TARGETS_PER_PROMPT = 8
+
+# Provider "queue exceeded" / 429 responses (e.g. Cerebras under load) are
+# transient — worth a couple of short retries before surfacing an error.
+_RATE_LIMIT_MAX_RETRIES = 2
+_RATE_LIMIT_BASE_DELAY_SECONDS = 1.0
+
+_T = TypeVar("_T")
 
 # Providers that actually power "Ask AI" today, checked in this order when a
 # user has more than one active key across different providers. Any other
@@ -135,12 +152,43 @@ def _build_data_profile(df: pd.DataFrame) -> dict:
     }
 
 
-async def _load_dataframe(
+async def _resolve_full_datasource_targets(
+    db: AsyncSession,
+    datasource: DataSource,
+) -> List[Tuple[str, str, Optional[int]]]:
+    """
+    Enumerate every object in a datasource for a "whole datasource" target,
+    as (item_target_type, name, file_id) tuples ready for `_load_one_target`.
+
+    File-based datasources are enumerated one entry per physical file
+    (labeled by original_filename), not per sheet — loading is keyed off
+    file_id regardless of sheet name, so sheet-level entries would imply a
+    granularity that doesn't actually exist at load time.
+    """
+    if datasource.db_type == "mongodb":
+        names = await get_mongo_collections(datasource)
+        return [("collection", name, None) for name in names]
+
+    if datasource.db_type in FILE_BASED_TYPES:
+        result = await db.execute(
+            select(DatasourceFile).where(
+                DatasourceFile.datasource_id == datasource.id,
+                DatasourceFile.is_active == True,  # noqa: E712
+            )
+        )
+        files = result.scalars().all()
+        return [("file", f.original_filename, f.id) for f in files]
+
+    names = await get_rdbms_tables(datasource)
+    return [("table", name, None) for name in names]
+
+
+async def _load_one_target(
     db: AsyncSession,
     datasource: DataSource,
     target_type: str,
     target_name: str,
-    file_id: Optional[uuid.UUID],
+    file_id: Optional[int],
 ) -> pd.DataFrame:
     if target_type == "file":
         if not file_id:
@@ -188,7 +236,7 @@ async def _load_dataframe(
 
 async def _resolve_active_provider(
     db: AsyncSession,
-    user_id: uuid.UUID,
+    user_id: int,
 ) -> Tuple[str, str, Optional[str], Optional[str]]:
     """
     Pick which configured AI provider should handle this prompt.
@@ -216,42 +264,61 @@ async def _resolve_active_provider(
     )
 
 
-def _build_prompts(target_name: str, profile: dict, prompt: str) -> Tuple[str, str]:
+def _build_prompts(target_label: str, profiles: dict, prompt: str) -> Tuple[str, str]:
     system_prompt = (
         "You are a data analyst embedded in the GetMyStuff analytics platform. "
         "You are given a statistical profile computed directly from the user's "
-        "real dataset: exact sampled row count, computed aggregate statistics "
-        "per column, top categorical values, and a small row sample. Never "
-        "guess or fabricate a number — every figure in your answer must come "
-        "from the supplied profile. If the profile does not contain enough "
+        "real dataset(s) — possibly more than one table/collection/file: exact "
+        "sampled row count, computed aggregate statistics per column, top "
+        "categorical values, and a small row sample, for each one. Never guess "
+        "or fabricate a number — every figure in your answer must come from "
+        "the supplied profile(s). If the profile does not contain enough "
         "information to answer precisely, say so explicitly instead of "
         "estimating. When a small table would directly answer the question, "
         "include one; otherwise omit it."
     )
     user_content = (
-        f"Dataset: {target_name}\n\n"
-        f"Data profile (JSON):\n{json.dumps(profile, default=str)}\n\n"
+        f"Dataset(s): {target_label}\n\n"
+        f"Data profile (JSON):\n{json.dumps(profiles, default=str)}\n\n"
         f"Question: {prompt}"
     )
     return system_prompt, user_content
 
 
 # --------------------------------------------------------------------------
+# Rate-limit retry — shared by both provider calls below
+# --------------------------------------------------------------------------
+
+async def _with_rate_limit_retry(call: Callable[[], Awaitable[_T]]) -> _T:
+    """Retry `call` on a 429 rate-limit response, with exponential backoff.
+
+    Any other error propagates immediately on the first attempt.
+    """
+    for attempt in range(_RATE_LIMIT_MAX_RETRIES + 1):
+        try:
+            return await call()
+        except (anthropic.RateLimitError, openai.RateLimitError):
+            if attempt == _RATE_LIMIT_MAX_RETRIES:
+                raise
+            await asyncio.sleep(_RATE_LIMIT_BASE_DELAY_SECONDS * (2 ** attempt))
+
+
+# --------------------------------------------------------------------------
 # Anthropic (Claude) call
 # --------------------------------------------------------------------------
 
-async def _call_claude(api_key: str, prompt: str, target_name: str, profile: dict) -> AnalyticsResult:
+async def _call_claude(api_key: str, prompt: str, target_label: str, profiles: dict) -> AnalyticsResult:
     client = anthropic.AsyncAnthropic(api_key=api_key)
-    system_prompt, user_content = _build_prompts(target_name, profile, prompt)
+    system_prompt, user_content = _build_prompts(target_label, profiles, prompt)
 
     try:
-        response = await client.messages.parse(
+        response = await _with_rate_limit_retry(lambda: client.messages.parse(
             model=_ANTHROPIC_MODEL,
             max_tokens=4096,
             system=system_prompt,
             messages=[{"role": "user", "content": user_content}],
             output_format=AnalyticsResult,
-        )
+        ))
     except anthropic.APIConnectionError:
         raise HTTPException(
             status_code=502,
@@ -285,8 +352,8 @@ async def _call_openai_compatible(
     base_url: Optional[str],
     model_name: Optional[str],
     prompt: str,
-    target_name: str,
-    profile: dict,
+    target_label: str,
+    profiles: dict,
 ) -> AnalyticsResult:
     if not model_name:
         raise HTTPException(
@@ -299,7 +366,7 @@ async def _call_openai_compatible(
         )
 
     client = openai.AsyncOpenAI(api_key=api_key, base_url=base_url or None)
-    system_prompt, user_content = _build_prompts(target_name, profile, prompt)
+    system_prompt, user_content = _build_prompts(target_label, profiles, prompt)
     system_prompt += (
         "\n\nRespond with ONLY a single valid JSON object — no markdown code "
         "fences, no commentary before or after — matching exactly this shape: "
@@ -308,14 +375,14 @@ async def _call_openai_compatible(
     )
 
     try:
-        response = await client.chat.completions.create(
+        response = await _with_rate_limit_retry(lambda: client.chat.completions.create(
             model=model_name,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_content},
             ],
             response_format={"type": "json_object"},
-        )
+        ))
     except openai.APIConnectionError:
         raise HTTPException(
             status_code=502,
@@ -336,17 +403,78 @@ async def _call_openai_compatible(
 
 async def _call_ai(
     db: AsyncSession,
-    user_id: uuid.UUID,
+    user_id: int,
     prompt: str,
-    target_name: str,
-    profile: dict,
+    target_label: str,
+    profiles: dict,
 ) -> AnalyticsResult:
     provider, api_key, base_url, model_name = await _resolve_active_provider(db, user_id)
 
     if provider == "anthropic":
-        return await _call_claude(api_key, prompt, target_name, profile)
+        return await _call_claude(api_key, prompt, target_label, profiles)
 
-    return await _call_openai_compatible(api_key, base_url, model_name, prompt, target_name, profile)
+    return await _call_openai_compatible(api_key, base_url, model_name, prompt, target_label, profiles)
+
+
+async def run_grounded_prompt(
+    db: AsyncSession,
+    user_id: int,
+    datasource: DataSource,
+    target_type: str,
+    target_names: List[str],
+    file_ids: List[int],
+    prompt: str,
+) -> AnalyticsResult:
+    """
+    Load a real data sample for one or more targets, compute each one's
+    statistical profile, and ask the resolved AI provider to answer `prompt`
+    grounded in those profiles.
+
+    Shared by both the authenticated "Ask AI" flow (generate_analytics, below)
+    and the public chatbot widget flow (chatbot_service.answer_message), so
+    the actual data-loading / grounding / AI-calling logic lives in one place.
+    `target_type == "datasource"` resolves to every object currently in the
+    datasource; otherwise `target_names`/`file_ids` are used as given.
+    """
+    if target_type == "datasource":
+        targets = await _resolve_full_datasource_targets(db, datasource)
+    elif target_type == "file":
+        # Pad missing file_ids rather than silently dropping targets, so a
+        # caller misuse (name given without a matching file_id) still surfaces
+        # _load_one_target's "file_id is required for file targets" error.
+        padded_file_ids = list(file_ids) + [None] * (len(target_names) - len(file_ids))
+        targets = [("file", name, fid) for name, fid in zip(target_names, padded_file_ids)]
+    else:
+        targets = [(target_type, name, None) for name in target_names]
+
+    truncated = len(targets) > _MAX_TARGETS_PER_PROMPT
+    targets = targets[:_MAX_TARGETS_PER_PROMPT]
+
+    profiles: List[dict] = []
+    for item_type, name, file_id in targets:
+        df = await _load_one_target(db, datasource, item_type, name, file_id)
+        if df.empty:
+            continue
+        profiles.append({"target": name, **_build_data_profile(df)})
+
+    if not profiles:
+        raise HTTPException(
+            status_code=400,
+            detail="No data is available for this dataset yet — nothing to analyze.",
+        )
+
+    combined_profile: dict = {"targets": profiles}
+    if truncated:
+        combined_profile["note"] = (
+            f"This datasource has more than {_MAX_TARGETS_PER_PROMPT} objects; "
+            f"only the first {_MAX_TARGETS_PER_PROMPT} are included above. Ask "
+            "about a specific table/file by name for full coverage."
+        )
+
+    names = [p["target"] for p in profiles]
+    target_label = names[0] if len(names) == 1 else f"{len(names)} datasets ({', '.join(names)})"
+
+    return await _call_ai(db, user_id, prompt, target_label, combined_profile)
 
 
 # --------------------------------------------------------------------------
@@ -355,7 +483,7 @@ async def _call_ai(
 
 async def generate_analytics(
     db: AsyncSession,
-    user_id: uuid.UUID,
+    user_id: int,
     datasource_id: uuid.UUID,
     target_type: str,
     target_name: str,
@@ -378,29 +506,42 @@ async def generate_analytics(
     if not target_name:
         raise HTTPException(status_code=400, detail="target_name is required")
 
-    datasource = await datasource_crud.get_one(
-        db, filters={"id": datasource_id, "user_id": user_id}
+    datasource = await datasource_crud.get_by_uuid(
+        db, datasource_id, extra_filters={"user_id": user_id}
     )
     if not datasource:
         raise HTTPException(status_code=404, detail="Datasource not found")
 
-    try:
-        df = await _load_dataframe(db, datasource, target_type, target_name, file_id)
-        if df.empty:
-            raise HTTPException(
-                status_code=400,
-                detail="No data is available for this dataset yet — nothing to analyze.",
+    resolved_file_id: Optional[int] = None
+    if file_id:
+        file_result = await db.execute(
+            select(DatasourceFile).where(
+                DatasourceFile.uuid == file_id,
+                DatasourceFile.datasource_id == datasource.id,
             )
+        )
+        file_obj = file_result.scalar_one_or_none()
+        if not file_obj:
+            raise HTTPException(status_code=404, detail="File not found")
+        resolved_file_id = file_obj.id
 
-        profile = _build_data_profile(df)
-        result = await _call_ai(db, user_id, prompt, target_name, profile)
+    try:
+        result = await run_grounded_prompt(
+            db,
+            user_id,
+            datasource,
+            target_type,
+            target_names=[target_name],
+            file_ids=[resolved_file_id] if resolved_file_id else [],
+            prompt=prompt,
+        )
 
         history = await prompt_history_crud.create(db, {
             "user_id": user_id,
-            "datasource_id": datasource_id,
+            "datasource_id": datasource.id,
             "target_type": target_type,
             "target_name": target_name,
-            "file_id": file_id,
+            "file_id": resolved_file_id,
             "prompt": prompt,
             "status": "success",
             "summary": result.summary,
@@ -412,10 +553,10 @@ async def generate_analytics(
     except HTTPException as exc:
         await prompt_history_crud.create(db, {
             "user_id": user_id,
-            "datasource_id": datasource_id,
+            "datasource_id": datasource.id,
             "target_type": target_type,
             "target_name": target_name,
-            "file_id": file_id,
+            "file_id": resolved_file_id,
             "prompt": prompt,
             "status": "error",
             "error_message": str(exc.detail),
@@ -425,18 +566,24 @@ async def generate_analytics(
 
 async def get_prompt_history(
     db: AsyncSession,
-    user_id: uuid.UUID,
+    user_id: int,
     datasource_id: uuid.UUID,
     target_type: str,
     target_name: str,
 ) -> List[PromptHistory]:
     """Return the most recent AI analytics runs for a given datasource target."""
 
+    datasource = await datasource_crud.get_by_uuid(
+        db, datasource_id, extra_filters={"user_id": user_id}
+    )
+    if not datasource:
+        return []
+
     result = await db.execute(
         select(PromptHistory)
         .where(
             PromptHistory.user_id == user_id,
-            PromptHistory.datasource_id == datasource_id,
+            PromptHistory.datasource_id == datasource.id,
             PromptHistory.target_type == target_type,
             PromptHistory.target_name == target_name,
         )

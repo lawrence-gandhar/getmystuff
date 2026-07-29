@@ -1,18 +1,26 @@
+import uuid as uuid_pkg
+
 from sqlalchemy.orm import Mapped, mapped_column
-from sqlalchemy import String, Boolean, DateTime, func
+from sqlalchemy import BigInteger, String, Boolean, DateTime, func
 from sqlalchemy.dialects.postgresql import UUID
-import uuid
 
 from app.db.base import Base
 
 class UserSubscription(Base):
     __tablename__ = "user_subscriptions"
 
-    # UUID primary key (real UUID type)
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+    id: Mapped[int] = mapped_column(
+        BigInteger,
         primary_key=True,
-        default=uuid.uuid4
+        autoincrement=True,
+    )
+
+    uuid: Mapped[uuid_pkg.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        default=uuid_pkg.uuid4,
+        unique=True,
+        index=True,
+        nullable=False,
     )
 
     subscription_name: Mapped[str] = mapped_column(

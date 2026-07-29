@@ -1,5 +1,4 @@
 import asyncio
-import uuid
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,7 +22,6 @@ async def create_fake_user():
             return
 
         fake_user = User(
-            id=uuid.uuid4(),
             email=email,
             password=hash_password("admin123"),
             role="admin",

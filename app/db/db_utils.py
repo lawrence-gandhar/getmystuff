@@ -494,6 +494,20 @@ class CRUDQueryBuilder:
         result = await db.execute(query)
         return result.scalar_one_or_none()
 
+    async def get_by_uuid(
+        self,
+        db: AsyncSession,
+        record_uuid: Any,
+        extra_filters: Dict[str, Any] | None = None,
+    ) -> T | None:
+        """
+        Resolve a record by its public ``uuid`` column rather than the
+        internal bigint primary key — routes accept and expose ``uuid``
+        (see CLAUDE.md "Public identifiers"), never the raw ``id``.
+        """
+        filters = {"uuid": record_uuid, **(extra_filters or {})}
+        return await self.get_one(db, filters=filters)
+
     async def get_many(
         self,
         db: AsyncSession,

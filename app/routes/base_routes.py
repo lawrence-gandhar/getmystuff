@@ -41,8 +41,8 @@ class AuthController(Controller):
         if not user:
             raise HTTPException(status_code=401, detail="Invalid credentials")
 
-        access_token = create_access_token(str(user.id))
-        refresh_token = create_refresh_token(str(user.id))
+        access_token = create_access_token(str(user.uuid))
+        refresh_token = create_refresh_token(str(user.uuid))
 
         response = Redirect(path="/user/dashboard")
 
@@ -63,9 +63,9 @@ class AuthController(Controller):
         if payload.get("type") != "refresh":
             raise HTTPException(status_code=401)
 
-        user_id = payload.get("sub")
+        user_uuid = payload.get("sub")
 
-        new_access_token = create_access_token(user_id)
+        new_access_token = create_access_token(user_uuid)
 
         response = Redirect(path="/dashboard")
         response.set_cookie("access_token", new_access_token, httponly=True)

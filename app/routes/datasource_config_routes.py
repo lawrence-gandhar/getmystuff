@@ -1,6 +1,6 @@
 import re
-import uuid
 import json
+import uuid
 
 from litestar import Controller, get, post, delete
 from litestar.response import Response, Template
@@ -55,13 +55,13 @@ class DataSourceConfigurations(Controller):
             },
         )
     
-    @get("/{datasource_id:str}/details")
+    @get("/{datasource_id:uuid}/details")
     async def get_datasource_details(
         self,
         db: AsyncSession,
         request: Request,
         user: User,
-        datasource_id: str
+        datasource_id: uuid.UUID
     ) -> dict:
         
         data = await get_datasource_objects(
@@ -75,11 +75,11 @@ class DataSourceConfigurations(Controller):
         }
         
 
-    @get("/{datasource_id:str}/{table_name:str}/configuration")
+    @get("/{datasource_id:uuid}/{table_name:str}/configuration")
     async def get_table_configuration(
         self,
         request: Request,
-        datasource_id: str,
+        datasource_id: uuid.UUID,
         table_name: str,
         db: AsyncSession,
         user: User,

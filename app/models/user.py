@@ -1,18 +1,28 @@
+import uuid as uuid_pkg
+
 from sqlalchemy.orm import Mapped, mapped_column
-from sqlalchemy import String, Boolean, DateTime, func, ForeignKey
+from sqlalchemy import BigInteger, String, Boolean, DateTime, func, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID
-import uuid
 
 from app.db.base import Base
 
 class User(Base):
     __tablename__ = "users"
 
-    # UUID primary key (real UUID type)
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+    id: Mapped[int] = mapped_column(
+        BigInteger,
         primary_key=True,
-        default=uuid.uuid4
+        autoincrement=True,
+    )
+
+    # Public identifier — used in URLs/routes instead of the internal
+    # bigint id (see CLAUDE.md "Public identifiers" rule).
+    uuid: Mapped[uuid_pkg.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        default=uuid_pkg.uuid4,
+        unique=True,
+        index=True,
+        nullable=False,
     )
 
     # Email (indexed + unique)
@@ -59,17 +69,23 @@ class User(Base):
 class UserSubscription(Base):
     __tablename__ = "user_subscriptions"
 
-    # UUID primary key (real UUID type)
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+    id: Mapped[int] = mapped_column(
+        BigInteger,
         primary_key=True,
-        default=uuid.uuid4
+        autoincrement=True,
     )
 
-    subscription_id: Mapped[uuid.UUID] = mapped_column(
+    uuid: Mapped[uuid_pkg.UUID] = mapped_column(
         UUID(as_uuid=True),
+        default=uuid_pkg.uuid4,
+        unique=True,
+        index=True,
+        nullable=False,
+    )
+
+    subscription_id: Mapped[int] = mapped_column(
+        BigInteger,
         ForeignKey("users.id", ondelete="CASCADE"),
-        default=uuid.uuid4,
         index=True
     )
 

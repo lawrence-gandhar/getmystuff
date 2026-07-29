@@ -1,0 +1,80 @@
+{% for key in keys %}
+{% set target_summary = "Full Datasource" if key.target_type == "datasource" else key.target_names | join(", ") %}
+<tr id="chatbot-key-row-{{ key.uuid }}">
+    <td class="fw-semibold">{{ key.name }}</td>
+    <td>
+        <span class="badge bg-primary-subtle text-primary-emphasis border border-primary-subtle">
+            {{ key.target_type | upper }}
+        </span>
+        {% if key.target_type == "datasource" %}
+            <span class="small text-muted">Full Datasource</span>
+        {% else %}
+            <span class="small text-muted" title="{{ target_summary }}">
+                {{ key.target_names[:3] | join(", ") }}{% if key.target_names | length > 3 %} +{{ key.target_names | length - 3 }} more{% endif %}
+            </span>
+        {% endif %}
+    </td>
+    <td>
+        <code class="small">{{ key.api_key }}</code>
+    </td>
+    <td class="small text-muted">
+        {% for origin in key.allowed_origins %}
+            <div>{{ origin }}</div>
+        {% endfor %}
+    </td>
+    <td>
+        {% if key.is_active %}
+            <span class="badge bg-success">Active</span>
+        {% else %}
+            <span class="badge bg-secondary">Inactive</span>
+        {% endif %}
+    </td>
+    <td>
+        <div class="d-flex flex-wrap gap-1">
+            <button
+                class="btn btn-sm btn-outline-info"
+                type="button"
+                onclick="openHistoryPanel('{{ key.uuid }}', '{{ key.name }}')"
+            >
+                <i class="las la-history"></i>
+            </button>
+            <button
+                class="btn btn-sm {% if key.is_active %}btn-outline-warning{% else %}btn-outline-success{% endif %}"
+                hx-post="/chatbot-settings/{{ key.uuid }}/toggle-active"
+                hx-target="#chatbotKeysTableBody"
+                hx-swap="innerHTML"
+            >
+                {% if key.is_active %}Deactivate{% else %}Activate{% endif %}
+            </button>
+            <button
+                class="btn btn-sm btn-outline-secondary"
+                type="button"
+                onclick="openEditKeyForm('{{ key.uuid }}', '{{ key.name }}', {{ key.allowed_origins | tojson }}, {{ target_summary | tojson }})"
+            >
+                Edit
+            </button>
+            <a
+                class="btn btn-sm btn-outline-primary"
+                href="/chatbot-settings/{{ key.uuid }}/widget-settings"
+            >
+                <i class="las la-palette"></i> Widget Settings
+            </a>
+            <button
+                class="btn btn-sm btn-outline-danger"
+                hx-post="/chatbot-settings/{{ key.uuid }}/delete"
+                hx-target="#chatbotKeysTableBody"
+                hx-swap="innerHTML"
+                hx-confirm="Delete chatbot key '{{ key.name }}'? Any widget using it will stop working. This cannot be undone."
+            >
+                Delete
+            </button>
+        </div>
+    </td>
+</tr>
+{% else %}
+<tr>
+    <td colspan="6" class="text-center text-muted py-4">
+        <i class="las la-comments fs-4 d-block mb-1"></i> No chatbot widgets created yet.
+    </td>
+</tr>
+{% endfor %}

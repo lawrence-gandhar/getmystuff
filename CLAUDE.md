@@ -170,6 +170,58 @@ All database errors must be wrapped into custom exceptions.
 
 
 --------------------------------------------------
+PRIMARY KEYS & PUBLIC IDENTIFIERS
+--------------------------------------------------
+
+Every model has two identifier columns with strictly separate jobs:
+
+    id    BigInteger, primary key, autoincrement
+          Internal only. Used for the PK itself and for every foreign key
+          between tables (fast joins, small index footprint). NEVER placed
+          in a URL, form field, JSON response, or any other value sent to
+          the browser.
+
+    uuid  UUID (as_uuid=True), unique, indexed, default=uuid.uuid4
+          Public identifier. This is what routes accept in path params and
+          what services return to templates/JSON — the only thing a client
+          ever sees or submits back to identify a row.
+
+Example column pattern (every model repeats this):
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    uuid: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), default=uuid.uuid4, unique=True, index=True, nullable=False,
+    )
+
+Rules:
+
+1. Route path params that identify a row use the `:uuid` Litestar path type
+   and a `uuid.UUID` type hint — never `:int` / `int` for a model's public id.
+       @get("/{datasource_id:uuid}")
+       async def get_objects(self, datasource_id: uuid.UUID, ...): ...
+
+2. Services accept the public `uuid` for whichever row the caller is acting
+   on, resolve it to the row via `CRUDQueryBuilder.get_by_uuid()`, then use
+   `row.id` (bigint) for everything else in that function — related-table
+   filters, FK values on new rows, `CRUDQueryBuilder.update()/.delete()`
+   (which take the bigint PK).
+       datasource = await datasource_crud.get_by_uuid(db, datasource_id, extra_filters={"user_id": user_id})
+       if not datasource:
+           raise HTTPException(status_code=404, detail="Datasource not found")
+       # from here on, use datasource.id for internal queries/FKs
+
+3. Templates and any JSON payload built for the browser (HTMX targets,
+   hx-get/hx-post/hx-delete URLs, `<option value>`, hidden form fields,
+   dropdown data, DOM element ids) use `.uuid`, never `.id`.
+
+4. This applies to every model without exception — including ones that
+   don't have a route yet, so a future route never has to retrofit this.
+
+5. If existing code still exposes a bigint `id` anywhere (a route, a
+   template, a JSON key), that is a bug — fix it to use `uuid` rather than
+   working around it.
+
+
+--------------------------------------------------
 CUSTOM EXCEPTIONS
 --------------------------------------------------
 
