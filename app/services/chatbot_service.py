@@ -366,6 +366,8 @@ _WIDGET_SCRIPT_TEMPLATE = r"""
       "display:flex;justify-content:space-between;align-items:center;font-size:14px;gap:8px;}" +
       ".gms-chatbot-header-title{display:flex;align-items:center;gap:8px;overflow:hidden;}" +
       ".gms-chatbot-header-logo{width:22px;height:22px;border-radius:50%;object-fit:cover;flex:none;}" +
+      ".gms-chatbot-header-actions{display:flex;align-items:center;gap:10px;flex:none;}" +
+      ".gms-chatbot-restart{background:none;border:none;color:#fff;font-size:16px;cursor:pointer;line-height:1;opacity:.9;}" +
       ".gms-chatbot-close{background:none;border:none;color:#fff;font-size:18px;cursor:pointer;line-height:1;}" +
       ".gms-chatbot-messages{position:relative;flex:1;overflow-y:auto;padding:12px;" + messagesBg + "}" +
       ".gms-chatbot-watermark{position:absolute;inset:0;background-image:url(" + JSON.stringify(cfg.watermark_image_url) + ");" +
@@ -425,7 +427,10 @@ _WIDGET_SCRIPT_TEMPLATE = r"""
     panel.className = "gms-chatbot-panel";
     panel.innerHTML =
       '<div class="gms-chatbot-header"><span class="gms-chatbot-header-title"></span>' +
-      '<button class="gms-chatbot-close" aria-label="Close chat">×</button></div>' +
+      '<div class="gms-chatbot-header-actions">' +
+      '<button class="gms-chatbot-restart" aria-label="Restart conversation" title="Restart conversation">&#8635;</button>' +
+      '<button class="gms-chatbot-close" aria-label="Close chat">×</button>' +
+      "</div></div>" +
       '<div class="gms-chatbot-messages"></div>' +
       '<div class="gms-chatbot-typing" style="display:none;">Thinking…</div>' +
       '<div class="gms-chatbot-input-row">' +
@@ -549,6 +554,83 @@ _WIDGET_SCRIPT_TEMPLATE = r"""
     appendBotSideMessage(container, bubble, cfg);
   }
 
+  // Renders a Menu/Buttons or Dropdown flow prompt: the prompt text as a
+  // normal bot bubble, followed by clickable option chips (or a select +
+  // confirm for dropdown). Clicking/confirming re-sends via onSelect with
+  // the option's value, reusing send()'s own network/loading-state plumbing.
+  function renderOptionsMessage(container, data, cfg, onSelect) {
+    if (data.text) renderBotMessage(container, { summary: data.text }, cfg);
+
+    var options = data.options || [];
+    var wrap = document.createElement("div");
+    wrap.className = "gms-chatbot-msg-row";
+
+    if (data.type === "dropdown") {
+      var select = document.createElement("select");
+      select.className = "gms-chatbot-input";
+      select.style.marginRight = "6px";
+      options.forEach(function (opt) {
+        var optionEl = document.createElement("option");
+        optionEl.value = opt.value;
+        optionEl.textContent = opt.label;
+        select.appendChild(optionEl);
+      });
+      var confirmBtn = document.createElement("button");
+      confirmBtn.className = "gms-chatbot-send";
+      confirmBtn.textContent = "Select";
+      confirmBtn.addEventListener("click", function () {
+        wrap.remove();
+        onSelect(select.value, select.selectedOptions[0] ? select.selectedOptions[0].textContent : select.value);
+      });
+      wrap.appendChild(select);
+      wrap.appendChild(confirmBtn);
+    } else {
+      options.forEach(function (opt) {
+        var btn = document.createElement("button");
+        btn.className = "gms-chatbot-send";
+        btn.style.marginRight = "6px";
+        btn.style.marginBottom = "6px";
+        btn.textContent = opt.label;
+        btn.addEventListener("click", function () {
+          wrap.remove();
+          onSelect(opt.value, opt.label);
+        });
+        wrap.appendChild(btn);
+      });
+    }
+
+    container.appendChild(wrap);
+  }
+
+  function newSessionToken() {
+    return (window.crypto && window.crypto.randomUUID) ? window.crypto.randomUUID() : String(Date.now()) + Math.random().toString(36).slice(2);
+  }
+
+  function getSessionId() {
+    var storageKey = "gms_chatbot_session_" + API_KEY;
+    try {
+      var existing = window.localStorage.getItem(storageKey);
+      if (existing) return existing;
+      var fresh = newSessionToken();
+      window.localStorage.setItem(storageKey, fresh);
+      return fresh;
+    } catch (e) {
+      return ""; // localStorage unavailable (e.g. private mode) — flows just won't track state
+    }
+  }
+
+  // Mints a brand-new session token so the next /message call starts this
+  // visitor's flow over from its Start node (see the widget's Restart
+  // button) — the old session row, if any, is just left behind unused
+  // rather than deleted, matching this feature's lazy-expiry philosophy.
+  function resetSessionId() {
+    try {
+      window.localStorage.setItem("gms_chatbot_session_" + API_KEY, newSessionToken());
+    } catch (e) {
+      // localStorage unavailable — getSessionId() already no-ops in this case too.
+    }
+  }
+
   function init(cfg) {
     injectStyle(cfg);
     var dom = buildDom(cfg);
@@ -557,6 +639,7 @@ _WIDGET_SCRIPT_TEMPLATE = r"""
     var inputEl = dom.panel.querySelector(".gms-chatbot-input");
     var sendBtn = dom.panel.querySelector(".gms-chatbot-send");
     var closeBtn = dom.panel.querySelector(".gms-chatbot-close");
+    var restartBtn = dom.panel.querySelector(".gms-chatbot-restart");
 
     var welcomed = false;
     var idleShown = false;
@@ -604,13 +687,34 @@ _WIDGET_SCRIPT_TEMPLATE = r"""
         dom.panel.classList.remove("gms-open");
       }
     });
+    restartBtn.addEventListener("click", function () {
+      clearIdleTimer();
+      resetSessionId();
+      messagesEl.innerHTML = "";
+      welcomed = false;
+      idleShown = false;
+      if (cfg.welcome_text) {
+        welcomed = true;
+        renderBotMessage(messagesEl, { summary: cfg.welcome_text }, cfg);
+      }
+      inputEl.focus();
+      armIdleTimer();
+    });
 
-    function send() {
-      var text = inputEl.value.trim();
-      if (!text) return;
+    // opts: { text, selectedValue, displayText, skipUserBubble } — free-text
+    // turns pass just text; a button/dropdown reply passes selectedValue
+    // (sent to the server) plus displayText (what the visitor "said", shown
+    // in their own chat bubble).
+    function send(opts) {
+      opts = opts || {};
+      var text = opts.text != null ? opts.text : inputEl.value.trim();
+      var selectedValue = opts.selectedValue;
+      if (!text && !selectedValue) return;
 
       clearIdleTimer();
-      renderUserMessage(messagesEl, text);
+      if (!opts.skipUserBubble) {
+        renderUserMessage(messagesEl, opts.displayText || text);
+      }
       inputEl.value = "";
       inputEl.disabled = true;
       sendBtn.disabled = true;
@@ -620,14 +724,19 @@ _WIDGET_SCRIPT_TEMPLATE = r"""
       fetch(API_BASE + "/public/chatbot/message", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ api_key: API_KEY, message: text })
+        body: JSON.stringify({
+          api_key: API_KEY,
+          message: text,
+          session_id: getSessionId(),
+          selected_value: selectedValue
+        })
       })
         .then(function (r) {
           return r.json().then(function (data) { return { ok: r.ok, data: data }; });
         })
         .then(function (res) {
           if (res.ok && res.data && res.data.status === "success") {
-            renderBotMessage(messagesEl, res.data, cfg);
+            renderResponse(res.data);
           } else {
             renderErrorMessage(messagesEl, (res.data && res.data.message) || "Something went wrong. Please try again.");
           }
@@ -645,7 +754,25 @@ _WIDGET_SCRIPT_TEMPLATE = r"""
         });
     }
 
-    sendBtn.addEventListener("click", send);
+    // Dispatches a successful /message response by its `type` — additive on
+    // top of the pre-existing plain-text rendering, so a chatbot with no
+    // active flow (type always "text") behaves exactly as before.
+    function renderResponse(data) {
+      var type = data.type || "text";
+      if (type === "buttons" || type === "dropdown") {
+        renderOptionsMessage(messagesEl, data, cfg, function (value, label) {
+          send({ text: "", selectedValue: value, displayText: label });
+        });
+      } else if (type === "text_prompt") {
+        renderBotMessage(messagesEl, { summary: data.text || "" }, cfg);
+      } else if (type === "flow_ended") {
+        // No special rendering — input stays enabled for the visitor to keep chatting.
+      } else {
+        renderBotMessage(messagesEl, data, cfg);
+      }
+    }
+
+    sendBtn.addEventListener("click", function () { send(); });
     inputEl.addEventListener("keydown", function (e) {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();

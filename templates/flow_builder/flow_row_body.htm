@@ -1,0 +1,48 @@
+{% for flow in flows %}
+<tr id="flow-row-{{ flow.uuid }}">
+    <td class="fw-semibold">{{ flow.name }}</td>
+    <td>
+        {% if flow.is_active %}
+            <span class="badge bg-success">Active</span>
+        {% else %}
+            <span class="badge bg-secondary">Draft</span>
+        {% endif %}
+    </td>
+    <td class="small text-muted">{{ flow.updated_at.strftime("%Y-%m-%d %H:%M") if flow.updated_at else "" }}</td>
+    <td>
+        <div class="d-flex flex-wrap gap-1">
+            <a
+                class="btn btn-sm btn-outline-primary"
+                href="/flow-builder/{{ key_id }}/{{ flow.uuid }}/edit"
+            >
+                <i class="las la-project-diagram"></i> Edit
+            </a>
+            {% if not flow.is_active %}
+            <button
+                class="btn btn-sm btn-outline-success"
+                hx-post="/flow-builder/{{ key_id }}/{{ flow.uuid }}/activate"
+                hx-target="#flowsTableBody"
+                hx-swap="innerHTML"
+            >
+                Activate
+            </button>
+            {% endif %}
+            <button
+                class="btn btn-sm btn-outline-danger"
+                hx-post="/flow-builder/{{ key_id }}/{{ flow.uuid }}/delete"
+                hx-target="#flowsTableBody"
+                hx-swap="innerHTML"
+                hx-confirm="Delete flow '{{ flow.name }}'? This cannot be undone."
+            >
+                Delete
+            </button>
+        </div>
+    </td>
+</tr>
+{% else %}
+<tr>
+    <td colspan="4" class="text-center text-muted py-4">
+        <i class="las la-project-diagram fs-4 d-block mb-1"></i> No flows created yet.
+    </td>
+</tr>
+{% endfor %}

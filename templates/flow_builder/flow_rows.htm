@@ -1,0 +1,6 @@
+<div id="flow-builder-response" hx-swap-oob="true" class="mb-3">
+    {% if error %}
+    <div class="alert alert-danger" data-success="false">{{ error }}</div>
+    {% endif %}
+</div>
+{% include "flow_builder/flow_row_body.htm" %}

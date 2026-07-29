@@ -1,0 +1,230 @@
+{% extends "base/layout.htm" %}
+{% block title %}{{ flow.name }} | Flow Builder{% endblock %}
+
+{% block extra_css %}
+<style>
+#flow-canvas-wrapper {
+    position: relative;
+    width: 100%;
+    height: 72vh;
+    overflow: auto;
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+    background-color: #f8f9fa;
+    background-image: radial-gradient(#dee2e6 1px, transparent 1px);
+    background-size: 20px 20px;
+}
+#flow-edges {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 3000px;
+    height: 2000px;
+    pointer-events: none;
+}
+#flow-edges path {
+    fill: none;
+    stroke: #6c757d;
+    stroke-width: 2;
+    pointer-events: stroke;
+    cursor: pointer;
+}
+#flow-edges path.fb-edge-selected {
+    stroke: #dc3545;
+    stroke-width: 3;
+}
+#flow-canvas {
+    position: relative;
+    width: 3000px;
+    height: 2000px;
+}
+.flow-node {
+    position: absolute;
+    width: 190px;
+    background: #fff;
+    border: 2px solid #adb5bd;
+    border-radius: 8px;
+    box-shadow: 0 1px 4px rgba(0,0,0,.08);
+    font-size: 12px;
+    user-select: none;
+    cursor: default;
+}
+.flow-node.fb-node-selected {
+    border-color: #0d6efd;
+    box-shadow: 0 0 0 3px rgba(13,110,253,.25);
+}
+.flow-node-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px;
+    border-bottom: 1px solid #e9ecef;
+    font-weight: 600;
+    cursor: grab;
+    background: #f1f3f5;
+    border-radius: 6px 6px 0 0;
+}
+.flow-node-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.flow-node-header-icons { display: flex; align-items: center; gap: 4px; flex: none; }
+.flow-node-icon-btn {
+    border: none; background: none; color: #6c757d; font-size: 13px; line-height: 1;
+    padding: 2px 3px; cursor: pointer; border-radius: 3px;
+}
+.flow-node-icon-btn:hover { color: #0d6efd; background: rgba(13,110,253,.1); }
+.flow-node-icon-btn-danger:hover { color: #dc3545; background: rgba(220,53,69,.1); }
+.flow-node-body {
+    padding: 6px 8px;
+    min-height: 24px;
+    color: #495057;
+    cursor: pointer;
+}
+.flow-node-preview {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+}
+.flow-node-options {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-top: 6px;
+}
+.flow-node-option-row {
+    position: relative;
+    display: flex;
+    align-items: center;
+    background: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+    padding: 4px 16px 4px 8px;
+}
+.flow-node-option-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11px;
+}
+.flow-node-option-row .flow-node-port-out {
+    position: absolute;
+    right: -7px;
+    top: 50%;
+    transform: translateY(-50%);
+}
+.flow-node-port {
+    position: absolute;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #fff;
+    border: 2px solid #6c757d;
+    cursor: crosshair;
+    z-index: 2;
+}
+.flow-node-port-in {
+    left: -7px;
+    top: 50%;
+    transform: translateY(-50%);
+}
+.flow-node-ports-out {
+    position: absolute;
+    right: -7px;
+    top: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    align-items: flex-end;
+}
+.flow-node-port-out-row { display: flex; align-items: center; gap: 4px; }
+.flow-node-port-out-label {
+    font-size: 10px;
+    color: #6c757d;
+    background: #fff;
+    padding: 0 3px;
+    border-radius: 3px;
+    white-space: nowrap;
+}
+.flow-node-port.fb-port-pending {
+    background: #0d6efd;
+    border-color: #0d6efd;
+}
+.fb-palette-btn { width: 100%; text-align: left; margin-bottom: 6px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="mt-3" style="max-width: 100%;">
+
+    <div class="d-flex justify-content-between align-items-center mb-2">
+        <h5 class="fw-semibold mb-0">
+            <i class="las la-project-diagram text-primary"></i> {{ flow.name }}
+            {% if flow.is_active %}<span class="badge bg-success ms-1">Active</span>{% endif %}
+        </h5>
+        <div class="d-flex gap-2">
+            <a href="/flow-builder/{{ key_id }}" class="btn btn-outline-secondary btn-sm">
+                <i class="las la-arrow-left"></i> Back
+            </a>
+            <button class="btn btn-outline-secondary btn-sm" type="button" data-bs-toggle="offcanvas" data-bs-target="#paletteOffcanvas">
+                <i class="las la-plus"></i> Add Node
+            </button>
+            <button class="btn btn-outline-secondary btn-sm" type="button" id="fbReloadBtn">
+                <i class="las la-sync"></i> Reload
+            </button>
+            <button class="btn btn-primary btn-sm" type="button" id="fbSaveBtn">
+                <i class="las la-save"></i> Save
+            </button>
+        </div>
+    </div>
+
+    <div id="fb-save-response" class="mb-2"></div>
+
+    <div id="flow-canvas-wrapper">
+        <svg id="flow-edges"><g id="flow-edges-group"></g></svg>
+        <div id="flow-canvas"></div>
+    </div>
+
+    <p class="text-muted small mt-2">
+        Click a node's output dot, then click another node to connect them. Drag a node's header to move it.
+        Click a node body to edit its properties, or a connector line to select/delete it.
+    </p>
+</div>
+
+<!-- ============================================
+     OFFCANVAS — NODE PALETTE
+     ============================================ -->
+<div class="offcanvas offcanvas-end" tabindex="-1" id="paletteOffcanvas" aria-labelledby="paletteOffcanvasLabel" style="width: 22vw;">
+    <div class="offcanvas-header border-bottom">
+        <h5 class="offcanvas-title" id="paletteOffcanvasLabel"><i class="las la-shapes text-primary"></i> Add a Block</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+    </div>
+    <div class="offcanvas-body" id="fbPaletteBody">
+        <!-- populated by flow_builder.js -->
+    </div>
+</div>
+
+<!-- ============================================
+     OFFCANVAS — PROPERTIES
+     ============================================ -->
+<div class="offcanvas offcanvas-end" tabindex="-1" id="propertiesOffcanvas" aria-labelledby="propertiesOffcanvasLabel" style="width: 26vw;">
+    <div class="offcanvas-header border-bottom">
+        <h5 class="offcanvas-title" id="propertiesOffcanvasLabel"><i class="las la-sliders-h text-primary"></i> Properties</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+    </div>
+    <div class="offcanvas-body" id="fbPropertiesBody">
+        <p class="text-muted small">Select a node or connector to edit it here.</p>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="/static/js/flow_builder.js"></script>
+<script>
+    FlowBuilder.init({
+        graphData: {{ graph_data_json | safe }},
+        saveUrl: "/flow-builder/{{ key_id }}/{{ flow.uuid }}/save",
+        graphUrl: "/flow-builder/{{ key_id }}/{{ flow.uuid }}/graph",
+        responseTargetId: "fb-save-response",
+    });
+</script>
+{% endblock %}

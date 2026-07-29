@@ -1,3 +1,5 @@
+from typing import Optional
+
 from litestar import Controller, get, post
 from litestar.config.cors import CORSConfig
 from litestar.connection import Request
@@ -7,11 +9,14 @@ from litestar.middleware.cors import CORSMiddleware
 from litestar.response import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.chatbot import ChatbotApiKey
+from app.models.flow_builder import ChatbotFlow
 from app.services.chatbot_service import answer_message, get_active_key_by_value, validate_origin
 from app.services.chatbot_widget_settings_service import (
     build_widget_public_config,
     get_widget_settings_by_key_id,
 )
+from app.services.flow_builder import engine_service, flow_service
 
 _JSON = "application/json"
 
@@ -94,6 +99,8 @@ class PublicChatbotController(Controller):
 
         api_key = (body or {}).get("api_key", "")
         text = (body or {}).get("message", "")
+        session_token = (body or {}).get("session_id", "")
+        selected_value = (body or {}).get("selected_value")
 
         chatbot_key = await get_active_key_by_value(db, api_key) if api_key else None
         if not chatbot_key:
@@ -110,22 +117,64 @@ class PublicChatbotController(Controller):
                 status_code=403,
             )
 
-        try:
-            result = await answer_message(db, chatbot_key, text)
-        except HTTPException as e:
-            return Response(
-                {"status": "error", "message": str(e.detail)},
-                media_type=_JSON,
-                status_code=200,
-            )
+        active_flow = await flow_service.get_active_flow(db, chatbot_key.id)
+        if active_flow and session_token:
+            return await _flow_response(db, chatbot_key, active_flow, session_token, text, selected_value)
 
+        return await _plain_ai_response(db, chatbot_key, text)
+
+
+async def _flow_response(
+    db: AsyncSession,
+    chatbot_key: ChatbotApiKey,
+    active_flow: ChatbotFlow,
+    session_token: str,
+    text: str,
+    selected_value: Optional[str],
+) -> Response:
+    """
+    Drive one turn through the flow engine. While a chatbot has an active
+    flow, every message is answered by it — a completed/dead-ended session
+    restarts from the flow's Start node rather than falling back to AI (see
+    engine_service._session_needs_restart); only an explicit AI Fallback
+    node inside the flow itself hands a turn off to plain AI answering.
+    """
+    engine_result = await engine_service.advance_flow_session(
+        db, chatbot_key, active_flow, session_token, text, selected_value
+    )
+    return Response(
+        {
+            "status": "success",
+            "type": engine_result.type,
+            "summary": engine_result.text or "",
+            "insights": engine_result.insights,
+            "table": engine_result.table,
+            "text": engine_result.text or "",
+            "options": engine_result.options,
+        },
+        media_type=_JSON,
+        status_code=200,
+    )
+
+
+async def _plain_ai_response(db: AsyncSession, chatbot_key: ChatbotApiKey, text: str) -> Response:
+    try:
+        result = await answer_message(db, chatbot_key, text)
+    except HTTPException as e:
         return Response(
-            {
-                "status": "success",
-                "summary": result.summary,
-                "insights": result.insights or [],
-                "table": result.table.model_dump() if result.table else None,
-            },
+            {"status": "error", "message": str(e.detail)},
             media_type=_JSON,
             status_code=200,
         )
+
+    return Response(
+        {
+            "status": "success",
+            "type": "text",
+            "summary": result.summary,
+            "insights": result.insights or [],
+            "table": result.table.model_dump() if result.table else None,
+        },
+        media_type=_JSON,
+        status_code=200,
+    )
