@@ -1,0 +1,206 @@
+{# AI & Prompt tab — agent identity, system prompt, prompt variables, model choice,
+   plus which Flow Builder flow (if any) drives the conversation. #}
+
+<!-- CONVERSATION FLOW — its own form: the attachment is stored on the flow row,
+     not in this agent's AI settings. -->
+<div class="row g-3">
+    <div class="col-lg-7">
+        <div class="card shadow-sm mb-3">
+            <div class="card-header bg-white fw-semibold d-flex justify-content-between align-items-center">
+                <span><i class="las la-project-diagram text-primary"></i> Conversation Flow</span>
+                <a class="btn btn-sm btn-outline-secondary" href="/flow-builder/">
+                    <i class="las la-external-link-alt"></i> Open Flow Builder
+                </a>
+            </div>
+            <div class="card-body">
+                <form method="post" action="/chatbot-settings/{{ key.uuid }}/flow" class="row g-2 align-items-end">
+                    <div class="col-md-8">
+                        <label for="cbFlowPicker" class="form-label fw-semibold small mb-1">Flow</label>
+                        <select class="form-select" id="cbFlowPicker" name="flow_id">
+                            <option value="">No flow &mdash; answer with the prompt only</option>
+                            {% if attached_flow %}
+                            <option value="{{ attached_flow.uuid }}" selected>
+                                {{ attached_flow.name }}{% if not attached_flow.is_active %} (draft — not running){% endif %}
+                            </option>
+                            {% endif %}
+                            {% for option in attachable_flows %}
+                            <option value="{{ option.uuid }}">{{ option.name }}</option>
+                            {% endfor %}
+                        </select>
+                        <div class="form-text">
+                            Only <strong>active</strong> flows that aren't attached to another agent are
+                            listed. A flow drives the conversation until it ends, then this agent's prompt
+                            takes over.
+                        </div>
+                    </div>
+                    <div class="col-md-4 d-flex gap-2">
+                        <button type="submit" class="btn btn-outline-primary">
+                            <i class="las la-link"></i> Save flow
+                        </button>
+                        {% if attached_flow %}
+                        <a class="btn btn-outline-secondary" href="/flow-builder/{{ attached_flow.uuid }}/edit">
+                            Edit
+                        </a>
+                        {% endif %}
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<form id="chatbotAiSettingsForm"
+      method="post"
+      action="/chatbot-settings/{{ key.uuid }}/ai-settings"
+      onsubmit="return caiOnSubmit();">
+
+    <div class="row g-3">
+        <div class="col-lg-7">
+
+            <!-- AGENT -->
+            <div class="card shadow-sm mb-3">
+                <div class="card-header bg-white fw-semibold">
+                    <i class="las la-id-badge text-primary"></i> Agent
+                </div>
+                <div class="card-body">
+                    <label for="caiAgentName" class="form-label fw-semibold">
+                        Agent Name <span class="text-danger">*</span>
+                    </label>
+                    <input type="text" class="form-control" id="caiAgentName" name="agent_name"
+                           value="{{ ai_settings.agent_name }}" maxlength="100" required>
+                    <div class="form-text">
+                        Available in the prompt as <code>{{ '{{AGENT_NAME}}' }}</code>. This is the name
+                        the assistant introduces itself with.
+                    </div>
+                </div>
+            </div>
+
+            <!-- SYSTEM PROMPT -->
+            <div class="card shadow-sm mb-3">
+                <div class="card-header bg-white fw-semibold d-flex justify-content-between align-items-center">
+                    <span><i class="las la-file-alt text-primary"></i> System Prompt</span>
+                    <button type="submit" class="btn btn-sm btn-outline-secondary"
+                            formaction="/chatbot-settings/{{ key.uuid }}/ai-settings/reset-prompt"
+                            formnovalidate
+                            onclick="return confirm('Replace the current prompt with the default one? Your prompt variables and model choice are kept.');">
+                        <i class="las la-undo"></i> Reset to default
+                    </button>
+                </div>
+                <div class="card-body">
+                    <label for="caiSystemPrompt" class="form-label fw-semibold visually-hidden">System Prompt</label>
+                    <textarea class="form-control font-monospace small" id="caiSystemPrompt" name="system_prompt"
+                              rows="20" maxlength="20000" required
+                              spellcheck="false">{{ ai_settings.system_prompt }}</textarea>
+                    <div class="form-text">
+                        Defines the assistant's role, scope, turn logic and guardrails. Use
+                        <code>{{ '{{VARIABLE}}' }}</code> placeholders for anything you want to change
+                        without editing the prompt — every placeholder must have a matching variable below.
+                        Grounding rules (never invent figures from your data) are always enforced on top of this.
+                    </div>
+                </div>
+            </div>
+
+            <!-- PROMPT VARIABLES -->
+            <div class="card shadow-sm mb-3">
+                <div class="card-header bg-white fw-semibold">
+                    <i class="las la-tags text-primary"></i> Prompt Variables
+                </div>
+                <div class="card-body">
+                    <p class="text-muted small mb-2">
+                        Each variable replaces <code>{{ '{{NAME}}' }}</code> in the prompt above, and can also
+                        be used in an action's URL, headers or request body. Names are uppercase with
+                        underscores; up to 30 variables.
+                    </p>
+                    <div id="caiVariableRows" class="vstack gap-2 mb-2"></div>
+                    <button type="button" class="btn btn-sm btn-outline-primary" onclick="caiAddVariableRow();">
+                        <i class="las la-plus"></i> Add variable
+                    </button>
+                    <input type="hidden" name="variables_json" id="caiVariablesJson">
+                </div>
+            </div>
+
+            <!-- LANGUAGE MODEL -->
+            <div class="card shadow-sm mb-3">
+                <div class="card-header bg-white fw-semibold">
+                    <i class="las la-microchip text-primary"></i> Language Model
+                </div>
+                <div class="card-body">
+                    <p class="text-muted small mb-2">
+                        Applies to this whole chatbot. A Flow Builder AI node with its own model setting
+                        overrides this for the turns that node answers.
+                    </p>
+                    {% for mode_value, mode_label in llm_modes %}
+                    <div class="form-check">
+                        <input class="form-check-input" type="radio" name="llm_mode"
+                               id="caiLlmMode-{{ mode_value }}" value="{{ mode_value }}"
+                               {% if ai_settings.llm_mode == mode_value %}checked{% endif %}
+                               onchange="caiToggleLlmKeyField();">
+                        <label class="form-check-label" for="caiLlmMode-{{ mode_value }}">{{ mode_label }}</label>
+                    </div>
+                    {% endfor %}
+
+                    <div id="caiLlmKeyField" class="mt-3">
+                        <label for="caiLlmApiKey" class="form-label fw-semibold">API Key</label>
+                        {% if ai_api_keys %}
+                        <select class="form-select" id="caiLlmApiKey" name="llm_api_key_id">
+                            <option value="">Use my first active key (recommended)</option>
+                            {% for ai_key in ai_api_keys %}
+                            <option value="{{ ai_key.uuid }}" {% if selected_llm_key_uuid == ai_key.uuid|string %}selected{% endif %}>
+                                {{ ai_key.label }} ({{ ai_key.provider_display }})
+                            </option>
+                            {% endfor %}
+                        </select>
+                        <div class="form-text">
+                            Pin a specific saved key, or leave it on the default to always use whichever
+                            key is active in <a href="/ai-settings">AI Settings</a>.
+                        </div>
+                        {% else %}
+                        <p class="text-muted small mb-0">
+                            No AI API keys saved yet &mdash; add one in <a href="/ai-settings">AI Settings</a>,
+                            or switch to the in-built model above.
+                        </p>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+
+            <div class="d-flex gap-2 mb-4">
+                <button type="submit" class="btn btn-primary">
+                    <i class="las la-save"></i> Save AI Settings
+                </button>
+                <a href="/chatbot-settings" class="btn btn-outline-secondary">Cancel</a>
+            </div>
+        </div>
+
+        <!-- HELP COLUMN -->
+        <div class="col-lg-5">
+            <div class="card shadow-sm" style="position:sticky; top:1rem;">
+                <div class="card-header bg-white fw-semibold">
+                    <i class="las la-info-circle text-primary"></i> How this prompt is used
+                </div>
+                <div class="card-body small text-muted">
+                    <p class="mb-2">
+                        Every visitor message is answered with this prompt, the chatbot's data scope
+                        (<strong>{{ key.target_type }}</strong>), and a statistical profile computed from
+                        your real data.
+                    </p>
+                    <p class="mb-2">
+                        Two rules are always appended and cannot be overridden by the prompt: answers may
+                        only use figures from that profile, and the assistant must say so when the data
+                        doesn't cover the question.
+                    </p>
+                    <p class="mb-2">
+                        A saved prompt is rejected if it references a variable you haven't defined &mdash;
+                        so a live chatbot never sends a half-filled prompt to the model.
+                    </p>
+                    <p class="mb-0">
+                        Add an <strong>action</strong> in the next tab when an answer needs live data from
+                        one of your own endpoints.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+</form>
+
+<script id="caiVariablesData" type="application/json">{{ ai_settings.variables | tojson }}</script>

@@ -1,0 +1,87 @@
+{# Actions tab — pick actions from the shared library, or create one on the spot #}
+<div class="card shadow-sm mb-3">
+    <div class="card-header bg-white d-flex justify-content-between align-items-center">
+        <span class="fw-semibold"><i class="las la-bolt text-primary"></i> Actions</span>
+        <div class="d-flex gap-2">
+            <a class="btn btn-sm btn-outline-secondary" href="/actions">
+                <i class="las la-external-link-alt"></i> Manage all actions
+            </a>
+            <button type="button" class="btn btn-sm btn-primary" data-action-new
+                    data-bs-toggle="offcanvas" data-bs-target="#chatbotActionOffcanvas">
+                <i class="las la-plus"></i> New Action
+            </button>
+        </div>
+    </div>
+    <div class="card-body">
+        <p class="text-muted small">
+            An action lets this agent fetch live data from one of your own endpoints before it
+            answers. Actions are shared: the same one can serve several agents, and editing it in
+            the library changes it for all of them. Before each reply the AI picks at most one
+            action whose description matches what the visitor asked and fills in its parameters.
+        </p>
+
+        <!-- ADD AN EXISTING ACTION -->
+        <form class="row g-2 align-items-end mb-3"
+              hx-post="/chatbot-settings/{{ key.uuid }}/actions/attach"
+              hx-target="#chatbotActionsResponse"
+              hx-swap="innerHTML">
+            <div class="col-md-8">
+                <label for="cbActionPicker" class="form-label fw-semibold small mb-1">
+                    Add an action from your library
+                </label>
+                <select class="form-select" id="cbActionPicker" name="action_id"
+                        {% if not attachable_actions %}disabled{% endif %} required>
+                    {% if attachable_actions %}
+                    <option value="">Select an action&hellip;</option>
+                    {% for option in attachable_actions %}
+                    <option value="{{ option.uuid }}">{{ option.name }} &mdash; {{ option.description | truncate(70) }}</option>
+                    {% endfor %}
+                    {% else %}
+                    <option value="">No active actions left to add</option>
+                    {% endif %}
+                </select>
+                <div class="form-text">
+                    Only <strong>active</strong> actions you haven't added yet are listed.
+                    {% if not attachable_actions %}
+                    Create one with <em>New Action</em>, or activate an existing one in
+                    <a href="/actions">Actions</a>.
+                    {% endif %}
+                </div>
+            </div>
+            <div class="col-md-4">
+                <button type="submit" class="btn btn-outline-primary"
+                        {% if not attachable_actions %}disabled{% endif %}>
+                    <i class="las la-plus"></i> Add to this agent
+                </button>
+            </div>
+        </form>
+
+        <div id="chatbotActionsResponse" class="mb-2"></div>
+
+        <div class="table-responsive">
+            <table class="table table-sm align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Name</th>
+                        <th>Method</th>
+                        <th>URL</th>
+                        <th>Parameters</th>
+                        <th>Status</th>
+                        <th class="text-end">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="chatbotActionsTableBody">
+                    {% include "chatbot_settings/partials/action_rows_body.htm" %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+{% with form_action = "/chatbot-settings/" ~ key.uuid ~ "/actions/create-and-attach",
+        form_note = "Saved to your Actions library and added to this agent in one step." %}
+{% include "actions/partials/action_form.htm" %}
+{% endwith %}
+
+<script id="caiActionEndpoints" type="application/json">{{ {"create": "/chatbot-settings/" ~ key.uuid ~ "/actions/create-and-attach", "base": "/actions/"} | tojson }}</script>
+<script id="caiParameterTypes" type="application/json">{{ action_parameter_types | list | tojson }}</script>

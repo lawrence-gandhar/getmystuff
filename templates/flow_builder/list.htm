@@ -9,9 +9,6 @@
             <i class="las la-project-diagram text-primary"></i> Flow Builder
         </h5>
         <div class="d-flex gap-2">
-            <a href="/chatbot-settings" class="btn btn-outline-secondary btn-sm">
-                <i class="las la-arrow-left"></i> Back to Chatbot Settings
-            </a>
             <button
                 class="btn btn-primary btn-sm"
                 type="button"
@@ -24,9 +21,11 @@
     </div>
 
     <p class="text-muted small mb-3">
-        Design guided conversation flows for this chatbot — a Start trigger, branching
-        logic, menus, and prompts. You can keep several draft flows and switch which
-        one is live at any time.
+        Design guided conversation flows — a Start trigger, branching logic, menus, and
+        prompts. A flow is built here and then attached to one agent from that agent's
+        settings; only <strong>Active</strong> flows that aren't attached elsewhere can be
+        picked. Making an attached flow a draft leaves it attached but stops the agent
+        running it.
     </p>
 
     <div id="flow-builder-response" class="mb-3"></div>
@@ -38,8 +37,9 @@
                     <tr>
                         <th>Name</th>
                         <th style="width:100px;">Status</th>
+                        <th style="width:200px;">Attached Agent</th>
                         <th style="width:180px;">Last Updated</th>
-                        <th style="width:260px;">Actions</th>
+                        <th style="width:300px;">Actions</th>
                     </tr>
                 </thead>
                 <tbody id="flowsTableBody">
@@ -64,7 +64,7 @@
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <form
-                hx-post="/flow-builder/{{ key_id }}/create"
+                hx-post="/flow-builder/create"
                 hx-target="#flowsTableBody"
                 hx-swap="innerHTML"
                 hx-on::after-request="

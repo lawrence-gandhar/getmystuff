@@ -34,7 +34,9 @@
             <button
                 class="btn btn-sm btn-outline-info"
                 type="button"
-                onclick="openHistoryPanel('{{ key.uuid }}', '{{ key.name }}')"
+                data-cb-action="history"
+                data-key-id="{{ key.uuid }}"
+                data-key-name="{{ key.name }}"
             >
                 <i class="las la-history"></i>
             </button>
@@ -49,7 +51,11 @@
             <button
                 class="btn btn-sm btn-outline-secondary"
                 type="button"
-                onclick="openEditKeyForm('{{ key.uuid }}', '{{ key.name }}', {{ key.allowed_origins | tojson }}, {{ target_summary | tojson }})"
+                data-cb-action="edit"
+                data-key-id="{{ key.uuid }}"
+                data-key-name="{{ key.name }}"
+                data-allowed-origins="{{ key.allowed_origins | join('\n') }}"
+                data-target-summary="{{ target_summary }}"
             >
                 Edit
             </button>
@@ -57,20 +63,14 @@
                 class="btn btn-sm btn-outline-primary"
                 href="/chatbot-settings/{{ key.uuid }}/widget-settings"
             >
-                <i class="las la-palette"></i> Widget Settings
-            </a>
-            <a
-                class="btn btn-sm btn-outline-primary"
-                href="/flow-builder/{{ key.uuid }}"
-            >
-                <i class="las la-project-diagram"></i> Flow Builder
+                <i class="las la-sliders-h"></i> Settings
             </a>
             <button
                 class="btn btn-sm btn-outline-danger"
                 hx-post="/chatbot-settings/{{ key.uuid }}/delete"
                 hx-target="#chatbotKeysTableBody"
                 hx-swap="innerHTML"
-                hx-confirm="Delete chatbot key '{{ key.name }}'? Any widget using it will stop working. This cannot be undone."
+                hx-confirm="Delete agent '{{ key.name }}'? Any widget using it will stop working, and its flow is detached (but kept). This cannot be undone."
             >
                 Delete
             </button>

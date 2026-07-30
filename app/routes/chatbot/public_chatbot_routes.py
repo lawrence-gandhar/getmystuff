@@ -1,22 +1,17 @@
-from typing import Optional
-
 from litestar import Controller, get, post
 from litestar.config.cors import CORSConfig
 from litestar.connection import Request
-from litestar.exceptions import HTTPException
 from litestar.middleware.base import DefineMiddleware
 from litestar.middleware.cors import CORSMiddleware
 from litestar.response import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.chatbot import ChatbotApiKey
-from app.models.flow_builder import ChatbotFlow
-from app.services.chatbot.chatbot_service import answer_message, get_active_key_by_value, validate_origin
+from app.services.chatbot.chatbot_service import get_active_key_by_value, validate_origin
+from app.services.chatbot.chatbot_turn_service import TurnResult, answer_turn
 from app.services.chatbot.chatbot_widget_settings_service import (
     build_widget_public_config,
     get_widget_settings_by_key_id,
 )
-from app.services.flow_builder import engine_service, flow_service
 
 _JSON = "application/json"
 
@@ -117,52 +112,29 @@ class PublicChatbotController(Controller):
                 status_code=403,
             )
 
-        active_flow = await flow_service.get_active_flow(db, chatbot_key.id)
-        if active_flow and session_token:
-            return await _flow_response(db, chatbot_key, active_flow, session_token, text, selected_value)
-
-        return await _plain_ai_response(db, chatbot_key, text)
+        result = await answer_turn(db, chatbot_key, text, session_token, selected_value)
+        return _turn_response(result)
 
 
-async def _flow_response(
-    db: AsyncSession,
-    chatbot_key: ChatbotApiKey,
-    active_flow: ChatbotFlow,
-    session_token: str,
-    text: str,
-    selected_value: Optional[str],
-) -> Response:
+def _turn_response(result: TurnResult) -> Response:
     """
-    Drive one turn through the flow engine. While a chatbot has an active
-    flow, every message is answered by it — a completed/dead-ended session
-    restarts from the flow's Start node rather than falling back to AI (see
-    engine_service._session_needs_restart); only an explicit AI Fallback
-    node inside the flow itself hands a turn off to plain AI answering.
+    Serialize one answered turn for the widget.
+
+    Always HTTP 200, including for an answering failure: the widget renders the
+    payload either way, and a non-2xx here would be indistinguishable from the
+    key/origin rejections above.
+
+    ``response_time_ms`` is the server-side time the turn took — the same
+    number stored on the log row — so what a visitor sees in the widget and
+    what the owner sees in Chatbot Analytics can never disagree.
     """
-    engine_result = await engine_service.advance_flow_session(
-        db, chatbot_key, active_flow, session_token, text, selected_value
-    )
-    return Response(
-        {
-            "status": "success",
-            "type": engine_result.type,
-            "summary": engine_result.text or "",
-            "insights": engine_result.insights,
-            "table": engine_result.table,
-            "text": engine_result.text or "",
-            "options": engine_result.options,
-        },
-        media_type=_JSON,
-        status_code=200,
-    )
-
-
-async def _plain_ai_response(db: AsyncSession, chatbot_key: ChatbotApiKey, text: str) -> Response:
-    try:
-        result = await answer_message(db, chatbot_key, text)
-    except HTTPException as e:
+    if result.status == "error":
         return Response(
-            {"status": "error", "message": str(e.detail)},
+            {
+                "status": "error",
+                "message": result.message,
+                "response_time_ms": result.response_time_ms,
+            },
             media_type=_JSON,
             status_code=200,
         )
@@ -170,10 +142,15 @@ async def _plain_ai_response(db: AsyncSession, chatbot_key: ChatbotApiKey, text:
     return Response(
         {
             "status": "success",
-            "type": "text",
+            "type": result.type,
             "summary": result.summary,
-            "insights": result.insights or [],
-            "table": result.table.model_dump() if result.table else None,
+            "insights": result.insights,
+            "table": result.table,
+            # Duplicated as `text` for the flow node types (menu/dropdown/
+            # ask-input) whose prompt the widget reads from this field.
+            "text": result.summary,
+            "options": result.options,
+            "response_time_ms": result.response_time_ms,
         },
         media_type=_JSON,
         status_code=200,

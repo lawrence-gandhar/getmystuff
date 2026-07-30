@@ -1,0 +1,76 @@
+{# <tr> per library action. Identifiers are always the action's public uuid. #}
+{% for action in actions %}
+<tr>
+    <td>
+        <div class="fw-semibold font-monospace small">{{ action.name }}</div>
+        <div class="text-muted small">{{ action.description }}</div>
+    </td>
+    <td><span class="badge bg-secondary">{{ action.http_method }}</span></td>
+    <td class="font-monospace small text-break" style="max-width:260px;">{{ action.url }}</td>
+    <td>
+        {% if action.parameters %}
+        {% for param in action.parameters %}
+        <span class="badge bg-light text-dark border font-monospace">{{ param.name }}</span>
+        {% endfor %}
+        {% else %}
+        <span class="text-muted small">None</span>
+        {% endif %}
+    </td>
+    <td class="text-center">
+        {% if action.attached_count %}
+        <span class="badge bg-info">{{ action.attached_count }}</span>
+        {% else %}
+        <span class="text-muted small">0</span>
+        {% endif %}
+    </td>
+    <td>
+        {% if action.is_active %}
+        <span class="badge bg-success">Active</span>
+        {% else %}
+        <span class="badge bg-secondary">Inactive</span>
+        {% endif %}
+    </td>
+    <td class="text-end">
+        <div class="d-flex gap-1 justify-content-end flex-wrap">
+            <button type="button"
+                    class="btn btn-sm btn-outline-secondary"
+                    data-action-edit
+                    data-action-id="{{ action.uuid }}"
+                    data-action-name="{{ action.name }}"
+                    data-action-description="{{ action.description }}"
+                    data-action-method="{{ action.http_method }}"
+                    data-action-url="{{ action.url }}"
+                    data-action-body="{{ action.body_template }}"
+                    data-action-timeout="{{ action.timeout_seconds }}"
+                    data-action-parameters="{{ action.parameters_json }}"
+                    data-action-headers="{{ action.headers_json }}">
+                Edit
+            </button>
+            <button type="button"
+                    class="btn btn-sm btn-outline-secondary"
+                    hx-post="/actions/{{ action.uuid }}/toggle-active"
+                    hx-target="#actionsResponse"
+                    hx-swap="innerHTML"
+                    {% if action.is_active and action.attached_count %}
+                    hx-confirm="Deactivate '{{ action.name }}'? It will stop running on the {{ action.attached_count }} agent(s) using it."
+                    {% endif %}>
+                {% if action.is_active %}Deactivate{% else %}Activate{% endif %}
+            </button>
+            <button type="button"
+                    class="btn btn-sm btn-outline-danger"
+                    hx-post="/actions/{{ action.uuid }}/delete"
+                    hx-target="#actionsResponse"
+                    hx-swap="innerHTML"
+                    hx-confirm="Delete '{{ action.name }}'?{% if action.attached_count %} It is used by {{ action.attached_count }} agent(s), which will lose it.{% endif %} This cannot be undone.">
+                Delete
+            </button>
+        </div>
+    </td>
+</tr>
+{% else %}
+<tr>
+    <td colspan="7" class="text-center text-muted py-4">
+        <i class="las la-bolt fs-4 d-block mb-1"></i> No actions yet — create one to let your agents fetch live data.
+    </td>
+</tr>
+{% endfor %}

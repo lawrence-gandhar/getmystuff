@@ -1,11 +1,16 @@
 """
-Business logic for the Flow Builder — creating, editing, and activating
-saved conversation-flow graphs for a chatbot widget.
+Business logic for the Flow Builder — creating, editing, publishing and
+attaching saved conversation-flow graphs.
 
-Ownership of a flow is always routed through the owning ChatbotApiKey (see
-chatbot_service.get_chatbot_key, reused here rather than duplicated) so a
-flow can never be read/edited/activated by a user who doesn't own the
-chatbot key it belongs to.
+A flow belongs to a **user**, not to a chatbot: it is built standalone from the
+Flow Builder page and then attached to at most one chatbot (see attach_flow).
+Ownership is therefore checked directly against user_id, while attaching also
+checks the chatbot key through chatbot_service.get_chatbot_key.
+
+Two independent switches decide whether a flow drives a conversation:
+``is_active`` (published vs. draft, set here) and the attachment itself. Both
+must be in place — get_active_flow filters on both — so a live flow can be
+parked without detaching it, and a draft can sit attached while it is finished.
 """
 
 import uuid
@@ -15,7 +20,7 @@ from litestar.exceptions import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.db_utils import CRUDQueryBuilder
-from app.db.flow_builder.queries import deactivate_other_flows
+from app.db.flow_builder.queries import fetch_flows_with_chatbot_names
 from app.models.flow_builder import ChatbotFlow
 from app.services.chatbot import chatbot_service
 
@@ -41,28 +46,54 @@ _DEFAULT_GRAPH = {
 # Read
 # --------------------------------------------------------------------------
 
-async def get_flows_for_key(db: AsyncSession, user_id: int, key_id: uuid.UUID) -> List[ChatbotFlow]:
-    key = await chatbot_service.get_chatbot_key(db, user_id, key_id)  # ownership check
-    return await flow_crud.get_many(
-        db, filters={"chatbot_key_id": key.id}, order_by="created_at", desc=True
-    )
+async def get_user_flow_views(db: AsyncSession, user_id: int) -> List[dict]:
+    """
+    Every flow this user owns, shaped for the Flow Builder list: public uuid
+    only, plus the name of the chatbot it is attached to (None when unattached).
+    """
+    rows = await fetch_flows_with_chatbot_names(db, user_id)
+    return [
+        {
+            "uuid": str(flow.uuid),
+            "name": flow.name,
+            "is_active": flow.is_active,
+            "updated_at": flow.updated_at,
+            "chatbot_name": chatbot_name,
+        }
+        for flow, chatbot_name in rows
+    ]
 
 
-async def get_flow(
-    db: AsyncSession,
-    user_id: int,
-    key_id: uuid.UUID,
-    flow_id: uuid.UUID,
-) -> ChatbotFlow:
-    key = await chatbot_service.get_chatbot_key(db, user_id, key_id)  # ownership check
-    flow = await flow_crud.get_by_uuid(db, flow_id, extra_filters={"chatbot_key_id": key.id})
+async def get_flow(db: AsyncSession, user_id: int, flow_id: uuid.UUID) -> ChatbotFlow:
+    flow = await flow_crud.get_by_uuid(db, flow_id, extra_filters={"user_id": user_id})
     if not flow:
         raise HTTPException(status_code=404, detail="Flow not found")
     return flow
 
 
+async def get_attachable_flows(db: AsyncSession, user_id: int) -> List[ChatbotFlow]:
+    """
+    Flows a chatbot could be given: active and not attached to anything yet.
+    A flow already attached elsewhere is deliberately absent — it can only run on
+    one chatbot, so it has to be detached there first.
+    """
+    return await flow_crud.get_many(
+        db, filters={"user_id": user_id, "is_active": True, "chatbot_key_id": None}, order_by="name"
+    )
+
+
+async def get_attached_flow(db: AsyncSession, user_id: int, key_id: uuid.UUID) -> Optional[ChatbotFlow]:
+    """The flow attached to one chatbot, active or not (the settings dropdown shows both)."""
+    key = await chatbot_service.get_chatbot_key(db, user_id, key_id)  # ownership check
+    return await flow_crud.get_one(db, filters={"chatbot_key_id": key.id})
+
+
 async def get_active_flow(db: AsyncSession, chatbot_key_id: int) -> Optional[ChatbotFlow]:
-    """Runtime-facing lookup — used by the public message handler, keyed on the internal id."""
+    """
+    Runtime-facing lookup — used by the public message handler, keyed on the
+    internal id. Both switches are checked here: the flow must be attached to
+    this chatbot *and* published.
+    """
     return await flow_crud.get_one(db, filters={"chatbot_key_id": chatbot_key_id, "is_active": True})
 
 
@@ -70,15 +101,14 @@ async def get_active_flow(db: AsyncSession, chatbot_key_id: int) -> Optional[Cha
 # Write
 # --------------------------------------------------------------------------
 
-async def create_flow(db: AsyncSession, user_id: int, key_id: uuid.UUID, name: str) -> ChatbotFlow:
-    key = await chatbot_service.get_chatbot_key(db, user_id, key_id)  # ownership check
-
+async def create_flow(db: AsyncSession, user_id: int, name: str) -> ChatbotFlow:
+    """Create a draft flow. Attaching it to a chatbot is a separate, later step."""
     name = (name or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="Flow name is required")
 
     return await flow_crud.create(db, {
-        "chatbot_key_id": key.id,
+        "user_id": user_id,
         "name": name,
         "graph_data": dict(_DEFAULT_GRAPH),
         "is_active": False,
@@ -88,11 +118,10 @@ async def create_flow(db: AsyncSession, user_id: int, key_id: uuid.UUID, name: s
 async def rename_flow(
     db: AsyncSession,
     user_id: int,
-    key_id: uuid.UUID,
     flow_id: uuid.UUID,
     name: str,
 ) -> ChatbotFlow:
-    flow = await get_flow(db, user_id, key_id, flow_id)
+    flow = await get_flow(db, user_id, flow_id)
 
     name = (name or "").strip()
     if not name:
@@ -104,34 +133,85 @@ async def rename_flow(
 async def update_flow_graph(
     db: AsyncSession,
     user_id: int,
-    key_id: uuid.UUID,
     flow_id: uuid.UUID,
     graph_data: dict,
 ) -> ChatbotFlow:
-    flow = await get_flow(db, user_id, key_id, flow_id)
+    flow = await get_flow(db, user_id, flow_id)
     _validate_graph(graph_data)
     return await flow_crud.update(db, flow.id, {"graph_data": graph_data})
 
 
-async def activate_flow(
+async def set_flow_active(
+    db: AsyncSession,
+    user_id: int,
+    flow_id: uuid.UUID,
+    is_active: bool,
+) -> ChatbotFlow:
+    """
+    Publish or unpublish a flow.
+
+    Unpublishing leaves any attachment in place — the chatbot simply stops
+    running the flow, because get_active_flow requires both. Publishing does not
+    attach anything either; that is attach_flow's job.
+    """
+    flow = await get_flow(db, user_id, flow_id)
+    return await flow_crud.update(db, flow.id, {"is_active": is_active})
+
+
+async def attach_flow(
     db: AsyncSession,
     user_id: int,
     key_id: uuid.UUID,
-    flow_id: uuid.UUID,
-) -> ChatbotFlow:
-    """The 'at most one active flow per chatbot key' enforcement point."""
+    flow_id: Optional[uuid.UUID],
+) -> Optional[ChatbotFlow]:
+    """
+    Point one chatbot at one flow — the single write path for the dropdown on the
+    chatbot's settings page. `flow_id=None` clears the chatbot's flow.
+
+    Whatever the chatbot currently runs is detached first, because
+    ``chatbot_flows.chatbot_key_id`` is unique: a chatbot has at most one flow
+    and a flow has at most one chatbot. The detached flow stays in the library.
+    """
     key = await chatbot_service.get_chatbot_key(db, user_id, key_id)  # ownership check
-    flow = await get_flow(db, user_id, key_id, flow_id)
 
-    await deactivate_other_flows(db, key.id, flow.id)
-    flow.is_active = True
+    new_flow: Optional[ChatbotFlow] = None
+    if flow_id is not None:
+        new_flow = await get_flow(db, user_id, flow_id)
+
+        if new_flow.chatbot_key_id not in (None, key.id):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"The flow {new_flow.name} is already used by another chatbot. "
+                    "Detach it there first, or pick a different flow."
+                ),
+            )
+        if not new_flow.is_active:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"The flow {new_flow.name} is still a draft — mark it active in "
+                    "Flow Builder before attaching it."
+                ),
+            )
+
+    current = await flow_crud.get_one(db, filters={"chatbot_key_id": key.id})
+    if current and (new_flow is None or current.id != new_flow.id):
+        current.chatbot_key_id = None
+        await db.flush()  # free the unique slot before the new flow claims it
+
+    if new_flow is None:
+        await db.commit()
+        return None
+
+    new_flow.chatbot_key_id = key.id
     await db.commit()
-    await db.refresh(flow)
-    return flow
+    await db.refresh(new_flow)
+    return new_flow
 
 
-async def delete_flow(db: AsyncSession, user_id: int, key_id: uuid.UUID, flow_id: uuid.UUID) -> None:
-    flow = await get_flow(db, user_id, key_id, flow_id)  # ownership check
+async def delete_flow(db: AsyncSession, user_id: int, flow_id: uuid.UUID) -> None:
+    flow = await get_flow(db, user_id, flow_id)  # ownership check
     await flow_crud.delete(db, flow.id)
 
 

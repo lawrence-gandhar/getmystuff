@@ -8,7 +8,24 @@ from litestar.response import Response, Template
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.auth import require_auth
+from app.models.chatbot import DEFAULT_SYSTEM_PROMPT, LLM_MODES
 from app.models.user import User
+from app.routes.chatbot.action_routes import action_form_context, read_action_form
+from app.services.ai_settings.ai_settings_service import get_user_api_keys
+from app.services.chatbot.chatbot_action_service import (
+    attach_action,
+    build_action_views,
+    create_and_attach_action,
+    detach_action,
+    get_actions_for_chatbot,
+    get_attachable_actions,
+)
+from app.services.chatbot.chatbot_ai_settings_service import (
+    AiSettingsInput,
+    get_ai_settings,
+    reset_system_prompt,
+    update_ai_settings,
+)
 from app.services.chatbot.chatbot_service import (
     build_widget_script,
     create_chatbot_key,
@@ -30,6 +47,9 @@ from app.services.chatbot.chatbot_widget_settings_service import (
     update_widget_settings,
 )
 from app.services.datasource.datasource_service import get_user_datasources
+from app.services.flow_builder import flow_service
+
+_SETTINGS_TEMPLATE = "chatbot_settings/widget_settings.htm"
 
 
 class ChatbotSettingsController(Controller):
@@ -191,11 +211,38 @@ class ChatbotSettingsController(Controller):
         )
 
     # --------------------------
-    # WIDGET SETTINGS — branding, background, header style, submit button,
-    # widget size, and lifecycle copy
+    # CHATBOT CONFIGURATION PAGE — one page, three tabs: appearance
+    # (branding/colors/copy/size), AI & prompt, and actions
     # --------------------------
-    @staticmethod
-    def _widget_settings_context(user, key, settings, api_base_url, **extra) -> dict:
+    async def _settings_page_context(
+        self,
+        db: AsyncSession,
+        user: User,
+        key_id: uuid.UUID,
+        api_base_url: str,
+        active_tab: str = "appearance",
+        **extra,
+    ) -> dict:
+        """
+        Everything the tabbed settings page renders. Built in one place so all
+        four handlers that return this template stay in sync.
+        """
+        key = await get_chatbot_key(db, user.id, key_id)
+        settings = await get_widget_settings(db, user.id, key_id)
+        ai_settings = await get_ai_settings(db, user.id, key_id)
+        actions = await get_actions_for_chatbot(db, user.id, key_id)
+        attachable_actions = await get_attachable_actions(db, user.id, key_id)
+        attached_flow = await flow_service.get_attached_flow(db, user.id, key_id)
+        attachable_flows = await flow_service.get_attachable_flows(db, user.id)
+        ai_api_keys = await get_user_api_keys(db, user.id)
+
+        # The template only ever exposes the AI key's public uuid, never the
+        # bigint FK stored on the settings row.
+        selected_llm_key_uuid = next(
+            (str(k.uuid) for k in ai_api_keys if k.id == ai_settings.llm_api_key_id),
+            "",
+        )
+
         return {
             "user": user,
             "key": key,
@@ -205,6 +252,17 @@ class ChatbotSettingsController(Controller):
             "send_button_icon_url": resolve_send_button_icon_url(settings, ""),
             "api_base_url": api_base_url,
             "active": "chatbot_settings",
+            "active_tab": active_tab,
+            "ai_settings": ai_settings,
+            "ai_api_keys": ai_api_keys,
+            "selected_llm_key_uuid": selected_llm_key_uuid,
+            "llm_modes": LLM_MODES,
+            "default_prompt": DEFAULT_SYSTEM_PROMPT,
+            "actions": build_action_views(actions),
+            "attachable_actions": build_action_views(attachable_actions),
+            "attached_flow": attached_flow,
+            "attachable_flows": attachable_flows,
+            **action_form_context(),
             **extra,
         }
 
@@ -212,11 +270,12 @@ class ChatbotSettingsController(Controller):
     async def widget_settings_page(
         self, key_id: uuid.UUID, request: Request, db: AsyncSession, user: User
     ) -> Template:
-        key = await get_chatbot_key(db, user.id, key_id)
-        settings = await get_widget_settings(db, user.id, key_id)
+        tab = request.query_params.get("tab", "appearance")
         return Template(
-            template_name="chatbot_settings/widget_settings.htm",
-            context=self._widget_settings_context(user, key, settings, str(request.base_url).rstrip("/")),
+            template_name=_SETTINGS_TEMPLATE,
+            context=await self._settings_page_context(
+                db, user, key_id, str(request.base_url).rstrip("/"), active_tab=tab,
+            ),
         )
 
     @post("/{key_id:uuid}/widget-settings")
@@ -276,15 +335,170 @@ class ChatbotSettingsController(Controller):
         except HTTPException as e:
             error = str(e.detail)
 
-        key = await get_chatbot_key(db, user.id, key_id)
-        settings = await get_widget_settings(db, user.id, key_id)
         return Template(
-            template_name="chatbot_settings/widget_settings.htm",
-            context=self._widget_settings_context(
-                user, key, settings, str(request.base_url).rstrip("/"),
-                error=error, success=error is None,
+            template_name=_SETTINGS_TEMPLATE,
+            context=await self._settings_page_context(
+                db, user, key_id, str(request.base_url).rstrip("/"),
+                active_tab="appearance", error=error, success=error is None,
             ),
         )
+
+    # --------------------------
+    # AI & PROMPT — agent name, system prompt, prompt variables, LLM choice
+    # --------------------------
+    @post("/{key_id:uuid}/ai-settings")
+    async def save_ai_settings(
+        self,
+        key_id: uuid.UUID,
+        request: Request,
+        db: AsyncSession,
+        user: User,
+    ) -> Template:
+        form = await request.form()
+
+        fields = AiSettingsInput(
+            agent_name=form.get("agent_name", ""),
+            system_prompt=form.get("system_prompt", ""),
+            variables_json=form.get("variables_json", ""),
+            llm_mode=form.get("llm_mode", ""),
+            llm_api_key_id=form.get("llm_api_key_id", ""),
+        )
+
+        error = None
+        try:
+            await update_ai_settings(db, user.id, key_id, fields)
+        except HTTPException as e:
+            error = str(e.detail)
+
+        return Template(
+            template_name=_SETTINGS_TEMPLATE,
+            context=await self._settings_page_context(
+                db, user, key_id, str(request.base_url).rstrip("/"),
+                active_tab="ai", error=error, success=error is None,
+            ),
+        )
+
+    @post("/{key_id:uuid}/ai-settings/reset-prompt")
+    async def reset_ai_prompt(
+        self,
+        key_id: uuid.UUID,
+        request: Request,
+        db: AsyncSession,
+        user: User,
+    ) -> Template:
+        error = None
+        try:
+            await reset_system_prompt(db, user.id, key_id)
+        except HTTPException as e:
+            error = str(e.detail)
+
+        return Template(
+            template_name=_SETTINGS_TEMPLATE,
+            context=await self._settings_page_context(
+                db, user, key_id, str(request.base_url).rstrip("/"),
+                active_tab="ai", error=error, success=error is None,
+            ),
+        )
+
+    # --------------------------
+    # CONVERSATION FLOW — which Flow Builder flow this agent runs
+    # --------------------------
+    @post("/{key_id:uuid}/flow")
+    async def save_flow(
+        self,
+        key_id: uuid.UUID,
+        request: Request,
+        db: AsyncSession,
+        user: User,
+    ) -> Template:
+        """
+        Attach a flow to this agent, or clear it with an empty selection. Flows
+        are built in the Flow Builder (sidebar) and owned by the user; this only
+        points the agent at one.
+        """
+        form = await request.form()
+        raw_flow_id = (form.get("flow_id") or "").strip()
+
+        error = None
+        try:
+            flow_id = uuid.UUID(raw_flow_id) if raw_flow_id else None
+        except ValueError:
+            flow_id = None
+            error = "That flow selection was not valid. Please pick a flow from the list."
+
+        if error is None:
+            try:
+                await flow_service.attach_flow(db, user.id, key_id, flow_id)
+            except HTTPException as e:
+                error = str(e.detail)
+
+        return Template(
+            template_name=_SETTINGS_TEMPLATE,
+            context=await self._settings_page_context(
+                db, user, key_id, str(request.base_url).rstrip("/"),
+                active_tab="ai", error=error, success=error is None,
+            ),
+        )
+
+    # --------------------------
+    # ACTIONS — attach/detach library actions (HTMX partials). Creating and
+    # editing an action itself lives in the Actions library
+    # (see ChatbotActionController), since one action can serve many agents.
+    # --------------------------
+    async def _action_rows(
+        self, db: AsyncSession, user: User, key_id: uuid.UUID, error: str | None
+    ) -> Template:
+        actions = await get_actions_for_chatbot(db, user.id, key_id)
+        return Template(
+            template_name="chatbot_settings/partials/action_rows_response.htm",
+            context={
+                "key": await get_chatbot_key(db, user.id, key_id),
+                "actions": build_action_views(actions),
+                "error": error,
+            },
+        )
+
+    @post("/{key_id:uuid}/actions/attach")
+    async def attach_chatbot_action(
+        self, key_id: uuid.UUID, request: Request, db: AsyncSession, user: User
+    ) -> Template:
+        form = await request.form()
+        raw_action_id = (form.get("action_id") or "").strip()
+
+        error = None
+        try:
+            await attach_action(db, user.id, key_id, uuid.UUID(raw_action_id))
+        except ValueError:
+            error = "Please select an action to add."
+        except HTTPException as e:
+            error = str(e.detail)
+
+        return await self._action_rows(db, user, key_id, error)
+
+    @post("/{key_id:uuid}/actions/create-and-attach")
+    async def create_and_attach_chatbot_action(
+        self, key_id: uuid.UUID, request: Request, db: AsyncSession, user: User
+    ) -> Template:
+        """Quick-create: save to the user's library and add it to this agent at once."""
+        error = None
+        try:
+            await create_and_attach_action(db, user.id, key_id, read_action_form(await request.form()))
+        except HTTPException as e:
+            error = str(e.detail)
+
+        return await self._action_rows(db, user, key_id, error)
+
+    @post("/{key_id:uuid}/actions/{action_id:uuid}/detach")
+    async def detach_chatbot_action(
+        self, key_id: uuid.UUID, action_id: uuid.UUID, db: AsyncSession, user: User
+    ) -> Template:
+        error = None
+        try:
+            await detach_action(db, user.id, key_id, action_id)
+        except HTTPException as e:
+            error = str(e.detail)
+
+        return await self._action_rows(db, user, key_id, error)
 
     # --------------------------
     # DOWNLOAD WIDGET JS

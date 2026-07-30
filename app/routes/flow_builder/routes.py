@@ -13,49 +13,49 @@ from app.services.ai_settings import ai_settings_service
 from app.services.flow_builder import flow_service
 
 _JSON = "application/json"
+_ROWS_TEMPLATE = "flow_builder/flow_rows.htm"
 
 
 class FlowBuilderController(Controller):
+    """
+    The Flow Builder library and canvas. Flows are user-owned and standalone —
+    no chatbot appears in these URLs; attaching a flow to a chatbot happens on
+    that chatbot's settings page (see ChatbotSettingsController.save_flow).
+    """
     path = "/flow-builder"
     dependencies = {"user": require_auth}
 
     # --------------------------
     # LIST
     # --------------------------
-    @get("/{key_id:uuid}")
-    async def index(self, key_id: uuid.UUID, db: AsyncSession, user: User) -> Template:
-        flows = await flow_service.get_flows_for_key(db, user.id, key_id)
+    @get("/")
+    async def index(self, db: AsyncSession, user: User) -> Template:
+        flows = await flow_service.get_user_flow_views(db, user.id)
         return Template(
             template_name="flow_builder/list.htm",
-            context={"user": user, "key_id": key_id, "flows": flows, "active": "chatbot_settings"},
+            context={"user": user, "flows": flows, "active": "flow_builder"},
         )
 
     # --------------------------
     # CREATE
     # --------------------------
-    @post("/{key_id:uuid}/create")
-    async def create(self, key_id: uuid.UUID, request: Request, db: AsyncSession, user: User) -> Template:
+    @post("/create")
+    async def create(self, request: Request, db: AsyncSession, user: User) -> Template:
         form = await request.form()
         error = None
         try:
-            await flow_service.create_flow(db, user.id, key_id, form.get("name", ""))
+            await flow_service.create_flow(db, user.id, form.get("name", ""))
         except HTTPException as e:
             error = str(e.detail)
 
-        flows = await flow_service.get_flows_for_key(db, user.id, key_id)
-        return Template(
-            template_name="flow_builder/flow_rows.htm",
-            context={"key_id": key_id, "flows": flows, "error": error},
-        )
+        return await self._rows(db, user, error)
 
     # --------------------------
     # CANVAS PAGE
     # --------------------------
-    @get("/{key_id:uuid}/{flow_id:uuid}/edit")
-    async def edit(
-        self, key_id: uuid.UUID, flow_id: uuid.UUID, db: AsyncSession, user: User
-    ) -> Template:
-        flow = await flow_service.get_flow(db, user.id, key_id, flow_id)
+    @get("/{flow_id:uuid}/edit")
+    async def edit(self, flow_id: uuid.UUID, db: AsyncSession, user: User) -> Template:
+        flow = await flow_service.get_flow(db, user.id, flow_id)
         ai_api_keys = await ai_settings_service.get_user_api_keys(db, user.id)
         ai_api_keys_json = [
             {"id": str(key.uuid), "label": key.label, "provider": key.provider_display}
@@ -65,31 +65,27 @@ class FlowBuilderController(Controller):
             template_name="flow_builder/canvas.htm",
             context={
                 "user": user,
-                "key_id": key_id,
                 "flow": flow,
                 "graph_data_json": json.dumps(flow.graph_data),
                 "ai_api_keys_json": json.dumps(ai_api_keys_json),
-                "active": "chatbot_settings",
+                "active": "flow_builder",
             },
         )
 
     # --------------------------
     # GRAPH — JSON GET (reload/discard)
     # --------------------------
-    @get("/{key_id:uuid}/{flow_id:uuid}/graph")
-    async def graph(
-        self, key_id: uuid.UUID, flow_id: uuid.UUID, db: AsyncSession, user: User
-    ) -> Response:
-        flow = await flow_service.get_flow(db, user.id, key_id, flow_id)
+    @get("/{flow_id:uuid}/graph")
+    async def graph(self, flow_id: uuid.UUID, db: AsyncSession, user: User) -> Response:
+        flow = await flow_service.get_flow(db, user.id, flow_id)
         return Response(flow.graph_data, media_type=_JSON, status_code=200)
 
     # --------------------------
     # SAVE
     # --------------------------
-    @post("/{key_id:uuid}/{flow_id:uuid}/save")
+    @post("/{flow_id:uuid}/save")
     async def save(
         self,
-        key_id: uuid.UUID,
         flow_id: uuid.UUID,
         request: Request,
         db: AsyncSession,
@@ -105,7 +101,7 @@ class FlowBuilderController(Controller):
             )
 
         try:
-            await flow_service.update_flow_graph(db, user.id, key_id, flow_id, graph_data)
+            await flow_service.update_flow_graph(db, user.id, flow_id, graph_data)
         except HTTPException as e:
             return Response(
                 f"<div class='alert alert-danger' data-success='false'>{e.detail}</div>",
@@ -122,65 +118,64 @@ class FlowBuilderController(Controller):
     # --------------------------
     # RENAME
     # --------------------------
-    @post("/{key_id:uuid}/{flow_id:uuid}/rename")
+    @post("/{flow_id:uuid}/rename")
     async def rename(
         self,
-        key_id: uuid.UUID,
         flow_id: uuid.UUID,
         request: Request,
         db: AsyncSession,
         user: User,
-    ) -> Response:
-        form = await request.form()
-        try:
-            await flow_service.rename_flow(db, user.id, key_id, flow_id, form.get("name", ""))
-        except HTTPException as e:
-            return Response(
-                f"<div class='alert alert-danger' data-success='false'>{e.detail}</div>",
-                media_type="text/html",
-                status_code=200,
-            )
-
-        return Response(
-            "<div class='alert alert-success' data-success='true'>Renamed.</div>",
-            media_type="text/html",
-            status_code=200,
-        )
-
-    # --------------------------
-    # ACTIVATE
-    # --------------------------
-    @post("/{key_id:uuid}/{flow_id:uuid}/activate")
-    async def activate(
-        self, key_id: uuid.UUID, flow_id: uuid.UUID, db: AsyncSession, user: User
     ) -> Template:
+        form = await request.form()
         error = None
         try:
-            await flow_service.activate_flow(db, user.id, key_id, flow_id)
+            await flow_service.rename_flow(db, user.id, flow_id, form.get("name", ""))
         except HTTPException as e:
             error = str(e.detail)
 
-        flows = await flow_service.get_flows_for_key(db, user.id, key_id)
-        return Template(
-            template_name="flow_builder/flow_rows.htm",
-            context={"key_id": key_id, "flows": flows, "error": error},
-        )
+        return await self._rows(db, user, error)
+
+    # --------------------------
+    # PUBLISH / UNPUBLISH
+    # --------------------------
+    @post("/{flow_id:uuid}/set-active")
+    async def set_active(
+        self,
+        flow_id: uuid.UUID,
+        request: Request,
+        db: AsyncSession,
+        user: User,
+    ) -> Template:
+        """Toggle the published/draft flag. Attachment is untouched."""
+        form = await request.form()
+        error = None
+        try:
+            await flow_service.set_flow_active(
+                db, user.id, flow_id, is_active=form.get("is_active") == "true",
+            )
+        except HTTPException as e:
+            error = str(e.detail)
+
+        return await self._rows(db, user, error)
 
     # --------------------------
     # DELETE
     # --------------------------
-    @post("/{key_id:uuid}/{flow_id:uuid}/delete")
-    async def delete(
-        self, key_id: uuid.UUID, flow_id: uuid.UUID, db: AsyncSession, user: User
-    ) -> Template:
+    @post("/{flow_id:uuid}/delete")
+    async def delete(self, flow_id: uuid.UUID, db: AsyncSession, user: User) -> Template:
         error = None
         try:
-            await flow_service.delete_flow(db, user.id, key_id, flow_id)
+            await flow_service.delete_flow(db, user.id, flow_id)
         except HTTPException as e:
             error = str(e.detail)
 
-        flows = await flow_service.get_flows_for_key(db, user.id, key_id)
+        return await self._rows(db, user, error)
+
+    @staticmethod
+    async def _rows(db: AsyncSession, user: User, error: str | None) -> Template:
+        """The HTMX response every mutation returns: error banner + rebuilt table body."""
+        flows = await flow_service.get_user_flow_views(db, user.id)
         return Template(
-            template_name="flow_builder/flow_rows.htm",
-            context={"key_id": key_id, "flows": flows, "error": error},
+            template_name=_ROWS_TEMPLATE,
+            context={"flows": flows, "error": error},
         )

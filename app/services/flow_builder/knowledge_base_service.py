@@ -53,11 +53,10 @@ _MIME_TYPES = {
 async def get_or_create_knowledge_base(
     db: AsyncSession,
     user_id: int,
-    key_id: uuid.UUID,
     flow_id: uuid.UUID,
     node_id: str,
 ) -> FlowNodeKnowledgeBase:
-    flow = await flow_service.get_flow(db, user_id, key_id, flow_id)  # ownership check
+    flow = await flow_service.get_flow(db, user_id, flow_id)  # ownership check
     kb = await kb_crud.get_one(db, filters={"flow_id": flow.id, "node_id": node_id})
     if kb:
         return kb
@@ -79,11 +78,10 @@ def _document_summary(doc: FlowNodeKnowledgeDocument) -> dict:
 async def get_knowledge_base_state(
     db: AsyncSession,
     user_id: int,
-    key_id: uuid.UUID,
     flow_id: uuid.UUID,
     node_id: str,
 ) -> dict:
-    kb = await get_or_create_knowledge_base(db, user_id, key_id, flow_id, node_id)
+    kb = await get_or_create_knowledge_base(db, user_id, flow_id, node_id)
     documents = await kb_document_crud.get_many(
         db, filters={"knowledge_base_id": kb.id}, order_by="created_at",
     )
@@ -122,7 +120,6 @@ def _validate_upload(filename: str, content: bytes) -> str:
 async def upload_documents(
     db: AsyncSession,
     user_id: int,
-    key_id: uuid.UUID,
     flow_id: uuid.UUID,
     node_id: str,
     file_payloads: List[dict],
@@ -133,7 +130,7 @@ async def upload_documents(
     `[{"filename": str, "content": bytes}, ...]`, matching file_service's
     framework-agnostic convention.
     """
-    kb = await get_or_create_knowledge_base(db, user_id, key_id, flow_id, node_id)
+    kb = await get_or_create_knowledge_base(db, user_id, flow_id, node_id)
     upload_dir = ensure_knowledge_base_upload_dir(str(kb.uuid))
 
     results: List[dict] = []
@@ -176,7 +173,6 @@ async def upload_documents(
 async def add_manual_text(
     db: AsyncSession,
     user_id: int,
-    key_id: uuid.UUID,
     flow_id: uuid.UUID,
     node_id: str,
     label: str,
@@ -191,7 +187,7 @@ async def add_manual_text(
             detail=f"Text must not exceed {_MAX_MANUAL_TEXT_CHARS:,} characters",
         )
 
-    kb = await get_or_create_knowledge_base(db, user_id, key_id, flow_id, node_id)
+    kb = await get_or_create_knowledge_base(db, user_id, flow_id, node_id)
     doc = await kb_document_crud.create(db, {
         "knowledge_base_id": kb.id,
         "source_type": "manual",
@@ -206,12 +202,11 @@ async def add_manual_text(
 async def delete_document(
     db: AsyncSession,
     user_id: int,
-    key_id: uuid.UUID,
     flow_id: uuid.UUID,
     node_id: str,
     document_id: uuid.UUID,
 ) -> None:
-    kb = await get_or_create_knowledge_base(db, user_id, key_id, flow_id, node_id)
+    kb = await get_or_create_knowledge_base(db, user_id, flow_id, node_id)
     doc = await kb_document_crud.get_by_uuid(db, document_id, extra_filters={"knowledge_base_id": kb.id})
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -301,11 +296,10 @@ async def _embed_extracted_documents(db: AsyncSession, knowledge_base_id: int) -
 async def train_knowledge_base(
     db: AsyncSession,
     user_id: int,
-    key_id: uuid.UUID,
     flow_id: uuid.UUID,
     node_id: str,
 ) -> dict:
-    kb = await get_or_create_knowledge_base(db, user_id, key_id, flow_id, node_id)
+    kb = await get_or_create_knowledge_base(db, user_id, flow_id, node_id)
     documents = await kb_document_crud.get_many(db, filters={"knowledge_base_id": kb.id})
     if not documents:
         raise HTTPException(
@@ -329,7 +323,7 @@ async def train_knowledge_base(
             "status": "trained", "error_message": None, "trained_at": datetime.now(timezone.utc),
         })
 
-    return await get_knowledge_base_state(db, user_id, key_id, flow_id, node_id)
+    return await get_knowledge_base_state(db, user_id, flow_id, node_id)
 
 
 # --------------------------------------------------------------------------

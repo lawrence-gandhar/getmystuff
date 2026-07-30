@@ -23,13 +23,13 @@ from litestar.exceptions import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.db.chatbot.queries import get_or_create_ai_settings
 from app.db.db_utils import CRUDQueryBuilder
 from app.models.chatbot import ChatbotApiKey, ChatbotMessage
 from app.models.datasource import DatasourceFile
 from app.services.ai_analytics.ai_analytics_service import datasource_crud, run_grounded_prompt
 
 chatbot_key_crud = CRUDQueryBuilder(ChatbotApiKey)
-chatbot_message_crud = CRUDQueryBuilder(ChatbotMessage)
 
 _MAX_MESSAGE_LEN = 2000
 _VALID_TARGET_TYPES = {"datasource", "file", "table", "collection"}
@@ -174,7 +174,7 @@ async def create_chatbot_key(
 
     allowed_origins = _parse_allowed_origins(allowed_origins_raw)
 
-    return await chatbot_key_crud.create(db, {
+    chatbot_key = await chatbot_key_crud.create(db, {
         "user_id": user_id,
         "name": name,
         "datasource_id": datasource.id,
@@ -183,6 +183,14 @@ async def create_chatbot_key(
         "file_ids": [str(fid) for fid in resolved_file_ids],
         "allowed_origins": allowed_origins,
     })
+
+    # A chatbot is never left without a persona: this seeds its agent name,
+    # default system prompt and prompt variables straight away, so the very
+    # first visitor message is answered with a real prompt rather than a
+    # placeholder created later on first settings-page visit.
+    await get_or_create_ai_settings(db, chatbot_key.id)
+
+    return chatbot_key
 
 
 async def update_chatbot_key(
@@ -233,14 +241,26 @@ async def answer_message(
     extra_instructions: str = "",
     forced_key_uuid: Optional[uuid.UUID] = None,
     use_inbuilt_llm: bool = False,
+    system_prompt_override: str = "",
+    action_context: str = "",
 ):
     """
-    Answer a widget visitor's message and log the exchange. Returns an AnalyticsResult.
+    Answer a widget visitor's message. Returns an AnalyticsResult.
 
-    `extra_instructions`, `forced_key_uuid`, and `use_inbuilt_llm` are optional
-    passthroughs to run_grounded_prompt, used by the Flow Builder AI Fallback
-    node's guardrails/prompt, "attached LLM API", and "In-built LLM" settings —
-    all default to "unset" so the plain widget-fallback caller is unaffected.
+    Persisting the exchange is deliberately *not* done here: one visitor turn
+    can reach this function more than once (a Flow Builder AI Fallback node
+    answering inside a flow), so the conversation/performance log is written
+    once per turn by chatbot_turn_service instead.
+
+    Every optional argument is a passthrough to run_grounded_prompt, defaulting
+    to "unset" so no caller is forced to know about features it doesn't use:
+
+    * `extra_instructions`, `forced_key_uuid`, `use_inbuilt_llm` — the Flow
+      Builder AI Fallback node's guardrails/prompt and LLM choice.
+    * `system_prompt_override` — the chatbot's own configured system prompt
+      (see chatbot_ai_settings_service.render_system_prompt).
+    * `action_context` — the response from a webhook action that already ran
+      for this turn (the action itself is logged by chatbot_action_service).
     """
 
     message = (message or "").strip()
@@ -255,40 +275,20 @@ async def answer_message(
     if not datasource:
         raise HTTPException(status_code=404, detail="This chatbot's data source is no longer available")
 
-    try:
-        result = await run_grounded_prompt(
-            db,
-            chatbot_key.user_id,
-            datasource,
-            chatbot_key.target_type,
-            target_names=chatbot_key.target_names,
-            file_ids=[int(fid) for fid in chatbot_key.file_ids],
-            prompt=message,
-            extra_instructions=extra_instructions,
-            forced_key_uuid=forced_key_uuid,
-            use_inbuilt_llm=use_inbuilt_llm,
-        )
-
-        await chatbot_message_crud.create(db, {
-            "chatbot_key_id": chatbot_key.id,
-            "visitor_message": message,
-            "status": "success",
-            "ai_response": {
-                "summary": result.summary,
-                "insights": result.insights or [],
-                "table": result.table.model_dump() if result.table else None,
-            },
-        })
-        return result
-
-    except HTTPException as exc:
-        await chatbot_message_crud.create(db, {
-            "chatbot_key_id": chatbot_key.id,
-            "visitor_message": message,
-            "status": "error",
-            "error_message": str(exc.detail),
-        })
-        raise
+    return await run_grounded_prompt(
+        db,
+        chatbot_key.user_id,
+        datasource,
+        chatbot_key.target_type,
+        target_names=chatbot_key.target_names,
+        file_ids=[int(fid) for fid in chatbot_key.file_ids],
+        prompt=message,
+        extra_instructions=extra_instructions,
+        forced_key_uuid=forced_key_uuid,
+        use_inbuilt_llm=use_inbuilt_llm,
+        system_prompt_override=system_prompt_override,
+        action_context=action_context,
+    )
 
 
 # --------------------------------------------------------------------------
@@ -390,18 +390,38 @@ _WIDGET_SCRIPT_TEMPLATE = r"""
       ".gms-chatbot-watermark{position:absolute;inset:0;background-image:url(" + JSON.stringify(cfg.watermark_image_url) + ");" +
       "background-size:contain;background-position:center;background-repeat:no-repeat;" +
       "opacity:" + (cfg.watermark_opacity / 100) + ";pointer-events:none;z-index:0;}" +
-      ".gms-chatbot-msg-row{position:relative;z-index:1;display:flex;align-items:flex-end;gap:6px;max-width:100%;}" +
+      // align-items:flex-start keeps the bot avatar level with the FIRST line of
+      // its bubble; flex-end would sink it to the bottom of a tall reply (a
+      // table or a bullet list), reading as if it belonged to the next message.
+      ".gms-chatbot-msg-row{position:relative;z-index:1;display:flex;align-items:flex-start;gap:6px;max-width:100%;}" +
       ".gms-chatbot-msg-avatar{width:22px;height:22px;border-radius:50%;object-fit:cover;flex:none;}" +
       ".gms-chatbot-msg{position:relative;z-index:1;margin-bottom:10px;font-size:13px;line-height:1.4;max-width:85%;" +
       "padding:8px 10px;border-radius:8px;white-space:pre-wrap;}" +
       ".gms-chatbot-msg-row .gms-chatbot-msg{max-width:calc(85% - 28px);}" +
+      // The visitor's own messages sit on the right, the bot's on the left, so
+      // who said what is readable at a glance. Every bubble lives inside a
+      // .gms-chatbot-msg-row flex container for this reason: a bare block div
+      // stretches to the full panel width and ignores auto margins entirely.
+      ".gms-chatbot-msg-row-user{justify-content:flex-end;}" +
+      ".gms-chatbot-msg-row-user .gms-chatbot-msg{max-width:85%;}" +
       ".gms-chatbot-msg-user{background:" + cfg.brand_color + ";color:" + cfg.user_message_text_color + ";" +
-      "margin-left:auto;border-bottom-right-radius:2px;}" +
+      "border-bottom-right-radius:2px;}" +
       ".gms-chatbot-msg-bot{background:" + cfg.bot_message_bg_color + ";color:" + cfg.bot_message_text_color + ";" +
       "margin-right:auto;border-bottom-left-radius:2px;}" +
       ".gms-chatbot-msg-error{background:#f8d7da;color:#842029;margin-right:auto;}" +
       ".gms-chatbot-msg-idle{background:#fff3cd;color:#664d03;margin-right:auto;font-style:italic;}" +
       ".gms-chatbot-msg ul{margin:6px 0 0;padding-left:18px;}" +
+      // Menu/Dropdown choices stack vertically — a horizontal row overflowed
+      // the panel and forced a sideways scrollbar as soon as a flow had more
+      // than two options. Indented to line up with the bot bubble it follows.
+      ".gms-chatbot-options{position:relative;z-index:1;display:flex;flex-direction:column;" +
+      "align-items:stretch;gap:6px;margin:0 0 10px;max-width:85%;}" +
+      ".gms-chatbot-options-indent{margin-left:28px;}" +
+      ".gms-chatbot-option{display:block;width:100%;text-align:left;background:#fff;" +
+      "color:" + cfg.brand_color + ";border:1px solid " + cfg.brand_color + ";" +
+      "border-radius:8px;padding:8px 12px;font-size:13px;font-family:inherit;" +
+      "line-height:1.3;cursor:pointer;}" +
+      ".gms-chatbot-option:hover{background:" + cfg.brand_color + ";color:#fff;}" +
       ".gms-chatbot-table{border-collapse:collapse;margin-top:6px;font-size:11px;}" +
       ".gms-chatbot-table th,.gms-chatbot-table td{border:1px solid #ced4da;padding:3px 6px;}" +
       ".gms-chatbot-input-row{display:flex;border-top:1px solid #dee2e6;padding:8px;gap:6px;background:#fff;}" +
@@ -411,7 +431,11 @@ _WIDGET_SCRIPT_TEMPLATE = r"""
       "cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;min-width:40px;}" +
       ".gms-chatbot-send:disabled{opacity:.5;cursor:default;}" +
       ".gms-chatbot-send-icon{width:16px;height:16px;object-fit:contain;}" +
-      ".gms-chatbot-typing{font-size:12px;color:#6c757d;padding:0 12px 8px;}"
+      ".gms-chatbot-typing{font-size:12px;color:#6c757d;padding:0 12px 8px;}" +
+      // Sits under the bubble it belongs to, indented past the avatar so it
+      // lines up with the reply text rather than the icon.
+      ".gms-chatbot-meta{position:relative;z-index:1;font-size:10px;color:#6c757d;" +
+      "margin:-6px 0 10px;display:flex;align-items:center;gap:4px;}"
     );
   }
 
@@ -506,10 +530,15 @@ _WIDGET_SCRIPT_TEMPLATE = r"""
   }
 
   function renderUserMessage(container, text) {
+    var row = document.createElement("div");
+    row.className = "gms-chatbot-msg-row gms-chatbot-msg-row-user";
+
     var bubble = document.createElement("div");
     bubble.className = "gms-chatbot-msg gms-chatbot-msg-user";
     bubble.textContent = text;
-    container.appendChild(bubble);
+
+    row.appendChild(bubble);
+    container.appendChild(row);
   }
 
   // Wraps a bot-side bubble (AI response / idle nudge) with the configured
@@ -529,11 +558,33 @@ _WIDGET_SCRIPT_TEMPLATE = r"""
     container.appendChild(row);
   }
 
-  function renderErrorMessage(container, message) {
+  // How long the server took to produce the reply above, in the units a
+  // person reads fastest: whole milliseconds under a second, one decimal of a
+  // second beyond that. Skipped entirely when the server sent no timing (an
+  // unreachable service, or a locally-rendered message like the welcome text),
+  // so the line never appears claiming "0 ms".
+  function formatDuration(ms) {
+    if (ms < 1000) return Math.round(ms) + " ms";
+    return (ms / 1000).toFixed(1) + " s";
+  }
+
+  function renderResponseTime(container, ms, cfg) {
+    if (typeof ms !== "number" || !isFinite(ms) || ms <= 0) return;
+
+    var meta = document.createElement("div");
+    meta.className = "gms-chatbot-meta";
+    if (cfg.bot_icon_url) meta.style.marginLeft = "28px";
+    meta.textContent = "⏱ " + formatDuration(ms);
+    container.appendChild(meta);
+  }
+
+  // Bot-side like the idle nudge: an error is the chatbot talking, so it gets
+  // the same avatar + left-hand placement rather than stretching full width.
+  function renderErrorMessage(container, message, cfg) {
     var bubble = document.createElement("div");
     bubble.className = "gms-chatbot-msg gms-chatbot-msg-error";
     bubble.textContent = message;
-    container.appendChild(bubble);
+    appendBotSideMessage(container, bubble, cfg);
   }
 
   function renderIdleMessage(container, text, cfg) {
@@ -567,6 +618,10 @@ _WIDGET_SCRIPT_TEMPLATE = r"""
         "</tbody></table>";
     }
 
+    // Nothing to say — skip the bubble entirely. An empty one renders as a
+    // stray blank rectangle that reads as a broken reply.
+    if (!html.trim()) return;
+
     bubble.innerHTML = html;
     appendBotSideMessage(container, bubble, cfg);
   }
@@ -577,15 +632,15 @@ _WIDGET_SCRIPT_TEMPLATE = r"""
   // the option's value, reusing send()'s own network/loading-state plumbing.
   function renderOptionsMessage(container, data, cfg, onSelect) {
     if (data.text) renderBotMessage(container, { summary: data.text }, cfg);
+    renderResponseTime(container, data.response_time_ms, cfg);
 
     var options = data.options || [];
     var wrap = document.createElement("div");
-    wrap.className = "gms-chatbot-msg-row";
+    wrap.className = "gms-chatbot-options" + (cfg.bot_icon_url ? " gms-chatbot-options-indent" : "");
 
     if (data.type === "dropdown") {
       var select = document.createElement("select");
       select.className = "gms-chatbot-input";
-      select.style.marginRight = "6px";
       options.forEach(function (opt) {
         var optionEl = document.createElement("option");
         optionEl.value = opt.value;
@@ -593,7 +648,7 @@ _WIDGET_SCRIPT_TEMPLATE = r"""
         select.appendChild(optionEl);
       });
       var confirmBtn = document.createElement("button");
-      confirmBtn.className = "gms-chatbot-send";
+      confirmBtn.className = "gms-chatbot-option";
       confirmBtn.textContent = "Select";
       confirmBtn.addEventListener("click", function () {
         wrap.remove();
@@ -604,9 +659,8 @@ _WIDGET_SCRIPT_TEMPLATE = r"""
     } else {
       options.forEach(function (opt) {
         var btn = document.createElement("button");
-        btn.className = "gms-chatbot-send";
-        btn.style.marginRight = "6px";
-        btn.style.marginBottom = "6px";
+        btn.className = "gms-chatbot-option";
+        btn.type = "button";
         btn.textContent = opt.label;
         btn.addEventListener("click", function () {
           wrap.remove();
@@ -755,11 +809,12 @@ _WIDGET_SCRIPT_TEMPLATE = r"""
           if (res.ok && res.data && res.data.status === "success") {
             renderResponse(res.data);
           } else {
-            renderErrorMessage(messagesEl, (res.data && res.data.message) || "Something went wrong. Please try again.");
+            renderErrorMessage(messagesEl, (res.data && res.data.message) || "Something went wrong. Please try again.", cfg);
+            renderResponseTime(messagesEl, res.data && res.data.response_time_ms, cfg);
           }
         })
         .catch(function () {
-          renderErrorMessage(messagesEl, "Could not reach the chatbot service. Please try again.");
+          renderErrorMessage(messagesEl, "Could not reach the chatbot service. Please try again.", cfg);
         })
         .then(function () {
           inputEl.disabled = false;
@@ -777,15 +832,18 @@ _WIDGET_SCRIPT_TEMPLATE = r"""
     function renderResponse(data) {
       var type = data.type || "text";
       if (type === "buttons" || type === "dropdown") {
+        // Renders its own timing line, between the prompt and the choices.
         renderOptionsMessage(messagesEl, data, cfg, function (value, label) {
           send({ text: "", selectedValue: value, displayText: label });
         });
       } else if (type === "text_prompt") {
         renderBotMessage(messagesEl, { summary: data.text || "" }, cfg);
+        renderResponseTime(messagesEl, data.response_time_ms, cfg);
       } else if (type === "flow_ended") {
         // No special rendering — input stays enabled for the visitor to keep chatting.
       } else {
         renderBotMessage(messagesEl, data, cfg);
+        renderResponseTime(messagesEl, data.response_time_ms, cfg);
       }
     }
 

@@ -1,0 +1,142 @@
+{# Shared create/edit form for one webhook action.
+
+   Included by the Actions library page and by an agent's Actions tab (which
+   posts it to its own create-and-attach endpoint), so the ten fields and their
+   validation rules only exist once. The caller supplies:
+
+     form_action  - the hx-post URL for a new action
+     form_note    - optional line of context shown above the fields
+
+   Element ids are shared on purpose: only one of the two pages is ever rendered
+   at a time, and static/js/chatbot_ai_settings.js drives both by these ids.
+#}
+<div class="offcanvas offcanvas-end" tabindex="-1" id="chatbotActionOffcanvas"
+     aria-labelledby="chatbotActionOffcanvasLabel" style="width: 38vw;">
+    <div class="offcanvas-header border-bottom">
+        <h5 class="offcanvas-title" id="chatbotActionOffcanvasLabel">
+            <i class="las la-bolt text-primary"></i>
+            <span id="chatbotActionOffcanvasTitleText">Add Action</span>
+        </h5>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+    </div>
+
+    <div class="offcanvas-body">
+        <div id="chatbotActionFormResponse" class="mb-3"></div>
+
+        {% if form_note %}
+        <p class="text-muted small">{{ form_note }}</p>
+        {% endif %}
+
+        <form id="chatbotActionForm"
+              hx-post="{{ form_action }}"
+              hx-target="#chatbotActionFormResponse"
+              hx-swap="innerHTML"
+              onsubmit="return caiOnActionSubmit();"
+              hx-on::after-request="
+                  const el = document.getElementById('chatbotActionFormResponse');
+                  if (el && el.querySelector('[data-success=true]')) {
+                      caiResetActionForm();
+                      bootstrap.Offcanvas.getInstance(document.getElementById('chatbotActionOffcanvas')).hide();
+                  }
+              ">
+            <div class="mb-3">
+                <label for="caiActionName" class="form-label fw-semibold">
+                    Name <span class="text-danger">*</span>
+                </label>
+                <input type="text" class="form-control font-monospace" id="caiActionName" name="name"
+                       placeholder="lookup_order_status" required maxlength="64"
+                       pattern="[a-z][a-z0-9_]{2,63}" autocomplete="off">
+                <div class="form-text">
+                    Lowercase letters, numbers and underscores, 3&ndash;64 characters, unique across
+                    your actions. The AI selects the action by this name.
+                </div>
+            </div>
+
+            <div class="mb-3">
+                <label for="caiActionDescription" class="form-label fw-semibold">
+                    When to use it <span class="text-danger">*</span>
+                </label>
+                <textarea class="form-control" id="caiActionDescription" name="description" rows="2"
+                          maxlength="500" required
+                          placeholder="Use when the visitor asks about the status of an existing order and provides an order number."></textarea>
+                <div class="form-text">This is the only thing the AI uses to decide whether to call it.</div>
+            </div>
+
+            <div class="row g-2 mb-3">
+                <div class="col-4">
+                    <label for="caiActionMethod" class="form-label fw-semibold">Method</label>
+                    <select class="form-select" id="caiActionMethod" name="http_method">
+                        {% for method in action_methods %}
+                        <option value="{{ method }}">{{ method }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-8">
+                    <label for="caiActionTimeout" class="form-label fw-semibold">Timeout (seconds)</label>
+                    <input type="number" class="form-control" id="caiActionTimeout" name="timeout_seconds"
+                           value="10" min="1" max="30" required>
+                </div>
+            </div>
+
+            <div class="mb-3">
+                <label for="caiActionUrl" class="form-label fw-semibold">
+                    URL <span class="text-danger">*</span>
+                </label>
+                <input type="url" class="form-control font-monospace" id="caiActionUrl" name="url"
+                       placeholder="https://api.example.com/orders/{{ '{{param.order_id}}' }}"
+                       required maxlength="1000">
+                <div class="form-text">
+                    HTTPS only, and must resolve to a public address. Use
+                    <code>{{ '{{param.name}}' }}</code> for AI-supplied values and
+                    <code>{{ '{{VARIABLE}}' }}</code> for an agent's prompt variables &mdash; both are
+                    URL-encoded when substituted.
+                </div>
+            </div>
+
+            <fieldset class="mb-3">
+                <legend class="form-label fw-semibold h6">Parameters</legend>
+                <div id="caiParamRows" class="vstack gap-2 mb-2"></div>
+                <button type="button" class="btn btn-sm btn-outline-primary" onclick="caiAddParamRow();">
+                    <i class="las la-plus"></i> Add parameter
+                </button>
+                <div class="form-text">
+                    Values the AI must extract from the conversation. Up to 10; a required parameter the
+                    visitor hasn't provided makes the assistant ask for it instead of calling the action.
+                    Any parameter used in the URL or body must be Required.
+                </div>
+                <input type="hidden" name="parameters_json" id="caiParametersJson">
+            </fieldset>
+
+            <fieldset class="mb-3">
+                <legend class="form-label fw-semibold h6">Headers</legend>
+                <div id="caiHeaderRows" class="vstack gap-2 mb-2"></div>
+                <button type="button" class="btn btn-sm btn-outline-primary" onclick="caiAddHeaderRow();">
+                    <i class="las la-plus"></i> Add header
+                </button>
+                <div class="form-text">
+                    Stored encrypted. Values may reference <code>{{ '{{VARIABLE}}' }}</code> but never
+                    <code>{{ '{{param.*}}' }}</code> &mdash; AI-supplied values must not reach a header.
+                </div>
+                <input type="hidden" name="headers_json" id="caiHeadersJson">
+            </fieldset>
+
+            <div class="mb-4">
+                <label for="caiActionBody" class="form-label fw-semibold">Request Body (JSON)</label>
+                <textarea class="form-control font-monospace small" id="caiActionBody" name="body_template"
+                          rows="4" maxlength="4000" spellcheck="false"
+                          placeholder='{"order_id": "{{ '{{param.order_id}}' }}"}'></textarea>
+                <div class="form-text">
+                    Leave empty for GET. Quote string placeholders (<code>"{{ '{{param.id}}' }}"</code>);
+                    leave number and boolean placeholders unquoted.
+                </div>
+            </div>
+
+            <div class="d-flex gap-2">
+                <button type="submit" class="btn btn-primary">
+                    <i class="las la-save"></i> Save Action
+                </button>
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="offcanvas">Cancel</button>
+            </div>
+        </form>
+    </div>
+</div>

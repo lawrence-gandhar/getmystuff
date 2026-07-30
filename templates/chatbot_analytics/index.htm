@@ -1,0 +1,158 @@
+{% extends "base/layout.htm" %}
+{% block title %}Chatbot Analytics | GetMyStuff{% endblock %}
+
+{% block extra_css %}
+<style>
+    /* Stat tiles */
+    .gms-stat-card {
+        border: 1px solid #e9ecef;
+        border-radius: .5rem;
+        background: #fff;
+        padding: .85rem 1rem;
+        height: 100%;
+    }
+    .gms-stat-label {
+        font-size: .7rem;
+        text-transform: uppercase;
+        letter-spacing: .04em;
+        color: #6c757d;
+        font-weight: 600;
+    }
+    .gms-stat-value {
+        font-size: 1.5rem;
+        font-weight: 600;
+        line-height: 1.2;
+    }
+    .gms-stat-note {
+        font-size: .72rem;
+        color: #6c757d;
+    }
+
+    /* Bar charts — plain CSS columns rather than a charting library, so the
+       dashboard renders identically offline and inside an HTMX swap. */
+    .gms-chart {
+        display: flex;
+        align-items: flex-end;
+        gap: 2px;
+        height: 160px;
+        padding-top: .5rem;
+    }
+    .gms-chart-col {
+        flex: 1 1 0;
+        height: 100%;
+        position: relative;
+        min-width: 3px;
+    }
+    .gms-chart-bar {
+        position: absolute;
+        bottom: 0;
+        width: 100%;
+        border-radius: 2px 2px 0 0;
+        background: #2563eb;
+    }
+    .gms-chart-bar-muted { background: #94a3b8; }
+    .gms-chart-bar-error { background: #dc3545; }
+    .gms-chart-axis {
+        display: flex;
+        gap: 2px;
+        margin-top: .35rem;
+    }
+    .gms-chart-tick {
+        flex: 1 1 0;
+        min-width: 3px;
+        font-size: .62rem;
+        color: #6c757d;
+        text-align: center;
+        white-space: nowrap;
+        overflow: visible;
+    }
+    .gms-legend-dot {
+        display: inline-block;
+        width: .55rem;
+        height: .55rem;
+        border-radius: 2px;
+        margin-right: .25rem;
+    }
+    .gms-empty-chart {
+        height: 160px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #adb5bd;
+        font-size: .85rem;
+    }
+    .gms-truncate-cell {
+        max-width: 320px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container mt-4" style="max-width: 100%;">
+
+    <!-- PAGE HEADER -->
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h5 class="fw-semibold mb-0">
+            <i class="las la-chart-line text-primary"></i> Chatbot Analytics
+        </h5>
+        <a href="/chatbot-settings" class="btn btn-outline-secondary btn-sm">
+            <i class="las la-comments"></i> Manage Agents
+        </a>
+    </div>
+
+    <p class="text-muted small mb-3">
+        Performance across every turn your agents have answered — how long each reply took,
+        what it cost in tokens, which model served it, and what failed. Timings are measured
+        on the server, so they match the response time shown in the chat widget itself.
+    </p>
+
+    <!-- FILTERS — every change re-renders the dashboard body only -->
+    <form
+        class="card shadow-sm p-3 mb-3"
+        hx-get="/chatbot-analytics/data"
+        hx-target="#analyticsDashboard"
+        hx-swap="innerHTML"
+        hx-trigger="change"
+        hx-indicator="#analyticsLoading"
+    >
+        <div class="row g-2 align-items-end">
+            <div class="col-md-4">
+                <label for="analyticsChatbot" class="form-label fw-semibold small mb-1">Agent</label>
+                <select id="analyticsChatbot" name="chatbot_id" class="form-select form-select-sm">
+                    <option value="">All agents</option>
+                    {% for bot in chatbots %}
+                    <option value="{{ bot.uuid }}" {% if selected_chatbot_uuid == bot.uuid|string %}selected{% endif %}>
+                        {{ bot.name }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="col-md-3">
+                <label for="analyticsPeriod" class="form-label fw-semibold small mb-1">Time range</label>
+                <select id="analyticsPeriod" name="period" class="form-select form-select-sm">
+                    {% for value, option in period_options.items() %}
+                    <option value="{{ value }}" {% if period == value %}selected{% endif %}>
+                        {{ option.label }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="col-md-5 text-md-end">
+                <span id="analyticsLoading" class="htmx-indicator text-muted small">
+                    <span class="spinner-border spinner-border-sm me-1"></span> Updating…
+                </span>
+            </div>
+        </div>
+    </form>
+
+    <div id="analyticsDashboard">
+        {% include "chatbot_analytics/partials/dashboard.htm" %}
+    </div>
+
+</div>
+{% endblock %}

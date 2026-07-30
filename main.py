@@ -17,8 +17,15 @@ from app.routes.dashboard import DashboardController
 from app.routes.datasource import DataSourceController, DataSourceConfigurations
 from app.routes.ai_analytics import AIAnalyticsController, QueryRunnerController
 from app.routes.ai_settings import AISettingsController
-from app.routes.chatbot import ChatbotSettingsController, PublicChatbotController
+from app.routes.chatbot import (
+    ChatbotActionController,
+    ChatbotSettingsController,
+    PublicChatbotController,
+)
+from app.routes.chatbot_analytics import ChatbotAnalyticsController
 from app.routes.flow_builder import FlowBuilderController, KnowledgeBaseController
+
+from app.services.ai_inbuilt import ollama_client
 
 from app.db.db_sessions import get_db
 from app.db.base import Base
@@ -69,6 +76,15 @@ async def on_startup() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
+    # Load the local Ollama models now so the first AI request doesn't wait on
+    # a cold model load. Best effort — never blocks startup (see docstring).
+    await ollama_client.preload_models()
+
+
+async def on_shutdown() -> None:
+    """Release the pooled HTTP connection to the local Ollama server."""
+    await ollama_client.close_client()
+
 
 # -----------------------------
 # Exception Handler for Token Expiry
@@ -104,6 +120,8 @@ app = Litestar(
         AISettingsController,
         QueryRunnerController,
         ChatbotSettingsController,
+        ChatbotActionController,
+        ChatbotAnalyticsController,
         FlowBuilderController,
         KnowledgeBaseController,
         PublicChatbotController,
@@ -131,6 +149,7 @@ app = Litestar(
         HTTPException: http_exception_handler,
     },
     on_startup=[on_startup],
+    on_shutdown=[on_shutdown],
 )
 
 

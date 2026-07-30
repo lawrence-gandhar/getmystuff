@@ -26,6 +26,18 @@ flow_session_crud = CRUDQueryBuilder(ChatbotFlowSession)
 _SESSION_STALE_HOURS = 12
 _MAX_INTERNAL_HOPS = 25
 
+# Not a wire-protocol type the widget ever sees — an internal signal from
+# advance_flow_session to the public message handler meaning "this visitor has
+# finished the flow; answer with plain AI instead".
+AI_HANDOFF = "ai_handoff"
+
+# Sign-off used whenever a flow reaches a terminal point with nothing of its
+# own to say — an End node whose message was left blank, or a branch that runs
+# out of graph. Ending the conversation politely is the correct behaviour here:
+# a terminal point must never replay the flow from the top, and must never
+# answer with silence (which the widget would draw as a blank chat bubble).
+_DEFAULT_END_MESSAGE = "Thank you for chatting with us. Goodbye!"
+
 # Node types that end a turn waiting for a specific kind of visitor reply.
 _AWAITING_TEXT_TYPES = {"ask_input"}
 _AWAITING_SELECTION_TYPES = {"menu", "dropdown"}
@@ -34,7 +46,11 @@ _AWAITING_NODE_TYPES = _AWAITING_TEXT_TYPES | _AWAITING_SELECTION_TYPES
 
 @dataclass
 class FlowEngineResult:
-    type: str  # "text" | "buttons" | "dropdown" | "text_prompt" | "flow_ended"
+    # "text" | "buttons" | "dropdown" | "text_prompt". A finished flow is a
+    # plain "text" sign-off (see _end_of_flow), never a contentless result —
+    # the widget still understands the legacy "flow_ended" type, but nothing
+    # emits it, because every terminal point now says something.
+    type: str
     text: Optional[str] = None
     options: List[dict] = field(default_factory=list)
     insights: List[str] = field(default_factory=list)
@@ -115,35 +131,77 @@ async def _load_or_create_session(
 
 
 def _session_needs_restart(session: ChatbotFlowSession, flow: ChatbotFlow) -> bool:
+    """
+    Whether this visitor's session should be thrown away and re-run from the
+    flow's Start node.
+
+    Note what is deliberately absent: `status == "completed"`. A visitor who
+    ran the flow to its end is finished with it, and gets plain AI answering
+    from then on (see AI_HANDOFF) rather than being looped back to the top
+    menu. Every reason listed here outranks that — the flow itself changed
+    under them, or the session aged out — so a finished visitor is still
+    brought back into a flow that has since been edited or replaced, and the
+    widget's restart button mints a fresh session token to re-enter on demand.
+    """
     if session.flow_id != flow.id:
         return True
-    if session.status == "completed":
-        # A completed session (an End node, or any other dead end) starts
-        # the flow over on the visitor's next message rather than handing
-        # off to AI — while a flow is active for this chatbot, it always
-        # answers; only an explicit AI Fallback node inside the flow itself
-        # hands a single turn to plain AI answering.
+    if _flow_edited_since_last_turn(session, flow):
         return True
     if _find_node(flow.graph_data, session.current_node_id) is None:
         return True
     return _session_is_stale(session)
 
 
-def _session_is_stale(session: ChatbotFlowSession) -> bool:
-    if session.updated_at is None:
+def _as_utc(value: Optional[datetime]) -> Optional[datetime]:
+    """Normalize a possibly-naive timestamp column to an aware UTC datetime."""
+    if value is None:
+        return None
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
+def _flow_edited_since_last_turn(session: ChatbotFlowSession, flow: ChatbotFlow) -> bool:
+    """
+    True when the flow was saved in the builder after this visitor's last turn.
+
+    Editing a flow rewrites graph_data on the existing row, so flow_id stays
+    the same and can't detect it. Without this check an in-progress session
+    keeps walking its old position — the visitor sees none of the edit until
+    they happen to reach the end of the flow, and reloading the page doesn't
+    help because the session token is persisted in the browser's
+    localStorage.
+    """
+    flow_updated_at = _as_utc(flow.updated_at)
+    session_updated_at = _as_utc(session.updated_at)
+    if flow_updated_at is None or session_updated_at is None:
         return False
-    updated_at = session.updated_at
-    if updated_at.tzinfo is None:
-        updated_at = updated_at.replace(tzinfo=timezone.utc)
+    return flow_updated_at > session_updated_at
+
+
+def _session_is_stale(session: ChatbotFlowSession) -> bool:
+    updated_at = _as_utc(session.updated_at)
+    if updated_at is None:
+        return False
     return (datetime.now(timezone.utc) - updated_at) > timedelta(hours=_SESSION_STALE_HOURS)
 
 
 async def _persist_session(db: AsyncSession, session: ChatbotFlowSession) -> None:
+    """
+    Write the session's post-turn state back.
+
+    `updated_at` is set explicitly rather than left to the column's
+    `onupdate=func.now()`. CRUDQueryBuilder.update() assigns attributes on the
+    loaded row and commits, so SQLAlchemy skips the UPDATE entirely when a turn
+    happens to land on the state already stored — a menu re-asking itself, or a
+    restart that walks back to the same node. No UPDATE means no `onupdate`,
+    which would freeze `updated_at` at an old value and make every later turn
+    look stale to _flow_edited_since_last_turn and _session_is_stale.
+    """
     await flow_session_crud.update(db, session.id, {
         "current_node_id": session.current_node_id,
         "variables": session.variables,
         "status": session.status,
         "flow_id": session.flow_id,
+        "updated_at": datetime.now(timezone.utc),
     })
 
 
@@ -161,6 +219,14 @@ async def advance_flow_session(
 ) -> FlowEngineResult:
     graph_data = flow.graph_data
     session = await _load_or_create_session(db, chatbot_key, flow, session_token)
+
+    if session.status == "completed":
+        # This visitor already reached the end of the flow, and
+        # _load_or_create_session found no reason to re-run it. Report the
+        # handoff instead of answering: the caller switches this turn (and
+        # every later one, until the flow changes or the session ages out) to
+        # plain AI answering. Nothing is persisted — the session is untouched.
+        return FlowEngineResult(type=AI_HANDOFF)
 
     early_result = _deliver_reply_to_waiting_node(graph_data, session, incoming_message, selected_value)
     if early_result is not None:
@@ -231,7 +297,9 @@ def _visitor_facing_result(node: dict) -> FlowEngineResult:
     if node_type == "send_message":
         return FlowEngineResult(type="text", text=data.get("message_text", ""))
 
-    return FlowEngineResult(type="text", text="")
+    # Unknown node type — sign off rather than return an empty "text", which
+    # the widget would render as a blank chat bubble.
+    return FlowEngineResult(type="text", text=_DEFAULT_END_MESSAGE)
 
 
 # --------------------------------------------------------------------------
@@ -239,6 +307,20 @@ def _visitor_facing_result(node: dict) -> FlowEngineResult:
 # session in place and returns None (loop continues) or returns the
 # turn's FlowEngineResult (loop stops).
 # --------------------------------------------------------------------------
+
+def _message_text(node: dict) -> str:
+    """A node's configured message, normalized — "" for unset/whitespace-only."""
+    return ((node.get("data") or {}).get("message_text") or "").strip()
+
+
+def _end_of_flow(session: ChatbotFlowSession, message: str = "") -> FlowEngineResult:
+    """
+    Close the conversation out: mark the session completed and sign off with
+    `message`, or _DEFAULT_END_MESSAGE when the flow didn't supply one.
+    """
+    session.status = "completed"
+    return FlowEngineResult(type="text", text=message or _DEFAULT_END_MESSAGE)
+
 
 def _advance_or_complete(session: ChatbotFlowSession, edge: Optional[dict], node_id: str) -> bool:
     if edge:
@@ -252,15 +334,14 @@ def _advance_or_complete(session: ChatbotFlowSession, edge: Optional[dict], node
 def _step_start(graph_data: dict, session: ChatbotFlowSession, node: dict) -> Optional[FlowEngineResult]:
     edge = _find_edge(graph_data, node["id"], "default")
     if not _advance_or_complete(session, edge, node["id"]):
-        return FlowEngineResult(type="flow_ended", text="")
+        return _end_of_flow(session)
     return None
 
 
 def _step_goto(graph_data: dict, session: ChatbotFlowSession, node: dict) -> Optional[FlowEngineResult]:
     target = (node.get("data") or {}).get("target_node_id")
     if not target or _find_node(graph_data, target) is None:
-        session.status = "completed"
-        return FlowEngineResult(type="flow_ended", text="")
+        return _end_of_flow(session)
     session.current_node_id = target
     return None
 
@@ -271,14 +352,24 @@ def _step_if_else(graph_data: dict, session: ChatbotFlowSession, node: dict) -> 
     is_true = _evaluate_condition(value, data.get("operator", "not_empty"), data.get("compare_value", ""))
     edge = _find_edge(graph_data, node["id"], "true" if is_true else "false")
     if not _advance_or_complete(session, edge, node["id"]):
-        return FlowEngineResult(type="flow_ended", text="")
+        return _end_of_flow(session)
     return None
 
 
-def _step_send_message(graph_data: dict, session: ChatbotFlowSession, node: dict) -> FlowEngineResult:
+def _step_send_message(
+    graph_data: dict, session: ChatbotFlowSession, node: dict
+) -> Optional[FlowEngineResult]:
+    message_text = _message_text(node)
     edge = _find_edge(graph_data, node["id"], "default")
-    _advance_or_complete(session, edge, node["id"])
-    return FlowEngineResult(type="text", text=(node.get("data") or {}).get("message_text", ""))
+    advanced = _advance_or_complete(session, edge, node["id"])
+
+    if not message_text:
+        # A Send Message node left blank has nothing to say — keep hopping so
+        # the turn isn't spent on an empty chat bubble. With nowhere left to
+        # hop, that makes it the end of the conversation.
+        return None if advanced else _end_of_flow(session)
+
+    return FlowEngineResult(type="text", text=message_text)
 
 
 def _step_awaiting(session: ChatbotFlowSession, node: dict) -> FlowEngineResult:
@@ -289,13 +380,15 @@ def _step_awaiting(session: ChatbotFlowSession, node: dict) -> FlowEngineResult:
 def _step_end(session: ChatbotFlowSession, node: dict) -> FlowEngineResult:
     """
     Explicit flow terminator — an End node always completes the session
-    (never has an outgoing edge, enforced by flow_service._validate_graph).
-    The next visitor message will see session.status == "completed" and be
-    handed off to plain AI answering rather than replaying this message.
+    (never has an outgoing edge, enforced by flow_service._validate_graph) and
+    signs off in the same turn. It must never continue or replay the flow: the
+    visitor chose to finish.
+
+    An End node with no message of its own falls back to _DEFAULT_END_MESSAGE
+    so the goodbye still lands.
     """
     session.current_node_id = node["id"]
-    session.status = "completed"
-    return FlowEngineResult(type="text", text=(node.get("data") or {}).get("message_text", ""))
+    return _end_of_flow(session, _message_text(node))
 
 
 async def _step_ai_fallback(
@@ -342,8 +435,7 @@ def _loop_guard_result(graph_data: dict, session: ChatbotFlowSession, hops: int)
             text="Something went wrong continuing this conversation. Let's start over.",
         )
     if _find_node(graph_data, session.current_node_id) is None:
-        session.status = "completed"
-        return FlowEngineResult(type="flow_ended", text="")
+        return _end_of_flow(session)
     return None
 
 
@@ -376,8 +468,7 @@ async def _run_one_hop(
         return await _step_ai_fallback(db, chatbot_key, flow_id, graph_data, session, node, incoming_message)
 
     # Unknown/unsupported node type reached at runtime — end gracefully.
-    session.status = "completed"
-    return FlowEngineResult(type="flow_ended", text="")
+    return _end_of_flow(session)
 
 
 async def _run_internal_hops(
@@ -392,9 +483,9 @@ async def _run_internal_hops(
 
     while True:
         hops += 1
-        guard_result = _loop_guard_result(graph_data, session, hops)
-        if guard_result is not None:
-            return guard_result
+        result = _loop_guard_result(graph_data, session, hops)
+        if result is not None:
+            return result
 
         node = _find_node(graph_data, session.current_node_id)
         result = await _run_one_hop(db, chatbot_key, flow_id, graph_data, session, node, incoming_message)

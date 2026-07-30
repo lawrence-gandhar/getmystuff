@@ -19,6 +19,26 @@
             <i class="las la-exclamation-circle"></i> {{ e.error_message }}
         </p>
         {% endif %}
+        {% if e.ai_response and e.ai_response.action %}
+        <span class="badge {% if e.ai_response.action.status == 'success' %}bg-info{% else %}bg-warning text-dark{% endif %} mt-1">
+            <i class="las la-bolt"></i> {{ e.ai_response.action.name }}
+            {% if e.ai_response.action.http_status %}&middot; HTTP {{ e.ai_response.action.http_status }}{% endif %}
+        </span>
+        {% endif %}
+
+        {# What the turn cost. Only shown once measured — turns logged before
+           performance tracking existed carry no timing to report. #}
+        {% if e.response_time_ms %}
+        <div class="text-muted mt-1" style="font-size:.7rem;">
+            <i class="las la-stopwatch"></i>
+            {% if e.response_time_ms < 1000 %}{{ e.response_time_ms }} ms{% else %}{{ "%.1f"|format(e.response_time_ms / 1000) }} s{% endif %}
+            {% if e.total_tokens %}
+            &middot; {{ e.request_tokens }} in / {{ e.response_tokens }} out tokens
+            {% endif %}
+            {% if e.llm_model %}&middot; {{ e.llm_model }}{% endif %}
+            {% if e.turn_type == 'flow' %}&middot; <span class="badge bg-light text-dark">flow</span>{% endif %}
+        </div>
+        {% endif %}
     </div>
     {% endfor %}
 </div>

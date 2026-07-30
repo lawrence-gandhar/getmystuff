@@ -15,7 +15,14 @@ from app.models.datasource import (  # noqa: F401
 )
 from app.models.ai_analytics import PromptHistory  # noqa: F401
 from app.models.ai_settings import AIApiKey  # noqa: F401
-from app.models.chatbot import ChatbotApiKey, ChatbotMessage  # noqa: F401
+from app.models.chatbot import (  # noqa: F401
+    ChatbotAction,
+    ChatbotActionLink,
+    ChatbotAiSettings,
+    ChatbotApiKey,
+    ChatbotMessage,
+    ChatbotWidgetSettings,
+)
 from app.models.flow_builder import (  # noqa: F401
     ChatbotFlow,
     ChatbotFlowSession,

@@ -8,31 +8,39 @@
             <span class="badge bg-secondary">Draft</span>
         {% endif %}
     </td>
+    <td>
+        {% if flow.chatbot_name %}
+            <span class="badge bg-light text-dark border">
+                <i class="las la-comments"></i> {{ flow.chatbot_name }}
+            </span>
+        {% else %}
+            <span class="text-muted small">Not attached</span>
+        {% endif %}
+    </td>
     <td class="small text-muted">{{ flow.updated_at.strftime("%Y-%m-%d %H:%M") if flow.updated_at else "" }}</td>
     <td>
         <div class="d-flex flex-wrap gap-1">
             <a
                 class="btn btn-sm btn-outline-primary"
-                href="/flow-builder/{{ key_id }}/{{ flow.uuid }}/edit"
+                href="/flow-builder/{{ flow.uuid }}/edit"
             >
                 <i class="las la-project-diagram"></i> Edit
             </a>
-            {% if not flow.is_active %}
             <button
-                class="btn btn-sm btn-outline-success"
-                hx-post="/flow-builder/{{ key_id }}/{{ flow.uuid }}/activate"
+                class="btn btn-sm {% if flow.is_active %}btn-outline-secondary{% else %}btn-outline-success{% endif %}"
+                hx-post="/flow-builder/{{ flow.uuid }}/set-active"
+                hx-vals='{"is_active": "{{ "false" if flow.is_active else "true" }}"}'
                 hx-target="#flowsTableBody"
                 hx-swap="innerHTML"
             >
-                Activate
+                {% if flow.is_active %}Make Draft{% else %}Make Active{% endif %}
             </button>
-            {% endif %}
             <button
                 class="btn btn-sm btn-outline-danger"
-                hx-post="/flow-builder/{{ key_id }}/{{ flow.uuid }}/delete"
+                hx-post="/flow-builder/{{ flow.uuid }}/delete"
                 hx-target="#flowsTableBody"
                 hx-swap="innerHTML"
-                hx-confirm="Delete flow '{{ flow.name }}'? This cannot be undone."
+                hx-confirm="Delete flow '{{ flow.name }}'?{% if flow.chatbot_name %} It is attached to {{ flow.chatbot_name }}, which will stop using it.{% endif %} This cannot be undone."
             >
                 Delete
             </button>
@@ -41,7 +49,7 @@
 </tr>
 {% else %}
 <tr>
-    <td colspan="4" class="text-center text-muted py-4">
+    <td colspan="5" class="text-center text-muted py-4">
         <i class="las la-project-diagram fs-4 d-block mb-1"></i> No flows created yet.
     </td>
 </tr>

@@ -1,5 +1,5 @@
 {% extends "base/layout.htm" %}
-{% block title %}Chatbot Settings | GetMyStuff{% endblock %}
+{% block title %}Agents | GetMyStuff{% endblock %}
 
 {% block content %}
 {% set file_types = ["csv", "xls", "json", "parquet", "avro"] %}
@@ -9,7 +9,7 @@
     <!-- PAGE HEADER -->
     <div class="d-flex justify-content-between align-items-center mb-3">
         <h5 class="fw-semibold mb-0">
-            <i class="las la-comments text-primary"></i> Chatbot Settings
+            <i class="las la-comments text-primary"></i> Agents
         </h5>
         <div class="d-flex gap-2">
             {% include "chatbot_settings/widget_download_button.htm" %}
@@ -20,17 +20,19 @@
                 data-bs-target="#chatbotKeyOffcanvas"
                 onclick="openAddKeyForm()"
             >
-                <i class="las la-plus"></i> Create Chatbot
+                <i class="las la-plus"></i> Create Agent
             </button>
         </div>
     </div>
 
     <p class="text-muted small mb-3">
-        Each chatbot key powers one embeddable widget scoped to a whole datasource, or to
-        one or more tables, collections, or files within it. Because the key ends up
-        inside a downloadable JS file anyone can view, it's a <strong>publishable</strong>
-        key, not a secret — access is restricted by the datasource it's scoped to and the
-        allowed domains you set, not by hiding the key itself.
+        Each agent is one embeddable chat widget, scoped to a whole datasource or to one or
+        more tables, collections, or files within it. Give it a prompt and a language model in
+        its settings, add shared <a href="/actions">actions</a>, and attach a
+        <a href="/flow-builder/">flow</a> when the conversation should follow fixed steps.
+        Because an agent's key ends up inside a downloadable JS file anyone can view, it's a
+        <strong>publishable</strong> key, not a secret — access is restricted by the datasource
+        it's scoped to and the allowed domains you set, not by hiding the key itself.
     </p>
 
     <!-- RESPONSE AREA -->
@@ -375,7 +377,7 @@ function openEditKeyForm(keyId, name, allowedOrigins, targetSummary) {
     cbDatasourceSelect.required = false;
 
     document.getElementById("cbName").value = name;
-    document.getElementById("cbAllowedOrigins").value = (allowedOrigins || []).join("\n");
+    document.getElementById("cbAllowedOrigins").value = allowedOrigins || "";
     document.getElementById("chatbotKeyFormResponse").innerHTML = "";
     cbSubmitBtn.disabled = false;
 
@@ -398,6 +400,20 @@ function openHistoryPanel(keyId, keyName) {
         .then(html => { contentEl.innerHTML = html; })
         .catch(() => { contentEl.innerHTML = '<p class="text-danger small mb-0">Failed to load history.</p>'; });
 }
+
+// Row actions are delegated from the document because the table body is
+// replaced wholesale by HTMX out-of-band swaps after every save.
+document.addEventListener("click", function (event) {
+    const btn = event.target.closest("[data-cb-action]");
+    if (!btn) return;
+
+    const data = btn.dataset;
+    if (data.cbAction === "edit") {
+        openEditKeyForm(data.keyId, data.keyName, data.allowedOrigins, data.targetSummary);
+    } else if (data.cbAction === "history") {
+        openHistoryPanel(data.keyId, data.keyName);
+    }
+});
 </script>
 
 {% endblock %}

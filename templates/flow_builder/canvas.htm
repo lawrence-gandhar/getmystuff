@@ -212,7 +212,7 @@
             </span>
         </h5>
         <div class="d-flex gap-2">
-            <a href="/flow-builder/{{ key_id }}" class="btn btn-outline-secondary btn-sm">
+            <a href="/flow-builder/" class="btn btn-outline-secondary btn-sm">
                 <i class="las la-arrow-left"></i> Back
             </a>
             <button class="btn btn-outline-secondary btn-sm" type="button" data-bs-toggle="offcanvas" data-bs-target="#paletteOffcanvas">
@@ -274,10 +274,10 @@
 <script>
     FlowBuilder.init({
         graphData: {{ graph_data_json | safe }},
-        saveUrl: "/flow-builder/{{ key_id }}/{{ flow.uuid }}/save",
-        graphUrl: "/flow-builder/{{ key_id }}/{{ flow.uuid }}/graph",
+        saveUrl: "/flow-builder/{{ flow.uuid }}/save",
+        graphUrl: "/flow-builder/{{ flow.uuid }}/graph",
         responseTargetId: "fb-save-response",
-        kbBaseUrl: "/flow-builder/{{ key_id }}/{{ flow.uuid }}/nodes",
+        kbBaseUrl: "/flow-builder/{{ flow.uuid }}/nodes",
         aiApiKeys: {{ ai_api_keys_json | safe }},
     });
 </script>

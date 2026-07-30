@@ -26,7 +26,7 @@ def _error_response(exc: HTTPException) -> Response:
 
 
 class KnowledgeBaseController(Controller):
-    path = "/flow-builder/{key_id:uuid}/{flow_id:uuid}/nodes/{node_id:str}/knowledge-base"
+    path = "/flow-builder/{flow_id:uuid}/nodes/{node_id:str}/knowledge-base"
     dependencies = {"user": require_auth}
 
     # --------------------------
@@ -35,14 +35,13 @@ class KnowledgeBaseController(Controller):
     @get("/")
     async def state(
         self,
-        key_id: uuid.UUID,
         flow_id: uuid.UUID,
         node_id: str,
         db: AsyncSession,
         user: User,
     ) -> Response:
         try:
-            state = await knowledge_base_service.get_knowledge_base_state(db, user.id, key_id, flow_id, node_id)
+            state = await knowledge_base_service.get_knowledge_base_state(db, user.id, flow_id, node_id)
         except HTTPException as e:
             return _error_response(e)
         return Response(state, media_type=_JSON, status_code=200)
@@ -53,7 +52,6 @@ class KnowledgeBaseController(Controller):
     @post("/upload")
     async def upload(
         self,
-        key_id: uuid.UUID,
         flow_id: uuid.UUID,
         node_id: str,
         request: Request,
@@ -72,7 +70,7 @@ class KnowledgeBaseController(Controller):
 
         try:
             results = await knowledge_base_service.upload_documents(
-                db, user.id, key_id, flow_id, node_id, file_payloads,
+                db, user.id, flow_id, node_id, file_payloads,
             )
         except HTTPException as e:
             return _error_response(e)
@@ -85,7 +83,6 @@ class KnowledgeBaseController(Controller):
     @post("/manual-text")
     async def manual_text(
         self,
-        key_id: uuid.UUID,
         flow_id: uuid.UUID,
         node_id: str,
         request: Request,
@@ -99,7 +96,7 @@ class KnowledgeBaseController(Controller):
 
         try:
             document = await knowledge_base_service.add_manual_text(
-                db, user.id, key_id, flow_id, node_id,
+                db, user.id, flow_id, node_id,
                 label=payload.get("label", ""),
                 text=payload.get("text", ""),
             )
@@ -114,7 +111,6 @@ class KnowledgeBaseController(Controller):
     @post("/documents/{document_id:uuid}/delete")
     async def delete_document(
         self,
-        key_id: uuid.UUID,
         flow_id: uuid.UUID,
         node_id: str,
         document_id: uuid.UUID,
@@ -122,7 +118,7 @@ class KnowledgeBaseController(Controller):
         user: User,
     ) -> Response:
         try:
-            await knowledge_base_service.delete_document(db, user.id, key_id, flow_id, node_id, document_id)
+            await knowledge_base_service.delete_document(db, user.id, flow_id, node_id, document_id)
         except HTTPException as e:
             return _error_response(e)
 
@@ -134,14 +130,13 @@ class KnowledgeBaseController(Controller):
     @post("/train")
     async def train(
         self,
-        key_id: uuid.UUID,
         flow_id: uuid.UUID,
         node_id: str,
         db: AsyncSession,
         user: User,
     ) -> Response:
         try:
-            state = await knowledge_base_service.train_knowledge_base(db, user.id, key_id, flow_id, node_id)
+            state = await knowledge_base_service.train_knowledge_base(db, user.id, flow_id, node_id)
         except HTTPException as e:
             return _error_response(e)
 

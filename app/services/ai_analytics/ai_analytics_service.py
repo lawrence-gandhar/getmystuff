@@ -20,7 +20,7 @@ import asyncio
 import json
 import os
 import uuid
-from typing import Any, Awaitable, Callable, List, Optional, Tuple, TypeVar
+from typing import Any, Awaitable, Callable, List, Optional, Tuple, Type, TypeVar
 
 import anthropic
 import openai
@@ -46,6 +46,7 @@ from app.services.ai_settings.ai_settings_service import get_active_key_details,
 from app.services.datasource.metadata_service import get_mongo_collections, get_rdbms_tables
 from app.utils.crypto import decrypt_password
 from app.utils.file_utils import FILE_BASED_TYPES
+from app.utils.turn_recorder import estimate_tokens, record_llm_call
 
 datasource_crud = CRUDQueryBuilder(DataSource)
 prompt_history_crud = CRUDQueryBuilder(PromptHistory)
@@ -69,6 +70,11 @@ _RATE_LIMIT_BASE_DELAY_SECONDS = 1.0
 
 _T = TypeVar("_T")
 
+# Any pydantic shape a provider can be asked to return. Defaults to
+# AnalyticsResult everywhere; other callers (e.g. the chatbot action router)
+# pass their own model.
+_M = TypeVar("_M", bound=BaseModel)
+
 # Providers that actually power "Ask AI" today, checked in this order when a
 # user has more than one active key across different providers. Any other
 # provider (google_gemini, azure_openai) is stored but not called yet.
@@ -82,6 +88,19 @@ _JSON_ONLY_INSTRUCTION = (
     "fences, no commentary before or after — matching exactly this shape: "
     '{"summary": "<string>", "insights": ["<string>", ...] (up to 5), '
     '"table": {"columns": ["<string>", ...], "rows": [["<string>", ...], ...]} or null}.'
+)
+
+# Non-negotiable grounding rules. Normally part of the analytics system prompt,
+# but also appended verbatim when a caller supplies its own system prompt (a
+# chatbot's configured persona) so a custom prompt can never license the model
+# to invent figures.
+_GROUNDING_ADDENDUM = (
+    "\n\nYou are also given a statistical profile computed directly from the "
+    "business's real dataset(s): exact sampled row count, computed aggregate "
+    "statistics per column, top categorical values, and a small row sample. "
+    "Never guess or fabricate a number — every figure in your answer must come "
+    "from the supplied profile(s). If the profile does not contain enough "
+    "information to answer precisely, say so explicitly instead of estimating."
 )
 
 
@@ -294,19 +313,33 @@ def _build_prompts(
     profiles: dict,
     prompt: str,
     extra_instructions: str = "",
+    system_prompt_override: str = "",
+    action_context: str = "",
 ) -> Tuple[str, str]:
-    system_prompt = (
-        "You are a data analyst embedded in the GetMyStuff analytics platform. "
-        "You are given a statistical profile computed directly from the user's "
-        "real dataset(s) — possibly more than one table/collection/file: exact "
-        "sampled row count, computed aggregate statistics per column, top "
-        "categorical values, and a small row sample, for each one. Never guess "
-        "or fabricate a number — every figure in your answer must come from "
-        "the supplied profile(s). If the profile does not contain enough "
-        "information to answer precisely, say so explicitly instead of "
-        "estimating. When a small table would directly answer the question, "
-        "include one; otherwise omit it."
-    )
+    """
+    Assemble the (system, user) pair for a data-profile-grounded answer.
+
+    `system_prompt_override` (a chatbot's own configured prompt) replaces the
+    default analyst preamble but never the grounding rules — those are appended
+    as _GROUNDING_ADDENDUM so no owner-authored prompt can license invented
+    figures. `extra_instructions` keeps its original meaning: extra guardrails
+    layered on top of whichever preamble is in force.
+    """
+    if system_prompt_override:
+        system_prompt = system_prompt_override + _GROUNDING_ADDENDUM
+    else:
+        system_prompt = (
+            "You are a data analyst embedded in the GetMyStuff analytics platform. "
+            "You are given a statistical profile computed directly from the user's "
+            "real dataset(s) — possibly more than one table/collection/file: exact "
+            "sampled row count, computed aggregate statistics per column, top "
+            "categorical values, and a small row sample, for each one. Never guess "
+            "or fabricate a number — every figure in your answer must come from "
+            "the supplied profile(s). If the profile does not contain enough "
+            "information to answer precisely, say so explicitly instead of "
+            "estimating. When a small table would directly answer the question, "
+            "include one; otherwise omit it."
+        )
     if extra_instructions:
         system_prompt += (
             "\n\nThe chatbot owner has set the following guardrails/instructions — "
@@ -315,9 +348,27 @@ def _build_prompts(
     user_content = (
         f"Dataset(s): {target_label}\n\n"
         f"Data profile (JSON):\n{json.dumps(profiles, default=str)}\n\n"
-        f"Question: {prompt}"
     )
+    if action_context:
+        user_content += f"{action_context}\n\n"
+    user_content += f"Question: {prompt}"
     return system_prompt, user_content
+
+
+def _json_only_instruction(output_model: Type[BaseModel]) -> str:
+    """
+    The "reply with JSON only" suffix for providers without strict structured
+    output. AnalyticsResult keeps its hand-written shape description (clearer
+    for the model than a raw JSON Schema); anything else is described by its
+    generated schema.
+    """
+    if output_model is AnalyticsResult:
+        return _JSON_ONLY_INSTRUCTION
+    return (
+        "\n\nRespond with ONLY a single valid JSON object — no markdown code "
+        "fences, no commentary before or after — matching this JSON schema: "
+        f"{json.dumps(output_model.model_json_schema())}"
+    )
 
 
 # --------------------------------------------------------------------------
@@ -342,7 +393,12 @@ async def _with_rate_limit_retry(call: Callable[[], Awaitable[_T]]) -> _T:
 # Anthropic (Claude) call
 # --------------------------------------------------------------------------
 
-async def _call_claude_core(api_key: str, system_prompt: str, user_content: str) -> AnalyticsResult:
+async def _call_claude_core(
+    api_key: str,
+    system_prompt: str,
+    user_content: str,
+    output_model: Type[_M] = AnalyticsResult,
+) -> _M:
     client = anthropic.AsyncAnthropic(api_key=api_key)
 
     try:
@@ -351,7 +407,7 @@ async def _call_claude_core(api_key: str, system_prompt: str, user_content: str)
             max_tokens=4096,
             system=system_prompt,
             messages=[{"role": "user", "content": user_content}],
-            output_format=AnalyticsResult,
+            output_format=output_model,
         ))
     except anthropic.APIConnectionError:
         raise HTTPException(
@@ -360,6 +416,14 @@ async def _call_claude_core(api_key: str, system_prompt: str, user_content: str)
         )
     except anthropic.APIStatusError as e:
         raise HTTPException(status_code=502, detail=f"AI analytics request failed: {e.message}")
+
+    usage = getattr(response, "usage", None)
+    record_llm_call(
+        provider="anthropic",
+        model=_ANTHROPIC_MODEL,
+        request_tokens=getattr(usage, "input_tokens", 0) or 0,
+        response_tokens=getattr(usage, "output_tokens", 0) or 0,
+    )
 
     if response.stop_reason == "refusal":
         raise HTTPException(
@@ -371,11 +435,6 @@ async def _call_claude_core(api_key: str, system_prompt: str, user_content: str)
         raise HTTPException(status_code=502, detail="AI analytics returned an unreadable response.")
 
     return response.parsed_output
-
-
-async def _call_claude(api_key: str, prompt: str, target_label: str, profiles: dict, extra_instructions: str = "") -> AnalyticsResult:
-    system_prompt, user_content = _build_prompts(target_label, profiles, prompt, extra_instructions)
-    return await _call_claude_core(api_key, system_prompt, user_content)
 
 
 # --------------------------------------------------------------------------
@@ -392,7 +451,8 @@ async def _call_openai_core(
     model_name: Optional[str],
     system_prompt: str,
     user_content: str,
-) -> AnalyticsResult:
+    output_model: Type[_M] = AnalyticsResult,
+) -> _M:
     if not model_name:
         raise HTTPException(
             status_code=503,
@@ -404,7 +464,7 @@ async def _call_openai_core(
         )
 
     client = openai.AsyncOpenAI(api_key=api_key, base_url=base_url or None)
-    system_prompt = system_prompt + _JSON_ONLY_INSTRUCTION
+    system_prompt = system_prompt + _json_only_instruction(output_model)
 
     try:
         response = await _with_rate_limit_retry(lambda: client.chat.completions.create(
@@ -424,26 +484,32 @@ async def _call_openai_core(
         raise HTTPException(status_code=502, detail=f"AI analytics request failed: {e.message}")
 
     raw = response.choices[0].message.content if response.choices else None
+
+    # Usage is optional in the OpenAI-compatible contract and several
+    # third-party endpoints omit it, so fall back to a length-based estimate
+    # rather than logging a turn as having cost nothing.
+    usage = getattr(response, "usage", None)
+    request_tokens = getattr(usage, "prompt_tokens", None)
+    response_tokens = getattr(usage, "completion_tokens", None)
+    record_llm_call(
+        provider="openai-compatible",
+        model=model_name,
+        request_tokens=(
+            request_tokens
+            if request_tokens is not None
+            else estimate_tokens(system_prompt) + estimate_tokens(user_content)
+        ),
+        response_tokens=response_tokens if response_tokens is not None else estimate_tokens(raw or ""),
+        estimated=request_tokens is None or response_tokens is None,
+    )
+
     if not raw:
         raise HTTPException(status_code=502, detail="AI analytics returned an empty response.")
 
     try:
-        return AnalyticsResult.model_validate(json.loads(raw))
+        return output_model.model_validate(json.loads(raw))
     except (json.JSONDecodeError, ValidationError):
         raise HTTPException(status_code=502, detail="AI analytics returned an unreadable response.")
-
-
-async def _call_openai_compatible(
-    api_key: str,
-    base_url: Optional[str],
-    model_name: Optional[str],
-    prompt: str,
-    target_label: str,
-    profiles: dict,
-    extra_instructions: str = "",
-) -> AnalyticsResult:
-    system_prompt, user_content = _build_prompts(target_label, profiles, prompt, extra_instructions)
-    return await _call_openai_core(api_key, base_url, model_name, system_prompt, user_content)
 
 
 # --------------------------------------------------------------------------
@@ -454,11 +520,15 @@ async def _call_openai_compatible(
 # not a saved AI Settings credential.
 # --------------------------------------------------------------------------
 
-async def _call_ollama_core(system_prompt: str, user_content: str) -> AnalyticsResult:
-    system_prompt = system_prompt + _JSON_ONLY_INSTRUCTION
+async def _call_ollama_core(
+    system_prompt: str,
+    user_content: str,
+    output_model: Type[_M] = AnalyticsResult,
+) -> _M:
+    system_prompt = system_prompt + _json_only_instruction(output_model)
 
     try:
-        raw = await ollama_client.chat(system_prompt, user_content, json_mode=True)
+        completion = await ollama_client.chat(system_prompt, user_content, json_mode=True)
     except HTTPException:
         # use_inbuilt_llm is only ever set by the Flow Builder AI Fallback
         # node today, which answers a live chatbot visitor — ollama_client's
@@ -470,20 +540,17 @@ async def _call_ollama_core(system_prompt: str, user_content: str) -> AnalyticsR
             detail="The assistant is temporarily unavailable. Please try again in a moment.",
         )
 
+    record_llm_call(
+        provider="in_built",
+        model=ollama_client.OLLAMA_CHAT_MODEL,
+        request_tokens=completion.prompt_tokens,
+        response_tokens=completion.output_tokens,
+    )
+
     try:
-        return AnalyticsResult.model_validate(json.loads(raw))
+        return output_model.model_validate(json.loads(completion.text))
     except (json.JSONDecodeError, ValidationError):
         raise HTTPException(status_code=502, detail="The local AI model returned an unreadable response.")
-
-
-async def _call_ollama(
-    prompt: str,
-    target_label: str,
-    profiles: dict,
-    extra_instructions: str = "",
-) -> AnalyticsResult:
-    system_prompt, user_content = _build_prompts(target_label, profiles, prompt, extra_instructions)
-    return await _call_ollama_core(system_prompt, user_content)
 
 
 async def answer_with_ai(
@@ -495,17 +562,46 @@ async def answer_with_ai(
     extra_instructions: str = "",
     forced_key_uuid: Optional[uuid.UUID] = None,
     use_inbuilt_llm: bool = False,
+    system_prompt_override: str = "",
+    action_context: str = "",
 ) -> AnalyticsResult:
     """Resolve a provider and answer a data-profile-grounded prompt with it."""
+    system_prompt, user_content = _build_prompts(
+        target_label, profiles, prompt, extra_instructions, system_prompt_override, action_context,
+    )
+    return await answer_freeform(
+        db, user_id, system_prompt, user_content, forced_key_uuid, use_inbuilt_llm,
+    )
+
+
+async def answer_structured(
+    db: AsyncSession,
+    user_id: int,
+    system_prompt: str,
+    user_content: str,
+    output_model: Type[_M] = AnalyticsResult,
+    forced_key_uuid: Optional[uuid.UUID] = None,
+    use_inbuilt_llm: bool = False,
+) -> _M:
+    """
+    Resolve a provider and answer a plain system/user prompt pair with it,
+    returning any pydantic shape rather than only AnalyticsResult.
+
+    Every provider path here already forces structured output (Anthropic via
+    strict output formats, everything else via JSON mode plus validation), so
+    callers that need a different shape — e.g. the chatbot action router
+    choosing which webhook to call — reuse this instead of reimplementing
+    provider resolution, retries and error mapping.
+    """
     if use_inbuilt_llm:
-        return await _call_ollama(prompt, target_label, profiles, extra_instructions)
+        return await _call_ollama_core(system_prompt, user_content, output_model)
 
     provider, api_key, base_url, model_name = await _resolve_provider(db, user_id, forced_key_uuid)
 
     if provider == "anthropic":
-        return await _call_claude(api_key, prompt, target_label, profiles, extra_instructions)
+        return await _call_claude_core(api_key, system_prompt, user_content, output_model)
 
-    return await _call_openai_compatible(api_key, base_url, model_name, prompt, target_label, profiles, extra_instructions)
+    return await _call_openai_core(api_key, base_url, model_name, system_prompt, user_content, output_model)
 
 
 async def answer_freeform(
@@ -523,15 +619,9 @@ async def answer_freeform(
     datasource, sharing this module's provider resolution + retry/error
     handling instead of duplicating it.
     """
-    if use_inbuilt_llm:
-        return await _call_ollama_core(system_prompt, user_content)
-
-    provider, api_key, base_url, model_name = await _resolve_provider(db, user_id, forced_key_uuid)
-
-    if provider == "anthropic":
-        return await _call_claude_core(api_key, system_prompt, user_content)
-
-    return await _call_openai_core(api_key, base_url, model_name, system_prompt, user_content)
+    return await answer_structured(
+        db, user_id, system_prompt, user_content, AnalyticsResult, forced_key_uuid, use_inbuilt_llm,
+    )
 
 
 async def run_grounded_prompt(
@@ -545,6 +635,8 @@ async def run_grounded_prompt(
     extra_instructions: str = "",
     forced_key_uuid: Optional[uuid.UUID] = None,
     use_inbuilt_llm: bool = False,
+    system_prompt_override: str = "",
+    action_context: str = "",
 ) -> AnalyticsResult:
     """
     Load a real data sample for one or more targets, compute each one's
@@ -558,8 +650,10 @@ async def run_grounded_prompt(
     datasource; otherwise `target_names`/`file_ids` are used as given.
 
     `extra_instructions` (e.g. a Flow Builder AI Fallback node's guardrails/
-    custom prompt), `forced_key_uuid` (its "attached LLM API" choice), and
-    `use_inbuilt_llm` (its "In-built LLM" choice) are optional passthroughs to
+    custom prompt), `forced_key_uuid` (its "attached LLM API" choice),
+    `use_inbuilt_llm` (its "In-built LLM" choice), `system_prompt_override`
+    (the chatbot's own configured prompt) and `action_context` (the result of
+    a webhook action the chatbot just ran) are optional passthroughs to
     answer_with_ai — all default to "unset" so existing callers are unaffected.
     """
     if target_type == "datasource":
@@ -601,7 +695,16 @@ async def run_grounded_prompt(
     target_label = names[0] if len(names) == 1 else f"{len(names)} datasets ({', '.join(names)})"
 
     return await answer_with_ai(
-        db, user_id, prompt, target_label, combined_profile, extra_instructions, forced_key_uuid, use_inbuilt_llm,
+        db,
+        user_id,
+        prompt,
+        target_label,
+        combined_profile,
+        extra_instructions,
+        forced_key_uuid,
+        use_inbuilt_llm,
+        system_prompt_override,
+        action_context,
     )
 
 

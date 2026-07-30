@@ -2,7 +2,16 @@ import uuid as uuid_pkg
 from typing import Optional
 
 from sqlalchemy.orm import Mapped, mapped_column
-from sqlalchemy import BigInteger, String, Boolean, DateTime, ForeignKey, Index, Text
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.sql import func
 
@@ -11,12 +20,24 @@ from app.db.base import Base
 
 class ChatbotFlow(Base):
     """
-    One saved conversation-flow graph (draft or active) for a chatbot
-    widget. A chatbot key can own several flows (drafts/variants); at most
-    one has is_active == True at a time, enforced in
-    app.services.flow_builder.flow_service.activate_flow rather than a DB
-    constraint, matching this codebase's existing ChatbotApiKey.is_active
-    pattern.
+    One saved conversation-flow graph, owned by a user and built independently
+    of any chatbot (see the Flow Builder page in the sidebar).
+
+    Ownership and association are separate concerns:
+
+    * ``user_id`` is who owns the flow — the only thing needed to read or edit
+      it, so a flow can exist with no chatbot at all.
+    * ``chatbot_key_id`` is which chatbot currently *runs* it, nullable and
+      unique: a flow belongs to at most one chatbot, and a chatbot runs at most
+      one flow. Postgres allows many NULLs in a unique column, so that single
+      constraint expresses both halves — replacing the old "at most one active
+      flow per key" rule that flow_service had to enforce by hand.
+    * ``is_active`` is an independent published/draft toggle. A chatbot only
+      runs its attached flow while that flow is active (see get_active_flow),
+      so a flow can be parked without being detached.
+
+    Deleting a chatbot detaches its flow (ON DELETE SET NULL) rather than
+    destroying work the user may want to point somewhere else.
     """
     __tablename__ = "chatbot_flows"
 
@@ -34,10 +55,17 @@ class ChatbotFlow(Base):
         nullable=False,
     )
 
-    chatbot_key_id: Mapped[int] = mapped_column(
+    user_id: Mapped[int] = mapped_column(
         BigInteger,
-        ForeignKey("chatbot_api_keys.id", ondelete="CASCADE"),
+        ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
+        index=True,
+    )
+
+    chatbot_key_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger,
+        ForeignKey("chatbot_api_keys.id", ondelete="SET NULL"),
+        nullable=True,
         index=True,
     )
 
@@ -63,7 +91,8 @@ class ChatbotFlow(Base):
     )
 
     __table_args__ = (
-        Index("ix_chatbot_flows_key_active", "chatbot_key_id", "is_active"),
+        # One flow per chatbot, one chatbot per flow — see the class docstring.
+        UniqueConstraint("chatbot_key_id", name="uq_chatbot_flows_chatbot_key"),
     )
 
 

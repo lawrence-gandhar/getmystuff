@@ -1,0 +1,389 @@
+    <div class="row g-3">
+        <!-- ============================================
+             FORM COLUMN
+             ============================================ -->
+        <div class="col-lg-7">
+            <form
+                id="widgetSettingsForm"
+                method="post"
+                action="/chatbot-settings/{{ key.uuid }}/widget-settings"
+                enctype="multipart/form-data"
+            >
+                <!-- BRANDING -->
+                <div class="card shadow-sm mb-3">
+                    <div class="card-header bg-white fw-semibold">
+                        <i class="las la-fingerprint text-primary"></i> Branding
+                    </div>
+                    <div class="card-body">
+                        <div class="mb-3">
+                            <label class="form-label fw-semibold">Logo</label>
+                            {% if settings.logo_path %}
+                            <div class="d-flex align-items-center gap-2 mb-2">
+                                <img id="wsLogoCurrentPreview" src="{{ settings.logo_path }}" alt="Current logo" style="height:40px;border-radius:6px;">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" name="remove_logo" id="wsRemoveLogo">
+                                    <label class="form-check-label small" for="wsRemoveLogo">Remove current logo</label>
+                                </div>
+                            </div>
+                            {% endif %}
+                            <input type="file" class="form-control" name="logo" accept=".png,.jpg,.jpeg,.gif,.webp,.svg"
+                                   onchange="wsPreviewImage(this, 'wsLogoPreview')">
+                            <div class="form-text">Shown next to the widget title in the chat header. PNG/JPG/SVG, up to 2MB.</div>
+                        </div>
+
+                        <div class="mb-1">
+                            <label for="wsBrandColor" class="form-label fw-semibold">Brand Color <span class="text-danger">*</span></label>
+                            <div class="d-flex align-items-center gap-2">
+                                <input type="color" class="form-control form-control-color" id="wsBrandColor"
+                                       name="brand_color" value="{{ settings.brand_color }}" required
+                                       oninput="wsSyncColorText(this, 'wsBrandColorText'); wsUpdatePreview();">
+                                <input type="text" class="form-control font-monospace" id="wsBrandColorText"
+                                       value="{{ settings.brand_color }}" maxlength="7"
+                                       oninput="wsSyncColorPicker(this, 'wsBrandColor'); wsUpdatePreview();">
+                            </div>
+                            <div class="form-text">Used for the launcher button, send button, and your messages.</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- BACKGROUND -->
+                <div class="card shadow-sm mb-3">
+                    <div class="card-header bg-white fw-semibold">
+                        <i class="las la-fill-drip text-primary"></i> Background
+                    </div>
+                    <div class="card-body">
+                        <div class="mb-3">
+                            <label for="wsBgColor" class="form-label fw-semibold">Background Color</label>
+                            <div class="d-flex align-items-center gap-2">
+                                <input type="color" class="form-control form-control-color" id="wsBgColor"
+                                       name="background_color" value="{{ settings.background_color or '#f8f9fa' }}"
+                                       oninput="wsSyncColorText(this, 'wsBgColorText'); wsUpdatePreview();">
+                                <input type="text" class="form-control font-monospace" id="wsBgColorText"
+                                       value="{{ settings.background_color or '#f8f9fa' }}" maxlength="7"
+                                       oninput="wsSyncColorPicker(this, 'wsBgColor'); wsUpdatePreview();">
+                            </div>
+                            <div class="form-text">Fills the conversation area. Overridden by a background image, if set.</div>
+                        </div>
+
+                        <div class="mb-1">
+                            <label class="form-label fw-semibold">Background Image</label>
+                            {% if settings.background_image_path %}
+                            <div class="d-flex align-items-center gap-2 mb-2">
+                                <img src="{{ settings.background_image_path }}" alt="Current background" style="height:40px;border-radius:6px;">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" name="remove_background_image" id="wsRemoveBgImage">
+                                    <label class="form-check-label small" for="wsRemoveBgImage">Remove current background image</label>
+                                </div>
+                            </div>
+                            {% endif %}
+                            <input type="file" class="form-control" name="background_image" accept=".png,.jpg,.jpeg,.gif,.webp,.svg"
+                                   onchange="wsPreviewBackgroundImage(this)">
+                            <div class="form-text">PNG/JPG/SVG, up to 2MB.</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- WATERMARK -->
+                <div class="card shadow-sm mb-3">
+                    <div class="card-header bg-white fw-semibold">
+                        <i class="las la-stamp text-primary"></i> Watermark
+                    </div>
+                    <div class="card-body">
+                        <div class="mb-3">
+                            <label class="form-label fw-semibold">Watermark Image</label>
+                            {% if settings.watermark_image_path %}
+                            <div class="d-flex align-items-center gap-2 mb-2">
+                                <img src="{{ settings.watermark_image_path }}" alt="Current watermark" style="height:40px;border-radius:6px;">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" name="remove_watermark_image" id="wsRemoveWatermark">
+                                    <label class="form-check-label small" for="wsRemoveWatermark">Remove current watermark</label>
+                                </div>
+                            </div>
+                            {% endif %}
+                            <input type="file" class="form-control" name="watermark_image" accept=".png,.jpg,.jpeg,.gif,.webp,.svg"
+                                   onchange="wsPreviewWatermarkImage(this)">
+                            <div class="form-text">Centered over the conversation area, behind the messages. PNG/JPG/SVG, up to 2MB.</div>
+                        </div>
+                        <div class="mb-1">
+                            <label for="wsWatermarkOpacity" class="form-label fw-semibold">Opacity (%)</label>
+                            <input type="range" class="form-range" id="wsWatermarkOpacity" name="watermark_opacity"
+                                   value="{{ settings.watermark_opacity }}" min="0" max="100"
+                                   oninput="wsUpdatePreview();">
+                            <div class="form-text">Current: <span id="wsWatermarkOpacityLabel">{{ settings.watermark_opacity }}</span>%</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- HEADER STYLE -->
+                <div class="card shadow-sm mb-3">
+                    <div class="card-header bg-white fw-semibold">
+                        <i class="las la-heading text-primary"></i> Header Style
+                    </div>
+                    <div class="card-body">
+                        <div class="mb-3">
+                            <label for="wsHeaderBgColor" class="form-label fw-semibold">Header Background Color <span class="text-danger">*</span></label>
+                            <div class="d-flex align-items-center gap-2">
+                                <input type="color" class="form-control form-control-color" id="wsHeaderBgColor"
+                                       name="header_background_color" value="{{ settings.header_background_color }}" required
+                                       oninput="wsSyncColorText(this, 'wsHeaderBgColorText'); wsUpdatePreview();">
+                                <input type="text" class="form-control font-monospace" id="wsHeaderBgColorText"
+                                       value="{{ settings.header_background_color }}" maxlength="7"
+                                       oninput="wsSyncColorPicker(this, 'wsHeaderBgColor'); wsUpdatePreview();">
+                            </div>
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="wsHeaderFont" class="form-label fw-semibold">Header Font</label>
+                            <select id="wsHeaderFont" name="header_font" class="form-select" onchange="wsUpdatePreview();">
+                                {% for font in fonts %}
+                                <option value="{{ font }}" {% if font == settings.header_font %}selected{% endif %}>{{ font }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+
+                        <div class="mb-1">
+                            <label class="form-label fw-semibold">Bot Icon</label>
+                            {% if settings.bot_icon_path %}
+                            <div class="d-flex align-items-center gap-2 mb-2">
+                                <img id="wsBotIconCurrentPreview" src="{{ settings.bot_icon_path }}" alt="Current bot icon" style="height:40px;width:40px;border-radius:50%;object-fit:cover;">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" name="remove_bot_icon" id="wsRemoveBotIcon">
+                                    <label class="form-check-label small" for="wsRemoveBotIcon">Remove current bot icon</label>
+                                </div>
+                            </div>
+                            {% endif %}
+                            <input type="file" class="form-control" name="bot_icon" accept=".png,.jpg,.jpeg,.gif,.webp,.svg"
+                                   onchange="wsPreviewImage(this, 'wsBotIconPreview'); wsPreviewImage(this, 'wsPreviewWelcomeAvatar'); wsUpdatePreview();">
+                            <div class="form-text">Shown on the floating launcher button and next to every AI response. PNG/JPG/SVG, up to 2MB.</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- MESSAGE COLORS -->
+                <div class="card shadow-sm mb-3">
+                    <div class="card-header bg-white fw-semibold">
+                        <i class="las la-comments text-primary"></i> Message Colors
+                    </div>
+                    <div class="card-body">
+                        <div class="mb-3">
+                            <label for="wsBotBgColor" class="form-label fw-semibold">AI Response Background</label>
+                            <div class="d-flex align-items-center gap-2">
+                                <input type="color" class="form-control form-control-color" id="wsBotBgColor"
+                                       name="bot_message_bg_color" value="{{ settings.bot_message_bg_color }}"
+                                       oninput="wsSyncColorText(this, 'wsBotBgColorText'); wsUpdatePreview();">
+                                <input type="text" class="form-control font-monospace" id="wsBotBgColorText"
+                                       value="{{ settings.bot_message_bg_color }}" maxlength="7"
+                                       oninput="wsSyncColorPicker(this, 'wsBotBgColor'); wsUpdatePreview();">
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label for="wsBotTextColor" class="form-label fw-semibold">AI Response Text</label>
+                            <div class="d-flex align-items-center gap-2">
+                                <input type="color" class="form-control form-control-color" id="wsBotTextColor"
+                                       name="bot_message_text_color" value="{{ settings.bot_message_text_color }}"
+                                       oninput="wsSyncColorText(this, 'wsBotTextColorText'); wsUpdatePreview();">
+                                <input type="text" class="form-control font-monospace" id="wsBotTextColorText"
+                                       value="{{ settings.bot_message_text_color }}" maxlength="7"
+                                       oninput="wsSyncColorPicker(this, 'wsBotTextColor'); wsUpdatePreview();">
+                            </div>
+                        </div>
+                        <div class="mb-1">
+                            <label for="wsUserTextColor" class="form-label fw-semibold">Your Prompt Text</label>
+                            <div class="d-flex align-items-center gap-2">
+                                <input type="color" class="form-control form-control-color" id="wsUserTextColor"
+                                       name="user_message_text_color" value="{{ settings.user_message_text_color }}"
+                                       oninput="wsSyncColorText(this, 'wsUserTextColorText'); wsUpdatePreview();">
+                                <input type="text" class="form-control font-monospace" id="wsUserTextColorText"
+                                       value="{{ settings.user_message_text_color }}" maxlength="7"
+                                       oninput="wsSyncColorPicker(this, 'wsUserTextColor'); wsUpdatePreview();">
+                            </div>
+                            <div class="form-text">The prompt bubble's background follows the Brand Color above.</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- SUBMIT BUTTON -->
+                <div class="card shadow-sm mb-3">
+                    <div class="card-header bg-white fw-semibold">
+                        <i class="las la-paper-plane text-primary"></i> Submit Button
+                    </div>
+                    <div class="card-body">
+                        <div class="mb-3">
+                            <label class="form-label fw-semibold d-block">Button Style</label>
+                            <div class="btn-group" role="group">
+                                {% for style in send_button_styles %}
+                                <input type="radio" class="btn-check" name="send_button_style" id="wsBtnStyle-{{ loop.index }}"
+                                       value="{{ style }}" autocomplete="off"
+                                       {% if style == settings.send_button_style %}checked{% endif %}
+                                       onchange="wsUpdateSendButtonFieldVisibility(); wsUpdatePreview();">
+                                <label class="btn btn-outline-primary btn-sm" for="wsBtnStyle-{{ loop.index }}">
+                                    {{ style.replace('-', ' ') | title }}
+                                </label>
+                                {% endfor %}
+                            </div>
+                        </div>
+
+                        <div id="wsSendIconFields">
+                            <div class="mb-3">
+                                <label class="form-label fw-semibold">Icon</label>
+                                {% if send_button_icon_url %}
+                                <div class="d-flex align-items-center gap-2 mb-2">
+                                    <img src="{{ send_button_icon_url }}" alt="Current submit icon" style="height:24px;width:24px;object-fit:contain;">
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" name="remove_send_button_icon" id="wsRemoveSendIcon">
+                                        <label class="form-check-label small" for="wsRemoveSendIcon">Remove current icon</label>
+                                    </div>
+                                </div>
+                                {% endif %}
+                                <input type="file" class="form-control mb-2" name="send_button_icon" accept=".png,.jpg,.jpeg,.gif,.webp,.svg"
+                                       onchange="wsPreviewImage(this, 'wsPreviewSendIcon'); wsUpdatePreview();">
+                                <div class="form-text mb-2">
+                                    Upload an image, or paste raw SVG markup below instead &mdash; providing one clears the other.
+                                </div>
+                                <textarea class="form-control font-monospace small" name="send_button_icon_svg" id="wsSendIconSvg" rows="3"
+                                          placeholder="&lt;svg xmlns=&quot;http://www.w3.org/2000/svg&quot; viewBox=&quot;0 0 24 24&quot;&gt;...&lt;/svg&gt;"
+                                          oninput="wsOnSendIconSvgInput();"></textarea>
+                                <div class="form-text">Pasted SVG is sanitized server-side (scripts/event handlers stripped) before use.</div>
+                            </div>
+                        </div>
+
+                        <div id="wsSendTextFields">
+                            <div class="mb-3">
+                                <label for="wsSendButtonText" class="form-label fw-semibold">Button Text</label>
+                                <input type="text" class="form-control" id="wsSendButtonText" name="send_button_text"
+                                       value="{{ settings.send_button_text }}" maxlength="50" oninput="wsUpdatePreview();">
+                            </div>
+                            <div class="row g-2">
+                                <div class="col-6">
+                                    <label for="wsSendFontSize" class="form-label fw-semibold">Font Size (px)</label>
+                                    <input type="number" class="form-control" id="wsSendFontSize" name="send_button_font_size"
+                                           value="{{ settings.send_button_font_size }}" min="10" max="24" oninput="wsUpdatePreview();">
+                                </div>
+                                <div class="col-6">
+                                    <label for="wsSendFontColor" class="form-label fw-semibold">Font Color</label>
+                                    <div class="d-flex align-items-center gap-2">
+                                        <input type="color" class="form-control form-control-color" id="wsSendFontColor"
+                                               name="send_button_font_color" value="{{ settings.send_button_font_color }}"
+                                               oninput="wsSyncColorText(this, 'wsSendFontColorText'); wsUpdatePreview();">
+                                        <input type="text" class="form-control font-monospace" id="wsSendFontColorText"
+                                               value="{{ settings.send_button_font_color }}" maxlength="7"
+                                               oninput="wsSyncColorPicker(this, 'wsSendFontColor'); wsUpdatePreview();">
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="mb-1">
+                            <label for="wsSendBorderRadius" class="form-label fw-semibold">Button Border Radius (px)</label>
+                            <input type="number" class="form-control" id="wsSendBorderRadius" name="send_button_border_radius"
+                                   value="{{ settings.send_button_border_radius }}" min="0" max="30" oninput="wsUpdatePreview();">
+                            <div class="form-text">0 = square corners, ~20 = fully rounded (pill).</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- LAYOUT -->
+                <div class="card shadow-sm mb-3">
+                    <div class="card-header bg-white fw-semibold">
+                        <i class="las la-expand-arrows-alt text-primary"></i> Layout
+                    </div>
+                    <div class="card-body">
+                        <div class="row g-2 mb-3">
+                            <div class="col-6">
+                                <label for="wsWidgetWidth" class="form-label fw-semibold">Width (px)</label>
+                                <input type="number" class="form-control" id="wsWidgetWidth" name="widget_width"
+                                       value="{{ settings.widget_width }}" min="280" max="600" oninput="wsUpdatePreview();">
+                            </div>
+                            <div class="col-6">
+                                <label for="wsWidgetHeight" class="form-label fw-semibold">Height (px)</label>
+                                <input type="number" class="form-control" id="wsWidgetHeight" name="widget_height"
+                                       value="{{ settings.widget_height }}" min="320" max="800" oninput="wsUpdatePreview();">
+                            </div>
+                        </div>
+                        <div class="form-text mb-3">Panel size applies on desktop; it always shrinks to fit small screens.</div>
+
+                        <div class="mb-1">
+                            <label for="wsInputBorderRadius" class="form-label fw-semibold">Chat Input Border Radius (px)</label>
+                            <input type="number" class="form-control" id="wsInputBorderRadius" name="input_border_radius"
+                                   value="{{ settings.input_border_radius }}" min="0" max="30" oninput="wsUpdatePreview();">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- MESSAGES -->
+                <div class="card shadow-sm mb-3">
+                    <div class="card-header bg-white fw-semibold">
+                        <i class="las la-comment-dots text-primary"></i> Messages
+                    </div>
+                    <div class="card-body">
+                        <div class="mb-3">
+                            <label for="wsWelcomeText" class="form-label fw-semibold">Welcome Text <span class="text-danger">*</span></label>
+                            <textarea class="form-control" id="wsWelcomeText" name="welcome_text" rows="2" maxlength="300" required
+                                      oninput="wsUpdatePreview();">{{ settings.welcome_text }}</textarea>
+                            <div class="form-text">Shown as the first message when a visitor opens the widget.</div>
+                        </div>
+                        <div class="mb-3">
+                            <label for="wsIdleText" class="form-label fw-semibold">Idle Text <span class="text-danger">*</span></label>
+                            <textarea class="form-control" id="wsIdleText" name="idle_text" rows="2" maxlength="300" required>{{ settings.idle_text }}</textarea>
+                            <div class="form-text">Shown if a visitor leaves the widget open without typing for a while.</div>
+                        </div>
+                        <div class="mb-1">
+                            <label for="wsClosingText" class="form-label fw-semibold">Closing Text <span class="text-danger">*</span></label>
+                            <textarea class="form-control" id="wsClosingText" name="closing_text" rows="2" maxlength="300" required>{{ settings.closing_text }}</textarea>
+                            <div class="form-text">Shown right before the widget panel closes.</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="d-flex gap-2 mb-4">
+                    <button type="submit" class="btn btn-primary">
+                        <i class="las la-save"></i> Save Widget Settings
+                    </button>
+                    <a href="/chatbot-settings" class="btn btn-outline-secondary">Cancel</a>
+                </div>
+            </form>
+        </div>
+
+        <!-- ============================================
+             LIVE PREVIEW COLUMN
+             ============================================ -->
+        <div class="col-lg-5">
+            <div class="card shadow-sm" style="position:sticky; top:1rem;">
+                <div class="card-header bg-white fw-semibold">
+                    <i class="las la-eye text-primary"></i> Preview
+                </div>
+                <div class="card-body d-flex justify-content-center" style="background:#e9ecef;max-height:560px;overflow:auto;">
+                    <div id="wsPreviewPanel" style="width:{{ settings.widget_width }}px;height:{{ settings.widget_height }}px;flex:none;border-radius:12px;overflow:hidden;box-shadow:0 8px 30px rgba(0,0,0,.2);display:flex;flex-direction:column;background:#fff;">
+                        <div id="wsPreviewHeader" style="padding:12px 14px;color:#fff;font-weight:600;font-size:14px;display:flex;align-items:center;gap:8px;">
+                            <img id="wsLogoPreview" src="{{ settings.logo_path or '' }}" style="width:22px;height:22px;border-radius:50%;object-fit:cover;{% if not settings.logo_path %}display:none;{% endif %}">
+                            <span>{{ key.name }}</span>
+                        </div>
+                        <div id="wsPreviewMessages" style="position:relative;flex:1;padding:12px;overflow-y:auto;
+                             {% if settings.background_image_path %}background-image:url('{{ settings.background_image_path }}');background-size:cover;background-position:center;{% endif %}">
+                            <div id="wsPreviewWatermark" style="position:absolute;inset:0;pointer-events:none;background-repeat:no-repeat;background-position:center;background-size:contain;
+                                 {% if settings.watermark_image_path %}background-image:url('{{ settings.watermark_image_path }}');{% endif %}
+                                 opacity:{{ settings.watermark_opacity / 100 }};"></div>
+                            <div style="position:relative;display:flex;align-items:flex-end;gap:6px;">
+                                <img id="wsPreviewWelcomeAvatar" src="{{ settings.bot_icon_path or '' }}" alt="" style="width:22px;height:22px;border-radius:50%;object-fit:cover;flex:none;{% if not settings.bot_icon_path %}display:none;{% endif %}">
+                                <div id="wsPreviewWelcomeBubble" style="background:{{ settings.bot_message_bg_color }};color:{{ settings.bot_message_text_color }};max-width:calc(85% - 28px);padding:8px 10px;border-radius:8px;border-bottom-left-radius:2px;font-size:13px;line-height:1.4;white-space:pre-wrap;"></div>
+                            </div>
+                            <div style="position:relative;display:flex;justify-content:flex-end;margin-top:8px;">
+                                <div id="wsPreviewUserBubble" style="background:{{ settings.brand_color }};color:{{ settings.user_message_text_color }};max-width:75%;padding:8px 10px;border-radius:8px;border-bottom-right-radius:2px;font-size:13px;line-height:1.4;">Your message looks like this</div>
+                            </div>
+                        </div>
+                        <div style="border-top:1px solid #dee2e6;padding:8px;display:flex;gap:6px;">
+                            <div id="wsPreviewInputBox" style="flex:1;border:1px solid #ced4da;border-radius:{{ settings.input_border_radius }}px;padding:8px;font-size:13px;color:#adb5bd;">Ask a question&hellip;</div>
+                            <div id="wsPreviewSendBtn" style="border-radius:{{ settings.send_button_border_radius }}px;padding:0 14px;display:flex;align-items:center;justify-content:center;gap:6px;min-width:40px;">
+                                <img id="wsPreviewSendIcon" src="{{ send_button_icon_url or '' }}" alt="" style="width:16px;height:16px;object-fit:contain;{% if not send_button_icon_url %}display:none;{% endif %}">
+                                <span id="wsPreviewSendText" style="font-size:{{ settings.send_button_font_size }}px;color:{{ settings.send_button_font_color }};">{{ settings.send_button_text }}</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="card-footer bg-white text-center">
+                    <img id="wsBotIconPreview" src="{{ settings.bot_icon_path or '' }}" style="width:40px;height:40px;border-radius:50%;object-fit:cover;{% if not settings.bot_icon_path %}display:none;{% endif %}" alt="Launcher icon preview">
+                    <div class="small text-muted mt-1">Floating launcher icon</div>
+                </div>
+            </div>
+        </div>
+    </div>

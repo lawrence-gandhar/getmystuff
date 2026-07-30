@@ -1,0 +1,53 @@
+{# <tr> per action attached to this agent. Actions themselves live in the
+   library (/actions) — here they can only be added or removed. #}
+{% for action in actions %}
+<tr>
+    <td>
+        <div class="fw-semibold font-monospace small">{{ action.name }}</div>
+        <div class="text-muted small">{{ action.description }}</div>
+    </td>
+    <td>
+        <span class="badge bg-secondary">{{ action.http_method }}</span>
+    </td>
+    <td class="font-monospace small text-break" style="max-width:280px;">{{ action.url }}</td>
+    <td>
+        {% if action.parameters %}
+        {% for param in action.parameters %}
+        <span class="badge bg-light text-dark border font-monospace">{{ param.name }}</span>
+        {% endfor %}
+        {% else %}
+        <span class="text-muted small">None</span>
+        {% endif %}
+    </td>
+    <td>
+        {% if action.is_active %}
+        <span class="badge bg-success">Active</span>
+        {% else %}
+        <span class="badge bg-warning text-dark" title="Inactive in the Actions library — this agent will not run it">
+            Inactive
+        </span>
+        {% endif %}
+    </td>
+    <td class="text-end">
+        <div class="d-flex gap-1 justify-content-end flex-wrap">
+            <a class="btn btn-sm btn-outline-secondary" href="/actions">
+                Edit in library
+            </a>
+            <button type="button"
+                    class="btn btn-sm btn-outline-danger"
+                    hx-post="/chatbot-settings/{{ key.uuid }}/actions/{{ action.uuid }}/detach"
+                    hx-target="#chatbotActionsResponse"
+                    hx-swap="innerHTML"
+                    hx-confirm="Remove '{{ action.name }}' from this agent? The action stays in your library.">
+                Remove
+            </button>
+        </div>
+    </td>
+</tr>
+{% else %}
+<tr>
+    <td colspan="6" class="text-center text-muted py-4">
+        <i class="las la-bolt fs-4 d-block mb-1"></i> No actions added — this agent answers from its data and prompt only.
+    </td>
+</tr>
+{% endfor %}

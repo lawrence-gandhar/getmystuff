@@ -3,7 +3,7 @@ import uuid as uuid_pkg
 from typing import Optional
 
 from sqlalchemy.orm import Mapped, mapped_column
-from sqlalchemy import BigInteger, String, Text, Boolean, DateTime, ForeignKey
+from sqlalchemy import BigInteger, String, Text, Boolean, DateTime, ForeignKey, Integer
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.sql import func
 
@@ -194,8 +194,25 @@ class ChatbotWidgetSettings(Base):
     )
 
 
+# How a turn was answered. A flow turn is served straight from the Flow
+# Builder graph (a menu, a scripted message) and normally costs no tokens at
+# all; an AI turn went to a language model. Kept on the row so the performance
+# dashboard can compare the two rather than averaging them together.
+TURN_TYPE_AI = "ai"
+TURN_TYPE_FLOW = "flow"
+
+
 class ChatbotMessage(Base):
-    """A single visitor question + AI answer exchanged through a chatbot widget."""
+    """
+    A single visitor question + AI answer exchanged through a chatbot widget,
+    together with what that turn cost: how long the server took to answer it
+    and how many tokens went into and came back from the language model.
+
+    Written once per visitor turn by chatbot_turn_service — including turns a
+    flow answered without any AI involvement — so the performance dashboard
+    (Chatbot Analytics) reads one complete, uniform log rather than stitching
+    several partial ones together.
+    """
     __tablename__ = "chatbot_messages"
 
     id: Mapped[int] = mapped_column(
@@ -228,6 +245,36 @@ class ChatbotMessage(Base):
     ai_response: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
 
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # ---- Performance log ----
+
+    # TURN_TYPE_AI | TURN_TYPE_FLOW
+    turn_type: Mapped[str] = mapped_column(
+        String(10), nullable=False, default=TURN_TYPE_AI, index=True,
+    )
+
+    # Server-side wall time for the whole turn: flow-engine steps, any webhook
+    # action, the language-model call(s) and response assembly — i.e. what the
+    # visitor actually waited for, minus network latency to their browser.
+    response_time_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0, index=True)
+
+    # Token cost of the turn, summed across every model call it made (an action
+    # router call plus the answer itself both count). Zero on a flow turn that
+    # never reached a model.
+    request_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    response_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    llm_call_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    # True when at least one provider in this turn reported no usage of its own
+    # and the counts above had to be estimated from text length — surfaced in
+    # the dashboard so those numbers are never mistaken for billing figures.
+    tokens_estimated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    # Which provider/model answered ("anthropic", "openai-compatible",
+    # "in_built"). Null on a flow turn that called no model.
+    llm_provider: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)
+    llm_model: Mapped[Optional[str]] = mapped_column(String(150), nullable=True)
 
     created_at: Mapped[DateTime] = mapped_column(
         DateTime(timezone=True),

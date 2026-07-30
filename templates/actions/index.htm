@@ -1,0 +1,54 @@
+{% extends "base/layout.htm" %}
+{% block title %}Actions | GetMyStuff{% endblock %}
+
+{% block content %}
+<div class="container mt-4" style="max-width: 100%;">
+
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h5 class="fw-semibold mb-0">
+            <i class="las la-bolt text-primary"></i> Actions
+        </h5>
+        <button type="button" class="btn btn-primary btn-sm" data-action-new
+                data-bs-toggle="offcanvas" data-bs-target="#chatbotActionOffcanvas">
+            <i class="las la-plus"></i> New Action
+        </button>
+    </div>
+
+    <p class="text-muted small mb-3">
+        An action lets an agent fetch live data from one of your own endpoints before it answers
+        &mdash; an order status, an availability check, a ticket lookup. Define it once here and
+        add it to as many agents as you like from each agent's <strong>Actions</strong> tab.
+        Editing an action changes it everywhere it is used; deactivating one switches it off for
+        every agent at once.
+    </p>
+
+    <div id="actionsResponse" class="mb-2"></div>
+
+    <div class="card shadow-sm">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Name</th>
+                        <th style="width:90px;">Method</th>
+                        <th>URL</th>
+                        <th style="width:180px;">Parameters</th>
+                        <th style="width:90px;" class="text-center">Agents</th>
+                        <th style="width:100px;">Status</th>
+                        <th style="width:230px;" class="text-end">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="actionsTableBody">
+                    {% include "actions/partials/action_rows_body.htm" %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+{% include "actions/partials/action_form.htm" %}
+
+<script id="caiActionEndpoints" type="application/json">{{ {"create": "/actions/create", "base": "/actions/"} | tojson }}</script>
+<script id="caiParameterTypes" type="application/json">{{ action_parameter_types | list | tojson }}</script>
+<script src="/static/js/chatbot_ai_settings.js"></script>
+{% endblock %}
