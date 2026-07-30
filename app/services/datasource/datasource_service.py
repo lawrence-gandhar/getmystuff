@@ -9,7 +9,7 @@ from pydantic import ValidationError
 
 from app.models.datasource import DataSource, DatasourceFile
 from app.schemas.datasource import DatasourceCreateSchema, DatasourceUpdateSchema
-from app.services.metadata_service import (
+from app.services.datasource.metadata_service import (
     get_rdbms_tables,
     get_mongo_collections,
     get_table_schema,

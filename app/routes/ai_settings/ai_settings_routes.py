@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.auth import require_auth
 from app.models.ai_settings import AI_PROVIDERS
 from app.models.user import User
-from app.services.ai_settings_service import (
+from app.services.ai_settings.ai_settings_service import (
     create_api_key,
     delete_api_key,
     get_user_api_keys,

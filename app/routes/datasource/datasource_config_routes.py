@@ -10,12 +10,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.auth import require_auth
 from app.models.user import User
-from app.services.datasource_config_service import (
+from app.services.datasource.datasource_config_service import (
     create_config_with_subqueries,
     check_tool_name_exists,
 )
 
-from app.services.datasource_service import (
+from app.services.datasource.datasource_service import (
     get_datasource_table_schema,
     get_user_datasources,
     get_datasource_objects,

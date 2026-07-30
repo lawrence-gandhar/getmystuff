@@ -2,11 +2,21 @@
 
 Standard service layer implementation pattern.
 
+Services live under `app/services/<feature>/`, one subfolder per feature (e.g.
+`app/services/datasource/datasource_service.py`). Callers import the specific function they
+need by its full module path:
+
+```
+from app.services.datasource.datasource_service import create_datasource
+```
+
 ---
 
 # Example Service
 
 ```
+# app/services/datasource/datasource_service.py
+
 from app.utils.db_utils import insert_record
 from app.utils.exceptions import ValidationError
 

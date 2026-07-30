@@ -13,7 +13,7 @@ from litestar.exceptions import HTTPException
 
 from app.models.user import User
 from app.models.datasource import DataSource, DatasourceFile
-from app.services.datasource_service import (
+from app.services.datasource.datasource_service import (
     test_connection,
     create_datasource,
     update_datasource_name,
@@ -27,7 +27,7 @@ from app.services.datasource_service import (
     search_sort_tables,
     datasource_crud,
 )
-from app.services.file_service import check_file_exists, upload_datasource_files
+from app.services.datasource.file_service import check_file_exists, upload_datasource_files
 from app.utils.file_utils import FILE_BASED_TYPES, ACCEPT_ATTRS, ALLOWED_EXTENSIONS
 from app.db.auth import require_auth
 from app.db.db_utils import fetch_file_schema

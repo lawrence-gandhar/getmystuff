@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.db_utils import CRUDQueryBuilder
 from app.models.chatbot import ChatbotApiKey
 from app.models.flow_builder import ChatbotFlow, ChatbotFlowSession
-from app.services import chatbot_service
+from app.services.flow_builder import ai_fallback_service
 
 flow_session_crud = CRUDQueryBuilder(ChatbotFlowSession)
 
@@ -167,7 +167,7 @@ async def advance_flow_session(
         await _persist_session(db, session)
         return early_result
 
-    result = await _run_internal_hops(db, chatbot_key, graph_data, session, incoming_message)
+    result = await _run_internal_hops(db, chatbot_key, flow.id, graph_data, session, incoming_message)
     await _persist_session(db, session)
     return result
 
@@ -301,6 +301,7 @@ def _step_end(session: ChatbotFlowSession, node: dict) -> FlowEngineResult:
 async def _step_ai_fallback(
     db: AsyncSession,
     chatbot_key: ChatbotApiKey,
+    flow_id: int,
     graph_data: dict,
     session: ChatbotFlowSession,
     node: dict,
@@ -309,7 +310,9 @@ async def _step_ai_fallback(
     edge = _find_edge(graph_data, node["id"], "default")
     _advance_or_complete(session, edge, node["id"])
     try:
-        ai_result = await chatbot_service.answer_message(db, chatbot_key, incoming_message or "")
+        ai_result = await ai_fallback_service.run_ai_fallback(
+            db, chatbot_key, flow_id, node["id"], node.get("data") or {}, incoming_message or "",
+        )
         return FlowEngineResult(
             type="text",
             text=ai_result.summary,
@@ -347,6 +350,7 @@ def _loop_guard_result(graph_data: dict, session: ChatbotFlowSession, hops: int)
 async def _run_one_hop(
     db: AsyncSession,
     chatbot_key: ChatbotApiKey,
+    flow_id: int,
     graph_data: dict,
     session: ChatbotFlowSession,
     node: dict,
@@ -369,7 +373,7 @@ async def _run_one_hop(
         return _step_end(session, node)
 
     if node_type == "ai_fallback":
-        return await _step_ai_fallback(db, chatbot_key, graph_data, session, node, incoming_message)
+        return await _step_ai_fallback(db, chatbot_key, flow_id, graph_data, session, node, incoming_message)
 
     # Unknown/unsupported node type reached at runtime — end gracefully.
     session.status = "completed"
@@ -379,6 +383,7 @@ async def _run_one_hop(
 async def _run_internal_hops(
     db: AsyncSession,
     chatbot_key: ChatbotApiKey,
+    flow_id: int,
     graph_data: dict,
     session: ChatbotFlowSession,
     incoming_message: Optional[str],
@@ -392,6 +397,6 @@ async def _run_internal_hops(
             return guard_result
 
         node = _find_node(graph_data, session.current_node_id)
-        result = await _run_one_hop(db, chatbot_key, graph_data, session, node, incoming_message)
+        result = await _run_one_hop(db, chatbot_key, flow_id, graph_data, session, node, incoming_message)
         if result is not None:
             return result

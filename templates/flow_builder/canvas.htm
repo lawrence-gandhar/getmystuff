@@ -33,10 +33,56 @@
     stroke: #dc3545;
     stroke-width: 3;
 }
+.fb-edge-delete-btn {
+    cursor: pointer;
+    pointer-events: auto;
+}
+.fb-edge-delete-btn circle {
+    fill: #fff;
+    stroke: #dc3545;
+    stroke-width: 1.5;
+}
+.fb-edge-delete-btn text {
+    fill: #dc3545;
+    font-size: 11px;
+    font-weight: 700;
+}
+.fb-edge-delete-btn:hover circle {
+    fill: #dc3545;
+}
+.fb-edge-delete-btn:hover text {
+    fill: #fff;
+}
+.fb-edge-handle {
+    fill: #fff;
+    stroke: #6c757d;
+    stroke-width: 2;
+    cursor: grab;
+    pointer-events: auto;
+}
+.fb-edge-handle:hover {
+    stroke: #0d6efd;
+    fill: #cfe2ff;
+}
+#flow-canvas-wrapper.fb-reattaching {
+    cursor: grabbing;
+}
+.flow-node.fb-drop-target {
+    outline: 2px dashed #0d6efd;
+    outline-offset: 2px;
+}
+.flow-node-port.fb-drop-target {
+    background: #0d6efd;
+    border-color: #0d6efd;
+}
 #flow-canvas {
     position: relative;
     width: 3000px;
     height: 2000px;
+    /* Empty space here must not swallow clicks meant for the edges layer
+       underneath — a <div>'s hit area is its whole box, not just where
+       its node children paint. Nodes opt back in below. */
+    pointer-events: none;
 }
 .flow-node {
     position: absolute;
@@ -48,6 +94,7 @@
     font-size: 12px;
     user-select: none;
     cursor: default;
+    pointer-events: auto;
 }
 .flow-node.fb-node-selected {
     border-color: #0d6efd;
@@ -160,6 +207,9 @@
         <h5 class="fw-semibold mb-0">
             <i class="las la-project-diagram text-primary"></i> {{ flow.name }}
             {% if flow.is_active %}<span class="badge bg-success ms-1">Active</span>{% endif %}
+            <span id="fbUnsavedBadge" class="badge bg-warning text-dark ms-1" style="display:none;" title="Changes made in the editor aren't live for visitors until you click Save">
+                <i class="las la-exclamation-triangle"></i> Unsaved changes
+            </span>
         </h5>
         <div class="d-flex gap-2">
             <a href="/flow-builder/{{ key_id }}" class="btn btn-outline-secondary btn-sm">
@@ -186,7 +236,9 @@
 
     <p class="text-muted small mt-2">
         Click a node's output dot, then click another node to connect them. Drag a node's header to move it.
-        Click a node body to edit its properties, or a connector line to select/delete it.
+        Click a node body to edit its properties, or a connector line to select it.
+        Click the <strong>×</strong> button on a connector to delete it, or drag either of its small end handles
+        onto a different node (or output dot) to move it there.
     </p>
 </div>
 
@@ -225,6 +277,8 @@
         saveUrl: "/flow-builder/{{ key_id }}/{{ flow.uuid }}/save",
         graphUrl: "/flow-builder/{{ key_id }}/{{ flow.uuid }}/graph",
         responseTargetId: "fb-save-response",
+        kbBaseUrl: "/flow-builder/{{ key_id }}/{{ flow.uuid }}/nodes",
+        aiApiKeys: {{ ai_api_keys_json | safe }},
     });
 </script>
 {% endblock %}

@@ -19,3 +19,7 @@ aiosqlite
 psycopg2-binary
 anthropic
 openai
+pypdf
+python-docx
+httpx
+pgvector

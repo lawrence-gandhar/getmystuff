@@ -24,6 +24,20 @@ ALLOWED_IMAGE_EXTENSIONS: frozenset[str] = frozenset({"png", "jpg", "jpeg", "gif
 # Max size for a single widget branding image upload.
 MAX_IMAGE_SIZE_BYTES = 2 * 1024 * 1024  # 2 MB
 
+# Base directory for AI Fallback knowledge-base document uploads (Flow
+# Builder). Keyed by the owning FlowNodeKnowledgeBase's own uuid, mirroring
+# ensure_upload_dir's per-owner layout below.
+KNOWLEDGE_BASE_UPLOAD_BASE = Path("app/uploads/knowledge_base")
+
+# Allowed knowledge-base document extensions (lowercase, no dot).
+ALLOWED_KB_EXTENSIONS: frozenset[str] = frozenset({"pdf", "txt", "docx"})
+
+# HTML <input accept="..."> string for knowledge-base document uploads.
+KB_ACCEPT_ATTR = ".pdf,.txt,.docx"
+
+# Max size for a single knowledge-base document upload.
+MAX_KB_FILE_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
+
 # db_type values that represent file-based (non-connection) datasources.
 FILE_BASED_TYPES: frozenset[str] = frozenset({"csv", "xls", "json", "parquet", "avro"})
 
@@ -144,5 +158,17 @@ def ensure_widget_upload_dir(key_uuid: str) -> Path:
     Path layout:  <WIDGET_UPLOAD_BASE>/<key_uuid>/
     """
     upload_dir = WIDGET_UPLOAD_BASE / str(key_uuid)
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    return upload_dir
+
+
+def ensure_knowledge_base_upload_dir(knowledge_base_uuid: str) -> Path:
+    """
+    Return (and create if absent) the upload directory for one AI Fallback
+    node's knowledge-base documents.
+
+    Path layout:  <KNOWLEDGE_BASE_UPLOAD_BASE>/<knowledge_base_uuid>/
+    """
+    upload_dir = KNOWLEDGE_BASE_UPLOAD_BASE / str(knowledge_base_uuid)
     upload_dir.mkdir(parents=True, exist_ok=True)
     return upload_dir

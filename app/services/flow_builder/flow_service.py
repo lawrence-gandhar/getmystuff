@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.db_utils import CRUDQueryBuilder
 from app.db.flow_builder.queries import deactivate_other_flows
 from app.models.flow_builder import ChatbotFlow
-from app.services import chatbot_service
+from app.services.chatbot import chatbot_service
 
 flow_crud = CRUDQueryBuilder(ChatbotFlow)
 
@@ -26,6 +26,8 @@ _VALID_NODE_TYPES = {
     "ask_input", "send_message", "ai_fallback", "end",
 }
 _VALID_OPERATORS = {"equals", "contains", "not_empty"}
+_VALID_CONTEXT_SOURCES = {"datasource", "knowledge_base", "prompt"}
+_VALID_LLM_MODES = {"in_built", "attached"}
 
 _DEFAULT_GRAPH = {
     "nodes": [
@@ -184,6 +186,24 @@ def _validate_node(node: dict, node_by_id: dict) -> None:
         raise HTTPException(
             status_code=400,
             detail=f"{node_type.capitalize()} node must have at least one option",
+        )
+    elif node_type == "ai_fallback":
+        _validate_ai_fallback_data(data)
+
+
+def _validate_ai_fallback_data(data: dict) -> None:
+    context_source = data.get("context_source")
+    if context_source is not None and context_source not in _VALID_CONTEXT_SOURCES:
+        raise HTTPException(status_code=400, detail=f"Invalid AI Fallback context source: {context_source!r}")
+
+    llm_mode = data.get("llm_mode")
+    if llm_mode is not None and llm_mode not in _VALID_LLM_MODES:
+        raise HTTPException(status_code=400, detail=f"Invalid AI Fallback LLM mode: {llm_mode!r}")
+
+    if llm_mode == "attached" and not data.get("llm_api_key_id"):
+        raise HTTPException(
+            status_code=400,
+            detail="AI Fallback is set to use an attached LLM API but no key is selected",
         )
 
 

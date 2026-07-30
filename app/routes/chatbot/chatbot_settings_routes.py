@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.auth import require_auth
 from app.models.user import User
-from app.services.chatbot_service import (
+from app.services.chatbot.chatbot_service import (
     build_widget_script,
     create_chatbot_key,
     delete_chatbot_key,
@@ -19,7 +19,7 @@ from app.services.chatbot_service import (
     toggle_active_status,
     update_chatbot_key,
 )
-from app.services.chatbot_widget_settings_service import (
+from app.services.chatbot.chatbot_widget_settings_service import (
     ALLOWED_HEADER_FONTS,
     ALLOWED_SEND_BUTTON_STYLES,
     WidgetAppearanceInput,
@@ -29,7 +29,7 @@ from app.services.chatbot_widget_settings_service import (
     resolve_send_button_icon_url,
     update_widget_settings,
 )
-from app.services.datasource_service import get_user_datasources
+from app.services.datasource.datasource_service import get_user_datasources
 
 
 class ChatbotSettingsController(Controller):

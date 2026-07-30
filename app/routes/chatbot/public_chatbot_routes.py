@@ -11,8 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.chatbot import ChatbotApiKey
 from app.models.flow_builder import ChatbotFlow
-from app.services.chatbot_service import answer_message, get_active_key_by_value, validate_origin
-from app.services.chatbot_widget_settings_service import (
+from app.services.chatbot.chatbot_service import answer_message, get_active_key_by_value, validate_origin
+from app.services.chatbot.chatbot_widget_settings_service import (
     build_widget_public_config,
     get_widget_settings_by_key_id,
 )

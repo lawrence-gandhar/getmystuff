@@ -23,13 +23,22 @@ Database
 ```
 app/
 
-routes/
-services/
-models/
+db/          shared infra (base.py, db_sessions.py, db_utils.py, models.py) + per-feature subfolders
+routes/      per-feature subfolders (auth/, dashboard/, datasource/, ai_settings/, ai_analytics/, chatbot/, flow_builder/)
+services/    per-feature subfolders (datasource/, ai_settings/, ai_analytics/, chatbot/, flow_builder/, ai_inbuilt/)
+models/      per-feature subfolders (user/, datasource/, ai_settings/, chatbot/, ai_analytics/, subscriptions/, flow_builder/, ai_inbuilt/)
+schemas/
 utils/
 templates/
 static/
 ```
+
+`db/`, `models/`, `routes/`, and `services/` group related files by feature — a feature's
+subfolder is named the same across all four layers it appears in (e.g. `datasource/` exists
+under both `routes/` and `services/`). Each subfolder's `__init__.py` re-exports its public
+symbols for `models/` and `routes/`; `services/` subfolders use plain empty `__init__.py`
+files since service callers import specific functions by full module path. See `CLAUDE.md`
+for the full rule and `flow_builder/`/`ai_inbuilt/` for the reference implementation.
 
 ---
 

@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.auth import require_auth
 from app.models.user import User
-from app.services.ai_analytics_service import generate_analytics, get_prompt_history
+from app.services.ai_analytics.ai_analytics_service import generate_analytics, get_prompt_history
 
 
 class AIAnalyticsController(Controller):

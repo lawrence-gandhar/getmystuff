@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.auth import require_auth
 from app.models.user import User
+from app.services.ai_settings import ai_settings_service
 from app.services.flow_builder import flow_service
 
 _JSON = "application/json"
@@ -55,6 +56,11 @@ class FlowBuilderController(Controller):
         self, key_id: uuid.UUID, flow_id: uuid.UUID, db: AsyncSession, user: User
     ) -> Template:
         flow = await flow_service.get_flow(db, user.id, key_id, flow_id)
+        ai_api_keys = await ai_settings_service.get_user_api_keys(db, user.id)
+        ai_api_keys_json = [
+            {"id": str(key.uuid), "label": key.label, "provider": key.provider_display}
+            for key in ai_api_keys
+        ]
         return Template(
             template_name="flow_builder/canvas.htm",
             context={
@@ -62,6 +68,7 @@ class FlowBuilderController(Controller):
                 "key_id": key_id,
                 "flow": flow,
                 "graph_data_json": json.dumps(flow.graph_data),
+                "ai_api_keys_json": json.dumps(ai_api_keys_json),
                 "active": "chatbot_settings",
             },
         )

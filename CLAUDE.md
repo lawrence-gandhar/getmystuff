@@ -109,25 +109,53 @@ PROJECT STRUCTURE
 
 The project structure must follow this pattern.
 
+`db/`, `models/`, `routes/`, and `services/` are each organized into **per-feature
+subfolders** (not flat files). Every feature that has a model, a route, and/or a service
+gets its own identically-named subfolder in each of those four top-level folders — mirroring
+how `flow_builder` and `ai_inbuilt` are already structured. A feature subfolder's
+`__init__.py` re-exports its public classes/controllers (see `models/flow_builder/__init__.py`
+and `routes/flow_builder/__init__.py` for the pattern) so callers still import via the
+package path (`from app.models.datasource import DataSource`), not the individual file.
+`services/*/__init__.py` files stay empty — service call sites import specific functions by
+full path (`from app.services.datasource.datasource_service import get_user_datasources`).
+
 project-root/
     app/
+    ├── db/
+    │ ├── base.py, db_sessions.py, db_utils.py, models.py   (shared — not feature-specific)
+    │ ├── auth/
+    │ │ ├── auth.py
+    │ │ ├── create_fake_user.py
+    │ ├── datasource/ (feature-specific query modules only; falls back to db_utils.py generics)
+    │ ├── flow_builder/
+    │ │ ├── queries.py
+    │
+    ├── models/
+    │ ├── user/
+    │ │ ├── user.py
+    │ ├── datasource/
+    │ │ ├── datasource.py
+    │ ├── flow_builder/
+    │ │ ├── models.py
+    │
     ├── routes/
-    │ ├── dashboard.py
-    │ ├── datasources.py
-    │ ├── auth.py
+    │ ├── auth/
+    │ │ ├── base_routes.py
+    │ ├── dashboard/
+    │ │ ├── dashboard_routes.py
+    │ ├── datasource/
+    │ │ ├── datasource_routes.py
     │
     ├── services/
-    │ ├── datasource_service.py
-    │ ├── auth_service.py
+    │ ├── datasource/
+    │ │ ├── datasource_service.py
+    │ ├── flow_builder/
+    │ │ ├── flow_service.py
     │
     ├── utils/
     │ ├── db_utils.py
     │ ├── validators.py
     │ ├── exceptions.py
-    │
-    ├── models/
-    │ ├── datasource.py
-    │ ├── user.py
     │
     ├── templates/
     │ ├── base.html
@@ -142,10 +170,14 @@ project-root/
 
 Rules:
 
-• Routes handle HTTP requests only  
-• Services contain business logic  
-• Utils contain helpers  
+• Routes handle HTTP requests only
+• Services contain business logic
+• Utils contain helpers
 • Templates contain only UI logic
+• `db/db_utils.py`, `db/base.py`, `db/db_sessions.py`, and `db/models.py` stay at the top
+  level of `db/` — they are shared infrastructure, not tied to one feature
+• A new feature adds a same-named subfolder to whichever of `db/models/routes/services` it
+  actually needs — don't create empty subfolders for layers a feature doesn't use
 
 
 --------------------------------------------------

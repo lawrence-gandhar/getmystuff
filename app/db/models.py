@@ -13,7 +13,13 @@ from app.models.datasource import (  # noqa: F401
     DataSourceAgentConfig,
     DatasourceFile,
 )
-from app.models.prompt_history import PromptHistory  # noqa: F401
+from app.models.ai_analytics import PromptHistory  # noqa: F401
 from app.models.ai_settings import AIApiKey  # noqa: F401
 from app.models.chatbot import ChatbotApiKey, ChatbotMessage  # noqa: F401
-from app.models.flow_builder import ChatbotFlow, ChatbotFlowSession  # noqa: F401
+from app.models.flow_builder import (  # noqa: F401
+    ChatbotFlow,
+    ChatbotFlowSession,
+    FlowNodeKnowledgeBase,
+    FlowNodeKnowledgeDocument,
+)
+from app.models.ai_inbuilt import KnowledgeChunk  # noqa: F401

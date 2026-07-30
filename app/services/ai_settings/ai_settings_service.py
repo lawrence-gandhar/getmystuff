@@ -128,6 +128,31 @@ async def get_active_key_details(
     }
 
 
+async def get_key_details_by_uuid(
+    db: AsyncSession,
+    user_id: int,
+    key_id: uuid.UUID,
+) -> Optional[dict]:
+    """
+    Return one specific key (regardless of its is_active flag) as
+    {"provider", "api_key", "base_url", "model_name"}, or None if it doesn't
+    exist or doesn't belong to this user.
+
+    Used where a caller explicitly attaches a particular saved key by
+    reference (e.g. a Flow Builder AI Fallback node's "attached LLM API"
+    setting) rather than picking whichever key is currently marked active.
+    """
+    key = await ai_key_crud.get_by_uuid(db, key_id, extra_filters={"user_id": user_id})
+    if not key:
+        return None
+    return {
+        "provider": key.provider,
+        "api_key": decrypt_password(key.api_key_encrypted),
+        "base_url": key.base_url,
+        "model_name": key.model_name,
+    }
+
+
 # --------------------------------------------------------------------------
 # Write
 # --------------------------------------------------------------------------

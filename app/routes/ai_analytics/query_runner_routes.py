@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.auth import require_auth
 from app.models.user import User
-from app.services.datasource_service import get_user_datasources
+from app.services.datasource.datasource_service import get_user_datasources
 
 
 class QueryRunnerController(Controller):

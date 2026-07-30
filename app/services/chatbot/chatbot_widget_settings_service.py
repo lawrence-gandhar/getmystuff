@@ -38,7 +38,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.db_utils import CRUDQueryBuilder
 from app.models.chatbot import ChatbotWidgetSettings
-from app.services.chatbot_service import get_chatbot_key
+from app.services.chatbot.chatbot_service import get_chatbot_key
 from app.utils.file_utils import (
     ALLOWED_IMAGE_EXTENSIONS,
     MAX_IMAGE_SIZE_BYTES,

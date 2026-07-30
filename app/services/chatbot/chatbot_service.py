@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.db_utils import CRUDQueryBuilder
 from app.models.chatbot import ChatbotApiKey, ChatbotMessage
 from app.models.datasource import DatasourceFile
-from app.services.ai_analytics_service import datasource_crud, run_grounded_prompt
+from app.services.ai_analytics.ai_analytics_service import datasource_crud, run_grounded_prompt
 
 chatbot_key_crud = CRUDQueryBuilder(ChatbotApiKey)
 chatbot_message_crud = CRUDQueryBuilder(ChatbotMessage)
@@ -226,8 +226,22 @@ async def delete_chatbot_key(db: AsyncSession, user_id: int, key_id: uuid.UUID) 
 # Public entry point — answering a visitor's message
 # --------------------------------------------------------------------------
 
-async def answer_message(db: AsyncSession, chatbot_key: ChatbotApiKey, message: str):
-    """Answer a widget visitor's message and log the exchange. Returns an AnalyticsResult."""
+async def answer_message(
+    db: AsyncSession,
+    chatbot_key: ChatbotApiKey,
+    message: str,
+    extra_instructions: str = "",
+    forced_key_uuid: Optional[uuid.UUID] = None,
+    use_inbuilt_llm: bool = False,
+):
+    """
+    Answer a widget visitor's message and log the exchange. Returns an AnalyticsResult.
+
+    `extra_instructions`, `forced_key_uuid`, and `use_inbuilt_llm` are optional
+    passthroughs to run_grounded_prompt, used by the Flow Builder AI Fallback
+    node's guardrails/prompt, "attached LLM API", and "In-built LLM" settings —
+    all default to "unset" so the plain widget-fallback caller is unaffected.
+    """
 
     message = (message or "").strip()
     if not message:
@@ -250,6 +264,9 @@ async def answer_message(db: AsyncSession, chatbot_key: ChatbotApiKey, message: 
             target_names=chatbot_key.target_names,
             file_ids=[int(fid) for fid in chatbot_key.file_ids],
             prompt=message,
+            extra_instructions=extra_instructions,
+            forced_key_uuid=forced_key_uuid,
+            use_inbuilt_llm=use_inbuilt_llm,
         )
 
         await chatbot_message_crud.create(db, {

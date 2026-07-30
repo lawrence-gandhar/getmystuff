@@ -12,16 +12,13 @@ from litestar.static_files.config import StaticFilesConfig
 from litestar.exceptions import HTTPException
 from litestar.connection import Request
 
-from app.routes.base_routes import AuthController
-from app.routes.dashboard_routes import DashboardController
-from app.routes.datasource_routes import DataSourceController
-from app.routes.datasource_config_routes import DataSourceConfigurations
-from app.routes.ai_analytics_routes import AIAnalyticsController
-from app.routes.ai_settings_routes import AISettingsController
-from app.routes.query_runner_routes import QueryRunnerController
-from app.routes.chatbot_settings_routes import ChatbotSettingsController
-from app.routes.public_chatbot_routes import PublicChatbotController
-from app.routes.flow_builder import FlowBuilderController
+from app.routes.auth import AuthController
+from app.routes.dashboard import DashboardController
+from app.routes.datasource import DataSourceController, DataSourceConfigurations
+from app.routes.ai_analytics import AIAnalyticsController, QueryRunnerController
+from app.routes.ai_settings import AISettingsController
+from app.routes.chatbot import ChatbotSettingsController, PublicChatbotController
+from app.routes.flow_builder import FlowBuilderController, KnowledgeBaseController
 
 from app.db.db_sessions import get_db
 from app.db.base import Base
@@ -108,6 +105,7 @@ app = Litestar(
         QueryRunnerController,
         ChatbotSettingsController,
         FlowBuilderController,
+        KnowledgeBaseController,
         PublicChatbotController,
     ],
     debug=True,
