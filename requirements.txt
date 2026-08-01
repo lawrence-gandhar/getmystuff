@@ -14,6 +14,10 @@ pyarrow
 pydantic
 cryptography
 fastavro
+# pandas' engine for .xlsx. Not a transitive dependency of pandas — without it
+# every Excel upload fails with ModuleNotFoundError, even though XLSX is an
+# advertised datasource type (see app/utils/file_utils.ALLOWED_EXTENSIONS).
+openpyxl
 asyncpg
 aiosqlite
 psycopg2-binary

@@ -1,0 +1,39 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "--strict-markers --strict-config -ra"
+markers = [
+    "slow: test takes a noticeable amount of wall-clock time",
+    "external: exercises a real external boundary (skipped by default)",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning:litestar.*",
+    "ignore::DeprecationWarning:passlib.*",
+]
+
+
+# --------------------------------------------------------------------------
+# Coverage
+#
+# `source` deliberately carries NO `omit` list. Excluding awkward files would
+# inflate the percentage into something meaningless — the whole point of the
+# ratchet in the full-test-coverage skill is that the number is honest and can
+# only ever go up. If a file genuinely should not be measured, delete it or move
+# it out of app/ rather than hiding it here.
+# --------------------------------------------------------------------------
+[tool.coverage.run]
+source = ["app", "main"]
+branch = true
+relative_files = true
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "@(abc\\.)?abstractmethod",
+]

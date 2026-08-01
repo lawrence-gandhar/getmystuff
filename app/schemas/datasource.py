@@ -24,14 +24,24 @@ def _normalize_datasource_name(v: str) -> str:
     Shared normalization + validation logic reused by both schemas.
 
     Transformations applied (in order):
-      1. Strip leading / trailing whitespace.
-      2. Convert to lowercase.
-      3. Validate the result is non-empty, within the 255-char limit,
+      1. Reject anything that is not a string.
+      2. Strip leading / trailing whitespace.
+      3. Convert to lowercase.
+      4. Validate the result is non-empty, within the 255-char limit,
          and matches the allowed character set.
 
     Raises:
         ValueError: With a human-readable message on any violation.
     """
+    # Runs under mode="before", so `v` is whatever the caller sent — a JSON body
+    # can put null, a number or a list here. Calling .strip() on those raises
+    # AttributeError, which Pydantic does NOT wrap into a ValidationError, so it
+    # escaped the schema entirely and reached the user as
+    # "'NoneType' object has no attribute 'strip'". Raising ValueError instead
+    # keeps every failure inside the ValidationError contract callers expect.
+    if not isinstance(v, str):
+        raise ValueError("datasource_name must be text")
+
     v = v.strip().lower()
 
     if not v:

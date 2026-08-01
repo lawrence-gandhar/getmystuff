@@ -185,3 +185,10 @@ alembic/versions/
 uploads/
 
 alembic.ini
+
+# Test run intermediates. The generated reports, HISTORY.md and
+# coverage_baseline.json are deliberately NOT ignored — the point of the
+# timestamped history is that it is committed and survives. These two are just
+# the raw artifacts make_report.py parses on its way there.
+tests/reports/.junit.xml
+tests/reports/.coverage.json

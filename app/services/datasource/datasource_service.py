@@ -1,3 +1,4 @@
+import logging
 import os
 import uuid
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,7 +29,12 @@ from app.db.db_utils import (
 from typing import Optional
 
 
+logger = logging.getLogger(__name__)
+
 datasource_crud = CRUDQueryBuilder(DataSource)
+
+# Repeated in every ownership check below, and asserted on by the route tests.
+_NOT_FOUND = "Datasource not found"
 
 
 # -----------------------------------
@@ -130,17 +136,28 @@ async def create_datasource(
 
         return datasource
 
+    except HTTPException:
+        # Raised deliberately above (the "connected but no readable tables" 400).
+        # It must escape ahead of the catch-all below, which would otherwise
+        # swallow the message and hand the caller a bare False.
+        raise
     except IntegrityError:
-        # The functional unique index uq_datasource_name_lower fired —
-        # a datasource with the same name (case-insensitively) already exists.
+        # The functional unique index uq_datasource_user_name_lower fired — this
+        # user already has a datasource with that name (case-insensitively).
         await db.rollback()
         raise HTTPException(
             status_code=409,
             detail="A datasource with this name already exists",
         )
-    except Exception as e:
-        print(str(e))
-        return False
+    except Exception as exc:
+        logger.exception("Failed to create datasource %r", datasource_name)
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "The datasource could not be saved. Please try again, and "
+                "contact support if the problem continues."
+            ),
+        ) from exc
 
 
 # -----------------------------------
@@ -168,7 +185,7 @@ async def update_datasource_name(
     )
 
     if not datasource:
-        raise HTTPException(status_code=404, detail="Datasource not found")
+        raise HTTPException(status_code=404, detail=_NOT_FOUND)
 
     try:
         validated = DatasourceUpdateSchema(datasource_name=datasource_name)
@@ -207,7 +224,7 @@ async def get_datasource_objects(
     )
 
     if not datasource:
-        raise HTTPException(status_code=404, detail="Datasource not found")
+        raise HTTPException(status_code=404, detail=_NOT_FOUND)
 
     try:
         if datasource.db_type == "mongodb":
@@ -260,7 +277,7 @@ async def get_datasource_table_schema(
     )
 
     if not datasource:
-        raise HTTPException(status_code=404, detail="Datasource not found")
+        raise HTTPException(status_code=404, detail=_NOT_FOUND)
 
     try:
         table_columns = await get_table_schema(datasource, table_name)
@@ -297,7 +314,7 @@ async def delete_datasource(
         db, datasource_id, extra_filters={"user_id": user_id},
     )
     if not datasource:
-        raise HTTPException(status_code=404, detail="Datasource not found")
+        raise HTTPException(status_code=404, detail=_NOT_FOUND)
     await db.delete(datasource)
     await db.commit()
 
@@ -312,7 +329,7 @@ async def delete_datasource_file(
         db, datasource_id, extra_filters={"user_id": user_id},
     )
     if not datasource:
-        raise HTTPException(status_code=404, detail="Datasource not found")
+        raise HTTPException(status_code=404, detail=_NOT_FOUND)
 
     result = await db.execute(
         select(DatasourceFile)
@@ -346,7 +363,7 @@ async def toggle_datasource_active(
         db, datasource_id, extra_filters={"user_id": user_id},
     )
     if not datasource:
-        raise HTTPException(status_code=404, detail="Datasource not found")
+        raise HTTPException(status_code=404, detail=_NOT_FOUND)
     datasource.is_active = not datasource.is_active
     await db.commit()
     await db.refresh(datasource)
@@ -414,7 +431,7 @@ async def toggle_column_status_service(
     datasource = await datasource_crud.get_by_uuid(db, datasource_id)
 
     if not datasource or datasource.user_id != user_id:
-        return None
+        raise HTTPException(status_code=404, detail=_NOT_FOUND)
 
     configuration = datasource.configuration_data or {}
 
@@ -424,9 +441,19 @@ async def toggle_column_status_service(
 
     table_config = configuration[table_name]
 
-    # Block activating a column when its table is inactive
+    # Block activating a column when its table is inactive.
+    #
+    # A distinct 400 rather than the 404 above: this is a business rule the user
+    # can act on, and returning the same "not found" for both would tell them
+    # nothing about which it was.
     if table_config.get("status", "active") == "inactive" and new_status == "active":
-        return None
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Table '{table_name}' is inactive. Activate the table before "
+                "activating its columns."
+            ),
+        )
 
     # Upsert column entry
     column_data = table_config.get("column_data", {})
@@ -457,7 +484,7 @@ async def toggle_table_status_service(
     datasource = await datasource_crud.get_by_uuid(db, datasource_id)
 
     if not datasource or datasource.user_id != user_id:
-        return None
+        raise HTTPException(status_code=404, detail=_NOT_FOUND)
 
     configuration = datasource.configuration_data or {}
 
@@ -494,7 +521,7 @@ async def search_sort_tables(
     datasource = await datasource_crud.get_by_uuid(db, datasource_id)
 
     if not datasource or datasource.user_id != user_id:
-        return []
+        raise HTTPException(status_code=404, detail=_NOT_FOUND)
 
     # Fetch live objects so search works against the actual DB, not just saved config
     try:
@@ -510,8 +537,13 @@ async def search_sort_tables(
     configuration = datasource.configuration_data or {}
 
     # SEARCH (substring, case-insensitive)
+    #
+    # Both sides are lowercased. Lowercasing only the table name would make an
+    # uppercase query match nothing — the route happens to lowercase before
+    # calling, but the service cannot rely on every caller doing so.
     if search:
-        live_tables = [t for t in live_tables if search in t.lower()]
+        needle = search.strip().lower()
+        live_tables = [t for t in live_tables if needle in t.lower()]
 
     # STATUS FILTER — use configuration_data status, default "active" for unconfigured tables
     if status_filter and status_filter != "all":

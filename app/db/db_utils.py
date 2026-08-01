@@ -1,6 +1,7 @@
 # app/db/db_utils.py
 
 import asyncio
+import logging
 import re
 import time
 from typing import Dict, Optional, Any, TypeVar, Type, List
@@ -27,9 +28,31 @@ T = TypeVar("T")
 # CONFIG
 # ==========================================================
 
-ENGINE_TTL_SECONDS = os.getenv("ENGINE_TTL_SECONDS")        # 30 min inactivity cleanup
-CIRCUIT_FAILURE_LIMIT = os.getenv("CIRCUIT_FAILURE_LIMIT")
-CIRCUIT_RESET_SECONDS = os.getenv("CIRCUIT_RESET_SECONDS")
+# These are compared against integer counters and clock deltas, so they must be
+# ints — os.getenv returns str (or None when unset), and `failures >= None`
+# raises TypeError. That is not a hypothetical: it made _register_failure raise
+# on every failure, which meant the circuit breaker could never open AND
+# test_rdbms_connection / test_mongo_connection raised instead of returning the
+# False their signatures promise, turning a wrong database password into a 500.
+def _int_from_env(name: str, default: int) -> int:
+    """Read an integer setting, falling back to *default* when unset or unusable."""
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return default
+    try:
+        return int(str(raw).strip())
+    except ValueError:
+        # A typo in the environment must not take the process down, but it must
+        # not silently change behaviour either.
+        logging.getLogger(__name__).warning(
+            "%s=%r is not a whole number; falling back to %s", name, raw, default,
+        )
+        return default
+
+
+ENGINE_TTL_SECONDS: int = _int_from_env("ENGINE_TTL_SECONDS", 1800)   # 30 min idle cleanup
+CIRCUIT_FAILURE_LIMIT: int = _int_from_env("CIRCUIT_FAILURE_LIMIT", 5)
+CIRCUIT_RESET_SECONDS: int = _int_from_env("CIRCUIT_RESET_SECONDS", 60)
 
 
 # ==========================================================
@@ -298,9 +321,11 @@ async def fetch_rdbms_schema(url: str, db_type: str, table_name: str):
         """
 
     elif db_type == "sqlite":
-        # SQLite uses PRAGMA which doesn't support parameters, so we use raw table name
-        # Note: in production, validate table_name to prevent injection
-        query = f"PRAGMA table_info([{table_name}])"
+        # PRAGMA accepts no bound parameters, so the name is interpolated —
+        # which is exactly why it is validated against the identifier charset
+        # first. _quote_identifier is the same guard fetch_rdbms_rows uses; the
+        # brackets stay because PRAGMA wants them.
+        query = f"PRAGMA table_info([{_validated_identifier(table_name)}])"
 
     else:
         raise ValueError("Unsupported RDBMS")
@@ -508,6 +533,30 @@ async def fetch_mongo_schema(uri: str, database: str, collection: str):
 # parameterized in SQL — validate against a strict identifier charset before
 # quoting and embedding it, as defense in depth against injection.
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9_]+$")
+
+# Looser than _IDENTIFIER_RE, for the PRAGMA path in fetch_rdbms_schema.
+#
+# A real table can legitimately be called "Order Details" or "sales.2024", and
+# those names come back from the catalog, so rejecting spaces and dots would make
+# such tables unreadable. What must not get through is anything that can close
+# the bracket quoting PRAGMA uses, or start a new statement: [ ] " ' ` ; and
+# parentheses are all absent from the allowed set.
+_BRACKET_SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_ .\-]*$")
+
+
+def _validated_identifier(name: str) -> str:
+    """
+    Check a table name that is about to be interpolated into a PRAGMA.
+
+    Raises:
+        ValueError: if the name could break out of its bracket quoting.
+    """
+    candidate = str(name or "").strip()
+
+    if not candidate or len(candidate) > 255 or not _BRACKET_SAFE_NAME_RE.match(candidate):
+        raise ValueError(f"Invalid table identifier: {name!r}")
+
+    return candidate
 
 
 def _quote_identifier(db_type: str, name: str) -> str:
@@ -773,15 +822,17 @@ class CRUDQueryBuilder:
 from pathlib import Path  # noqa: E402  (kept here to isolate the new section)
 
 # ------------------------------------------------------------------------------
-# File-section typed config
-# The module-level CONFIG vars are raw strings (os.getenv).  Cast them to int
-# here so the file circuit-breaker arithmetic is type-safe without touching
-# the original declarations above.
+# File-section config
+#
+# These were separate int-cast copies, added because the CONFIG vars above used
+# to be raw strings from os.getenv. Those are parsed as ints at declaration now,
+# so these are plain aliases — kept only so the existing file-section call sites
+# and their tests keep working.
 # ------------------------------------------------------------------------------
 
-_FILE_TTL_SECONDS: int = int(ENGINE_TTL_SECONDS) if ENGINE_TTL_SECONDS else 1800
-_FILE_CIRCUIT_FAILURE_LIMIT: int = int(CIRCUIT_FAILURE_LIMIT) if CIRCUIT_FAILURE_LIMIT else 5
-_FILE_CIRCUIT_RESET_SECONDS: int = int(CIRCUIT_RESET_SECONDS) if CIRCUIT_RESET_SECONDS else 60
+_FILE_TTL_SECONDS: int = ENGINE_TTL_SECONDS
+_FILE_CIRCUIT_FAILURE_LIMIT: int = CIRCUIT_FAILURE_LIMIT
+_FILE_CIRCUIT_RESET_SECONDS: int = CIRCUIT_RESET_SECONDS
 
 # Canonical set of accepted file-type strings (after normalisation).
 _SUPPORTED_FILE_TYPES: frozenset[str] = frozenset(

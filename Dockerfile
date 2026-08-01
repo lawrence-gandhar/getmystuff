@@ -28,6 +28,13 @@ RUN apt-get update \
 COPY requirements.txt .
 RUN pip install --upgrade pip && pip install -r requirements.txt
 
+# Test dependencies live in a separate file but are installed into the same
+# image: the suite runs via `docker compose exec app pytest`, because the local
+# 3.10 venv cannot import app/services/deep_agents/ (needs >= 3.11). Kept in its
+# own layer so editing it does not rebuild the main dependency layer.
+COPY requirements-dev.txt .
+RUN pip install -r requirements-dev.txt
+
 COPY . .
 
 # Uploaded files land here (app/services/flow_builder/knowledge_base_service.py).

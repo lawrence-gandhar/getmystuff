@@ -1,6 +1,9 @@
+import os
 import uuid as uuid_pkg
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+
+from dotenv import load_dotenv
 
 from jose import jwt, JWTError, ExpiredSignatureError
 from passlib.context import CryptContext
@@ -12,12 +15,36 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.db.models import User
 
+# This module can be imported before main.py runs, so it loads the .env itself
+# rather than relying on the caller having done so. load_dotenv never overwrites
+# a variable that is already set, so a real environment still wins.
+load_dotenv()
+
 
 # =====================================================
-# CONFIG (Move to ENV in production)
+# CONFIG
 # =====================================================
 
-SECRET_KEY = "super-secret-key"
+# The key every session cookie is signed with. Read from the environment and
+# required: it was previously the literal "super-secret-key", committed to the
+# repository and identical in every deployment, which meant anyone with source
+# access could mint a valid access token for any user uuid.
+#
+# Deliberately fails at import rather than falling back to a default. A missing
+# signing key is not a condition to degrade through — a random per-process
+# fallback would silently drop every session on restart and reject tokens across
+# workers, and a hardcoded fallback just reintroduces the vulnerability for
+# anyone who forgets to set it.
+SECRET_KEY = os.getenv("JWT_SECRET_KEY")
+
+if not SECRET_KEY:
+    raise RuntimeError(
+        "JWT_SECRET_KEY is not set. The application cannot sign session tokens "
+        "without it. Generate one with:\n"
+        '  python -c "import secrets; print(secrets.token_urlsafe(64))"\n'
+        "then add it to your .env as JWT_SECRET_KEY=<value>."
+    )
+
 ALGORITHM = "HS256"
 
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
@@ -110,6 +137,12 @@ async def authenticate_user(
     if not verify_password(password, user.password):
         return None
 
+    # A deactivated account must not be able to exchange its password for a
+    # token. Checked after the password so the response does not reveal whether
+    # a given email belongs to a disabled account or to no account at all.
+    if not user.is_active:
+        return None
+
     return user
 
 
@@ -143,6 +176,12 @@ async def get_current_user(
 
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
+
+    # Also checked here, not only in authenticate_user: a token issued before
+    # the account was deactivated stays valid for up to an hour, so without this
+    # a disabled user would keep working until it expired.
+    if not user.is_active:
+        raise HTTPException(status_code=401, detail="This account has been deactivated")
 
     return user
 

@@ -53,7 +53,10 @@ config that reopens fully editable in the query builder),
 [DEEP_AGENTS.md](DEEP_AGENTS.md) (running a data agent's tool configs as real queries so a
 chatbot answers from tool results and the language model never reads the database),
 [DOCKER_AND_LOCAL_LLM.md](DOCKER_AND_LOCAL_LLM.md) (why the app runs in a container on
-Python 3.12, and how the in-built Ollama models are configured and measured).
+Python 3.12, and how the in-built Ollama models are configured and measured),
+[TESTING.md](TESTING.md) (the test suite and its coverage ratchet — why the tests run in the
+container against an SQLite database, the four type shims that makes possible, how an
+authenticated route is reached, and the timestamped run history).
 
 Four objects the sidebar exposes separately, because their ownership differs:
 

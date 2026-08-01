@@ -606,6 +606,9 @@ class DataSourceController(Controller):
         if new_status not in {"active", "inactive"}:
             raise HTTPException(status_code=400)
 
+        # Raises 404 when the datasource is not the caller's, and 400 with a
+        # readable message when the parent table is inactive — the service owns
+        # both, so there is nothing to re-check here.
         updated_column = await toggle_column_status_service(
             db=db,
             datasource_id=datasource_id,
@@ -614,9 +617,6 @@ class DataSourceController(Controller):
             column_name=column_name,
             new_status=new_status,
         )
-
-        if not updated_column:
-            raise HTTPException(status_code=404)
 
         # Re-read the datasource to get the current table status for rendering
         datasource_obj = await datasource_crud.get_by_uuid(db, datasource_id)
@@ -649,6 +649,7 @@ class DataSourceController(Controller):
         if new_status not in {"active", "inactive"}:
             raise HTTPException(status_code=400)
 
+        # Raises 404 itself when the datasource is not the caller's.
         datasource = await toggle_table_status_service(
             db=db,
             datasource_id=datasource_id,
@@ -656,9 +657,6 @@ class DataSourceController(Controller):
             table_name=table_name,
             new_status=new_status,
         )
-
-        if not datasource:
-            raise HTTPException(status_code=404)
 
         return Template(
             template_name="datasources/table_row.htm",

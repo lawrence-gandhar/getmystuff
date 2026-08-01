@@ -83,12 +83,21 @@ class DataSource(Base):
     )
 
     # Functional unique index: enforces case-insensitive uniqueness on
-    # datasource_name at the PostgreSQL level.  Alembic autogenerate does
-    # not detect functional indexes — the hand-written migration
-    # (c7d1f4a8e3b9_add_datasource_name) creates this index explicitly.
+    # datasource_name *per owner*.  Alembic autogenerate does not detect
+    # functional indexes — the hand-written migrations create them explicitly
+    # (c7d1f4a8e3b9_add_datasource_name added the original, and
+    # b1f7c2d94a05_scope_datasource_name_to_user replaced it with this one).
+    #
+    # user_id is part of the index deliberately.  Without it the name is unique
+    # across every tenant, so one customer creating "sales_data" would stop every
+    # other customer from ever using that name — and the conflict message would
+    # name a row they cannot see.  This matches the scoping already used by
+    # uq_workspace_user_name_lower, uq_data_agent_user_name_lower and
+    # uq_tool_config_agent_name_lower.
     __table_args__ = (
         Index(
-            "uq_datasource_name_lower",
+            "uq_datasource_user_name_lower",
+            "user_id",
             text("lower(datasource_name)"),
             unique=True,
         ),

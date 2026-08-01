@@ -1,0 +1,19 @@
+# --------------------------------------------------------------------------
+# Test-only dependencies.
+#
+# Kept out of requirements.txt so the runtime dependency set stays honest about
+# what the application itself needs. Installed into the Docker image by the
+# Dockerfile, and re-installed on demand by the full-test-coverage skill when a
+# container is running without them.
+#
+# The suite runs inside the container (Python 3.12), never the local 3.10 venv —
+# app/services/deep_agents/ cannot import below 3.11. See documentations/TESTING.md.
+# --------------------------------------------------------------------------
+
+pytest
+pytest-asyncio
+pytest-cov
+coverage[toml]
+pytest-mock
+respx
+freezegun
