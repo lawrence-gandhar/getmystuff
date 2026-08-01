@@ -9,6 +9,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.auth import require_auth
 from app.models.user import User
+from app.schemas.flow_builder import (
+    FlowCreateRequest,
+    FlowGraphSaveRequest,
+    FlowRenameRequest,
+    FlowSetActiveRequest,
+)
 from app.services.ai_settings import ai_settings_service
 from app.services.flow_builder import flow_service
 
@@ -41,10 +47,10 @@ class FlowBuilderController(Controller):
     # --------------------------
     @post("/create")
     async def create(self, request: Request, db: AsyncSession, user: User) -> Template:
-        form = await request.form()
         error = None
         try:
-            await flow_service.create_flow(db, user.id, form.get("name", ""))
+            payload = await FlowCreateRequest.from_form(request)
+            await flow_service.create_flow(db, user.id, payload.name)
         except HTTPException as e:
             error = str(e.detail)
 
@@ -92,17 +98,15 @@ class FlowBuilderController(Controller):
         user: User,
     ) -> Response:
         try:
-            graph_data = await request.json()
-        except Exception:
-            return Response(
-                "<div class='alert alert-danger' data-success='false'>Invalid graph data.</div>",
-                media_type="text/html",
-                status_code=200,
+            payload = await FlowGraphSaveRequest.from_json(request)
+            await flow_service.update_flow_graph(
+                db, user.id, flow_id, payload.graph_data(),
             )
-
-        try:
-            await flow_service.update_flow_graph(db, user.id, flow_id, graph_data)
         except HTTPException as e:
+            # Covers both a body that is not a valid graph payload (400 from the
+            # schema) and a flow the caller does not own (404 from the service).
+            # Both render into the canvas's save banner rather than replacing the
+            # page, which is what would lose the user's unsaved work.
             return Response(
                 f"<div class='alert alert-danger' data-success='false'>{e.detail}</div>",
                 media_type="text/html",
@@ -126,10 +130,10 @@ class FlowBuilderController(Controller):
         db: AsyncSession,
         user: User,
     ) -> Template:
-        form = await request.form()
         error = None
         try:
-            await flow_service.rename_flow(db, user.id, flow_id, form.get("name", ""))
+            payload = await FlowRenameRequest.from_form(request)
+            await flow_service.rename_flow(db, user.id, flow_id, payload.name)
         except HTTPException as e:
             error = str(e.detail)
 
@@ -147,11 +151,11 @@ class FlowBuilderController(Controller):
         user: User,
     ) -> Template:
         """Toggle the published/draft flag. Attachment is untouched."""
-        form = await request.form()
         error = None
         try:
+            payload = await FlowSetActiveRequest.from_form(request)
             await flow_service.set_flow_active(
-                db, user.id, flow_id, is_active=form.get("is_active") == "true",
+                db, user.id, flow_id, is_active=payload.is_active,
             )
         except HTTPException as e:
             error = str(e.detail)

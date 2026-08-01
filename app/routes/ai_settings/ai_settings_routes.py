@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.auth import require_auth
 from app.models.ai_settings import AI_PROVIDERS
 from app.models.user import User
+from app.schemas.ai_settings import AIApiKeyCreateRequest, AIApiKeyUpdateRequest
 from app.services.ai_settings.ai_settings_service import (
     create_api_key,
     delete_api_key,
@@ -43,18 +44,17 @@ class AISettingsController(Controller):
     # --------------------------
     @post("/create")
     async def create(self, request: Request, db: AsyncSession, user: User) -> Template | Response:
-        form = await request.form()
-
         try:
+            payload = await AIApiKeyCreateRequest.from_form(request)
             await create_api_key(
                 db=db,
                 user_id=user.id,
-                provider=form.get("provider", ""),
-                label=form.get("label", ""),
-                api_key=form.get("api_key", ""),
-                is_active=form.get("is_active") == "on",
-                base_url=form.get("base_url"),
-                model_name=form.get("model_name"),
+                provider=payload.provider,
+                label=payload.label,
+                api_key=payload.api_key,
+                is_active=payload.is_active,
+                base_url=payload.base_url,
+                model_name=payload.model_name,
             )
         except HTTPException as e:
             return Response(
@@ -80,17 +80,19 @@ class AISettingsController(Controller):
         db: AsyncSession,
         user: User,
     ) -> Template | Response:
-        form = await request.form()
-
         try:
+            payload = await AIApiKeyUpdateRequest.from_form(request)
             await update_api_key(
                 db=db,
                 user_id=user.id,
                 key_id=key_id,
-                label=form.get("label"),
-                api_key=form.get("api_key") or None,
-                base_url=form.get("base_url"),
-                model_name=form.get("model_name"),
+                label=payload.label,
+                # A blank field means "leave the stored secret alone" — the edit
+                # form cannot prefill it, so an empty value has to mean unchanged
+                # rather than cleared. `OptionalText` already turned "" into None.
+                api_key=payload.api_key,
+                base_url=payload.base_url,
+                model_name=payload.model_name,
             )
         except HTTPException as e:
             return Response(

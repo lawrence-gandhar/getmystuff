@@ -8,9 +8,6 @@ one service call, so the filtered view and the first paint can never drift
 apart.
 """
 
-import uuid
-from typing import Optional
-
 from litestar import Controller, get
 from litestar.connection import Request
 from litestar.exceptions import HTTPException
@@ -19,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.auth import require_auth
 from app.models.user import User
+from app.schemas.chatbot_analytics import AnalyticsDashboardQuery
 from app.services.chatbot.chatbot_service import get_user_chatbot_keys
 from app.services.chatbot_analytics.chatbot_analytics_service import DEFAULT_PERIOD, build_dashboard
 
@@ -26,32 +24,21 @@ _PAGE_TEMPLATE = "chatbot_analytics/index.htm"
 _BODY_TEMPLATE = "chatbot_analytics/partials/dashboard.htm"
 
 
-def _parse_chatbot_filter(raw: str) -> Optional[uuid.UUID]:
-    """
-    Read the agent filter. An empty value means "all agents"; anything that
-    isn't a valid identifier is refused rather than quietly ignored, so a
-    broken link never shows figures for the wrong scope.
-    """
-    raw = (raw or "").strip()
-    if not raw:
-        return None
-    try:
-        return uuid.UUID(raw)
-    except ValueError:
-        raise HTTPException(
-            status_code=400,
-            detail="That chatbot selection was not valid. Please pick one from the list.",
-        )
-
-
 class ChatbotAnalyticsController(Controller):
     path = "/chatbot-analytics"
     dependencies = {"user": require_auth}
 
     async def _context(self, request: Request, db: AsyncSession, user: User) -> dict:
-        period = request.query_params.get("period", DEFAULT_PERIOD)
-        chatbot_uuid = _parse_chatbot_filter(request.query_params.get("chatbot_id", ""))
-        return await build_dashboard(db, user.id, period, chatbot_uuid)
+        """
+        The dashboard for whichever scope the URL asks for.
+
+        Both filters are validated by :class:`AnalyticsDashboardQuery`, which
+        refuses an unreadable value rather than falling back — a dashboard showing
+        real figures for the wrong scope is worse than an error, because nothing on
+        screen says it is wrong.
+        """
+        query = AnalyticsDashboardQuery.from_query(request)
+        return await build_dashboard(db, user.id, query.period, query.chatbot_id)
 
     @get("/")
     async def index(self, request: Request, db: AsyncSession, user: User) -> Template:

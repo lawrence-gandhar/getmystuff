@@ -14,7 +14,6 @@ Three endpoints, and each exists for a distinct reason:
 """
 
 import uuid
-from typing import Optional
 
 from litestar import Controller, get, post
 from litestar.connection import Request
@@ -24,17 +23,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.auth import require_auth
 from app.models.user import User
+from app.schemas.deep_agents import AgentOptionsQuery, DeepAgentAskRequest
 from app.services.data_agents import data_agent_service
 from app.services.deep_agents import deep_agent_service
-from app.services.workspaces import workspace_service
-from app.utils.validators import parse_optional_uuid
 
 _AGENT_OPTIONS_TEMPLATE = "deep_agents/partials/agent_options.htm"
 _ANSWER_TEMPLATE = "deep_agents/partials/answer.htm"
-
-# A console question is a person typing, not a form field with a schema. Bounded
-# the same way sql_assist bounds its prompt, for the same reason.
-_MAX_QUESTION_LEN = 2000
 
 
 class DeepAgentController(Controller):
@@ -49,11 +43,9 @@ class DeepAgentController(Controller):
     @get("/agent-options")
     async def agent_options(
         self,
+        request: Request,
         db: AsyncSession,
         user: User,
-        workspace_id: Optional[str] = None,
-        selected: Optional[str] = None,
-        field_name: Optional[str] = None,
     ) -> Template:
         """
         The Data Agent ``<select>`` for one workspace.
@@ -66,13 +58,17 @@ class DeepAgentController(Controller):
         ``field_name`` lets both host forms reuse this fragment with their own field
         name instead of one form dictating the other's markup.
         """
-        selected_id = parse_optional_uuid(selected, "Data agent")
-
         agents: list = []
         error = None
+        selected_id = None
+        field_name = "data_agent_id"
+
         try:
+            query = AgentOptionsQuery.from_query(request)
+            selected_id = query.selected
+            field_name = query.select_name
             agents = await data_agent_service.get_agent_views(
-                db, user.id, parse_optional_uuid(workspace_id, "Workspace"),
+                db, user.id, query.workspace_id,
             )
         except HTTPException as exc:
             error = str(exc.detail)
@@ -82,7 +78,7 @@ class DeepAgentController(Controller):
             context={
                 "agents": agents,
                 "selected_agent_id": str(selected_id) if selected_id else "",
-                "field_name": (field_name or "data_agent_id").strip(),
+                "field_name": field_name,
                 "error": error,
             },
         )
@@ -126,31 +122,15 @@ class DeepAgentController(Controller):
         """
         Run one turn and render the answer with the tools it called.
 
-        Errors render into the same fragment rather than raising. The console is a
-        diagnostic surface: "your key has no model name" is the answer the operator
-        came for, and losing it to an error page would defeat the point.
+        Errors render into the same fragment rather than raising — including the
+        schema's own. The console is a diagnostic surface: "your key has no model
+        name" is the answer the operator came for, and losing it to an error page
+        would defeat the point.
         """
-        form = await request.form()
-        question = (form.get("question") or "").strip()
-
-        if not question:
-            return Template(
-                template_name=_ANSWER_TEMPLATE,
-                context={"error": "Type a question first."},
-            )
-
-        if len(question) > _MAX_QUESTION_LEN:
-            return Template(
-                template_name=_ANSWER_TEMPLATE,
-                context={
-                    "error": (
-                        f"That question is too long — keep it under "
-                        f"{_MAX_QUESTION_LEN} characters."
-                    ),
-                },
-            )
-
+        question = ""
         try:
+            payload = await DeepAgentAskRequest.from_form(request)
+            question = payload.question
             result = await deep_agent_service.answer_with_deep_agent(
                 db, user.id, agent_id, question,
             )

@@ -1,5 +1,4 @@
 import uuid
-from typing import List
 
 from litestar import Controller, get, post
 from litestar.connection import Request
@@ -11,6 +10,16 @@ from app.db.auth import require_auth
 from app.models.chatbot import DEFAULT_SYSTEM_PROMPT, LLM_MODES
 from app.models.user import User
 from app.routes.chatbot.action_routes import action_form_context, read_action_form
+from app.schemas.chatbot import (
+    ChatbotActionAttachRequest,
+    ChatbotAiSettingsRequest,
+    ChatbotCreateRequest,
+    ChatbotDataAgentRequest,
+    ChatbotFlowRequest,
+    ChatbotSettingsTabQuery,
+    ChatbotUpdateRequest,
+    WidgetAppearanceRequest,
+)
 from app.services.ai_settings.ai_settings_service import get_user_api_keys
 from app.services.chatbot.chatbot_action_service import (
     attach_action,
@@ -51,9 +60,23 @@ from app.services.chatbot.chatbot_widget_settings_service import (
 from app.services.datasource.datasource_service import get_user_datasources
 from app.services.flow_builder import flow_service
 from app.services.workspaces import workspace_service
-from app.utils.validators import parse_optional_uuid
+from app.utils.file_utils import read_upload_field
 
 _SETTINGS_TEMPLATE = "chatbot_settings/widget_settings.htm"
+_HTML = "text/html"
+
+
+def _alert(detail: str) -> Response:
+    """A save failure, as the inline alert the offcanvas forms swap in.
+
+    Always HTTP 200: the form stays on screen and renders the message, where a
+    non-2xx would leave HTMX with nothing to swap.
+    """
+    return Response(
+        f"<div class='alert alert-danger' data-success='false'>{detail}</div>",
+        media_type=_HTML,
+        status_code=200,
+    )
 
 
 class ChatbotSettingsController(Controller):
@@ -91,58 +114,35 @@ class ChatbotSettingsController(Controller):
     # --------------------------
     @post("/create")
     async def create(self, request: Request, db: AsyncSession, user: User) -> Template | Response:
-        form = await request.form()
+        """
+        Create one agent.
 
-        target_type = form.get("target_type", "")
-        selections = form.getall("target_selection", [])
-
-        target_names: List[str] = []
-        file_ids: List[uuid.UUID] = []
-
-        if target_type == "file":
-            try:
-                file_ids = [uuid.UUID(s) for s in selections]
-            except ValueError:
-                return Response(
-                    "<div class='alert alert-danger' data-success='false'>Invalid file reference.</div>",
-                    media_type="text/html",
-                    status_code=200,
-                )
-        elif target_type in ("table", "collection"):
-            target_names = selections
-
+        The target selection — which files, tables or collections this agent may
+        answer from — is a cross-field rule, and ``ChatbotCreateRequest`` owns it:
+        which kind of value each selection has to be, and whether any selection is
+        needed at all (a ``datasource`` target means "all of it"). That replaces two
+        hand-rolled ``uuid.UUID()`` conversions whose ``except`` branches were the
+        only thing standing between a mistyped selection and a database error.
+        """
         try:
-            datasource_id = uuid.UUID(form.get("datasource_id", ""))
-        except ValueError:
-            return Response(
-                "<div class='alert alert-danger' data-success='false'>Please select a data source.</div>",
-                media_type="text/html",
-                status_code=200,
-            )
+            payload = await ChatbotCreateRequest.from_form(request)
 
-        try:
             await create_chatbot_key(
                 db=db,
                 user_id=user.id,
-                name=form.get("name", ""),
-                datasource_id=datasource_id,
-                target_type=target_type,
-                target_names=target_names,
-                file_ids=file_ids,
-                allowed_origins_raw=form.get("allowed_origins", ""),
+                name=payload.name,
+                datasource_id=payload.datasource_id,
+                target_type=payload.target_type,
+                target_names=payload.target_names,
+                file_ids=[uuid.UUID(value) for value in payload.file_ids],
+                allowed_origins_raw=payload.allowed_origins,
                 # Optional. Blank means "no agent", which is the pre-existing
                 # behaviour, so an untouched form creates the chatbot it always did.
-                workspace_id=parse_optional_uuid(form.get("workspace_id"), "Workspace"),
-                data_agent_id=parse_optional_uuid(
-                    form.get("data_agent_id"), "Data agent",
-                ),
+                workspace_id=payload.workspace_id,
+                data_agent_id=payload.data_agent_id,
             )
         except HTTPException as e:
-            return Response(
-                f"<div class='alert alert-danger' data-success='false'>{e.detail}</div>",
-                media_type="text/html",
-                status_code=200,
-            )
+            return _alert(str(e.detail))
 
         keys = await get_user_chatbot_keys(db, user.id)
         return Template(
@@ -161,22 +161,20 @@ class ChatbotSettingsController(Controller):
         db: AsyncSession,
         user: User,
     ) -> Template | Response:
-        form = await request.form()
-
         try:
+            payload = await ChatbotUpdateRequest.from_form(request)
             await update_chatbot_key(
                 db=db,
                 user_id=user.id,
                 key_id=key_id,
-                name=form.get("name"),
-                allowed_origins_raw=form.get("allowed_origins"),
+                # Both stay `None` when absent and `""` when submitted blank —
+                # the service reads that difference as "leave it" versus "clear
+                # it", so the schema must not collapse the two.
+                name=payload.name,
+                allowed_origins_raw=payload.allowed_origins,
             )
         except HTTPException as e:
-            return Response(
-                f"<div class='alert alert-danger' data-success='false'>{e.detail}</div>",
-                media_type="text/html",
-                status_code=200,
-            )
+            return _alert(str(e.detail))
 
         keys = await get_user_chatbot_keys(db, user.id)
         return Template(
@@ -307,7 +305,7 @@ class ChatbotSettingsController(Controller):
     async def widget_settings_page(
         self, key_id: uuid.UUID, request: Request, db: AsyncSession, user: User
     ) -> Template:
-        tab = request.query_params.get("tab", "appearance")
+        tab = ChatbotSettingsTabQuery.from_query(request).tab
         return Template(
             template_name=_SETTINGS_TEMPLATE,
             context=await self._settings_page_context(
@@ -323,51 +321,30 @@ class ChatbotSettingsController(Controller):
         db: AsyncSession,
         user: User,
     ) -> Template:
-        form = await request.form()
+        """
+        Save the widget's branding, copy and sizing.
 
-        def _file(field: str):
-            uf = form.get(field)
-            return uf if uf is not None and getattr(uf, "filename", "") else None
+        The twenty appearance fields arrive as one validated schema rather than
+        twenty ``form.get`` calls — a typo in one of those silently sent an empty
+        string, which the service then reported as a validation error against a
+        field the user had actually filled in.
 
-        fields = WidgetAppearanceInput(
-            brand_color=form.get("brand_color", ""),
-            background_color=form.get("background_color", ""),
-            header_background_color=form.get("header_background_color", ""),
-            header_font=form.get("header_font", ""),
-            welcome_text=form.get("welcome_text", ""),
-            idle_text=form.get("idle_text", ""),
-            closing_text=form.get("closing_text", ""),
-            send_button_style=form.get("send_button_style", ""),
-            send_button_text=form.get("send_button_text", ""),
-            send_button_font_size=form.get("send_button_font_size", ""),
-            send_button_font_color=form.get("send_button_font_color", ""),
-            send_button_icon_svg=form.get("send_button_icon_svg", ""),
-            send_button_border_radius=form.get("send_button_border_radius", ""),
-            input_border_radius=form.get("input_border_radius", ""),
-            watermark_opacity=form.get("watermark_opacity", ""),
-            bot_message_bg_color=form.get("bot_message_bg_color", ""),
-            bot_message_text_color=form.get("bot_message_text_color", ""),
-            user_message_text_color=form.get("user_message_text_color", ""),
-            widget_width=form.get("widget_width", ""),
-            widget_height=form.get("widget_height", ""),
-        )
-        uploads = WidgetImageUploads(
-            logo=_file("logo"),
-            background_image=_file("background_image"),
-            bot_icon=_file("bot_icon"),
-            send_button_icon=_file("send_button_icon"),
-            watermark_image=_file("watermark_image"),
-        )
-        removals = WidgetImageRemovals(
-            logo=form.get("remove_logo") == "on",
-            background_image=form.get("remove_background_image") == "on",
-            bot_icon=form.get("remove_bot_icon") == "on",
-            send_button_icon=form.get("remove_send_button_icon") == "on",
-            watermark_image=form.get("remove_watermark_image") == "on",
-        )
-
+        The five images are read separately: each is a file part, and its rules
+        (extension, size) belong to the service that writes it to disk.
+        """
         error = None
         try:
+            payload = await WidgetAppearanceRequest.from_form(request)
+
+            fields = WidgetAppearanceInput(**payload.appearance_values())
+            uploads = WidgetImageUploads(
+                **{
+                    name: await read_upload_field(request, name)
+                    for name in WidgetAppearanceRequest.IMAGE_FIELDS
+                }
+            )
+            removals = WidgetImageRemovals(**payload.removal_values())
+
             await update_widget_settings(db, user.id, key_id, fields, uploads, removals)
         except HTTPException as e:
             error = str(e.detail)
@@ -391,19 +368,21 @@ class ChatbotSettingsController(Controller):
         db: AsyncSession,
         user: User,
     ) -> Template:
-        form = await request.form()
-
-        fields = AiSettingsInput(
-            agent_name=form.get("agent_name", ""),
-            system_prompt=form.get("system_prompt", ""),
-            variables_json=form.get("variables_json", ""),
-            llm_mode=form.get("llm_mode", ""),
-            llm_api_key_id=form.get("llm_api_key_id", ""),
-        )
-
         error = None
         try:
-            await update_ai_settings(db, user.id, key_id, fields)
+            payload = await ChatbotAiSettingsRequest.from_form(request)
+            await update_ai_settings(
+                db,
+                user.id,
+                key_id,
+                AiSettingsInput(
+                    agent_name=payload.agent_name,
+                    system_prompt=payload.system_prompt,
+                    variables_json=payload.variables_json,
+                    llm_mode=payload.llm_mode,
+                    llm_api_key_id=payload.llm_api_key_id,
+                ),
+            )
         except HTTPException as e:
             error = str(e.detail)
 
@@ -453,21 +432,12 @@ class ChatbotSettingsController(Controller):
         are built in the Flow Builder (sidebar) and owned by the user; this only
         points the agent at one.
         """
-        form = await request.form()
-        raw_flow_id = (form.get("flow_id") or "").strip()
-
         error = None
         try:
-            flow_id = uuid.UUID(raw_flow_id) if raw_flow_id else None
-        except ValueError:
-            flow_id = None
-            error = "That flow selection was not valid. Please pick a flow from the list."
-
-        if error is None:
-            try:
-                await flow_service.attach_flow(db, user.id, key_id, flow_id)
-            except HTTPException as e:
-                error = str(e.detail)
+            payload = await ChatbotFlowRequest.from_form(request)
+            await flow_service.attach_flow(db, user.id, key_id, payload.flow_id)
+        except HTTPException as e:
+            error = str(e.detail)
 
         return Template(
             template_name=_SETTINGS_TEMPLATE,
@@ -495,18 +465,15 @@ class ChatbotSettingsController(Controller):
         agent answers is a normal change, whereas repointing a published widget at
         different data is not.
         """
-        form = await request.form()
         error = None
-
         try:
+            payload = await ChatbotDataAgentRequest.from_form(request)
             await set_chatbot_data_agent(
                 db,
                 user.id,
                 key_id,
-                workspace_id=parse_optional_uuid(form.get("workspace_id"), "Workspace"),
-                data_agent_id=parse_optional_uuid(
-                    form.get("data_agent_id"), "Data agent",
-                ),
+                workspace_id=payload.workspace_id,
+                data_agent_id=payload.data_agent_id,
             )
         except HTTPException as e:
             error = str(e.detail)
@@ -544,15 +511,14 @@ class ChatbotSettingsController(Controller):
     async def attach_chatbot_action(
         self, key_id: uuid.UUID, request: Request, db: AsyncSession, user: User
     ) -> Template:
-        form = await request.form()
-        raw_action_id = (form.get("action_id") or "").strip()
-
         error = None
         try:
-            await attach_action(db, user.id, key_id, uuid.UUID(raw_action_id))
-        except ValueError:
-            error = "Please select an action to add."
+            payload = await ChatbotActionAttachRequest.from_form(request)
+            await attach_action(db, user.id, key_id, payload.action_id)
         except HTTPException as e:
+            # Covers the empty picker too: the schema raises 400 with
+            # "Please select an action to add." rather than the route catching a
+            # ValueError out of uuid.UUID("").
             error = str(e.detail)
 
         return await self._action_rows(db, user, key_id, error)
@@ -564,7 +530,9 @@ class ChatbotSettingsController(Controller):
         """Quick-create: save to the user's library and add it to this agent at once."""
         error = None
         try:
-            await create_and_attach_action(db, user.id, key_id, read_action_form(await request.form()))
+            await create_and_attach_action(
+                db, user.id, key_id, await read_action_form(request),
+            )
         except HTTPException as e:
             error = str(e.detail)
 

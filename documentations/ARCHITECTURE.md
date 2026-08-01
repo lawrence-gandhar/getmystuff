@@ -32,14 +32,17 @@ services/    per-feature subfolders (datasource/, ai_settings/, ai_analytics/, c
              tool_configs/, sql_assist/, deep_agents/)
 models/      per-feature subfolders (user/, datasource/, ai_settings/, chatbot/, ai_analytics/,
              subscriptions/, flow_builder/, ai_inbuilt/, workspaces/, data_agents/, tool_configs/)
-schemas/
+schemas/     shared infra (base.py, common.py) + per-feature subfolders (auth/, datasource/,
+             workspaces/, data_agents/, tool_configs/, ai_settings/, ai_analytics/, chatbot/,
+             chatbot_analytics/, flow_builder/, sql_assist/, deep_agents/)
 utils/
 templates/
 static/
 ```
 
 `deep_agents/` has no `models/` subfolder: it runs what Data Agents and Tool Configs
-already define, and owns no table of its own.
+already define, and owns no table of its own. `dashboard/` has no `schemas/` subfolder:
+its one route renders a page from the session user and reads nothing from the request.
 
 Feature deep-dives: [FLOW_BUILDER.md](FLOW_BUILDER.md),
 [CHATBOT_AI_SETTINGS.md](CHATBOT_AI_SETTINGS.md) (per-agent prompt, prompt variables,
@@ -54,6 +57,10 @@ config that reopens fully editable in the query builder),
 chatbot answers from tool results and the language model never reads the database),
 [DOCKER_AND_LOCAL_LLM.md](DOCKER_AND_LOCAL_LLM.md) (why the app runs in a container on
 Python 3.12, and how the in-built Ollama models are configured and measured),
+[SCHEMAS.md](SCHEMAS.md) (the Pydantic layer — one package per feature, every request parsed
+through a request schema and every response built from a response schema; the error bridge
+that keeps a Pydantic failure from reaching a user verbatim, and where a rule belongs when it
+is split between a schema and a service),
 [TESTING.md](TESTING.md) (the test suite and its coverage ratchet — why the tests run in the
 container against an SQLite database, the four type shims that makes possible, how an
 authenticated route is reached, and the timestamped run history).

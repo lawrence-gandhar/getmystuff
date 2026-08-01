@@ -23,9 +23,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.auth import require_auth
 from app.models.user import User
+from app.schemas.data_agents import (
+    DataAgentCreateRequest,
+    DataAgentDeleteRequest,
+    DataAgentListQuery,
+    DataAgentSetActiveRequest,
+    DataAgentUpdateRequest,
+)
 from app.services.data_agents import data_agent_service
 from app.services.workspaces import workspace_service
-from app.utils.validators import parse_optional_uuid
 
 _ROWS_TEMPLATE = "data_agents/partials/agent_rows_response.htm"
 _FORM_TEMPLATE = "data_agents/partials/agent_form.htm"
@@ -44,11 +50,11 @@ class DataAgentController(Controller):
     @get("/")
     async def index(
         self,
+        request: Request,
         db: AsyncSession,
         user: User,
-        workspace: Optional[str] = None,
     ) -> Template:
-        workspace_id = parse_optional_uuid(workspace, "Workspace")
+        workspace_id = DataAgentListQuery.from_query(request).workspace
         agents = await data_agent_service.get_agent_views(db, user.id, workspace_id)
 
         # Named so the page can say *which* workspace it is filtered to.
@@ -75,15 +81,16 @@ class DataAgentController(Controller):
     @get("/new-form")
     async def new_form(
         self,
+        request: Request,
         db: AsyncSession,
         user: User,
-        workspace: Optional[str] = None,
     ) -> Template:
         """
         Blank create form — the same partial the edit form uses. When the list is
         filtered to a workspace, that workspace is preselected.
         """
         try:
+            workspace_id = DataAgentListQuery.from_query(request).workspace
             choices = await self._form_choices(db, user)
         except HTTPException as exc:
             return Template(
@@ -95,7 +102,7 @@ class DataAgentController(Controller):
             template_name=_FORM_TEMPLATE,
             context={
                 "agent": None,
-                "preselected_workspace_id": (workspace or "").strip(),
+                "preselected_workspace_id": str(workspace_id) if workspace_id else "",
                 "form_action": "/data-agents/create",
                 "submit_label": "Create Data Agent",
                 **choices,
@@ -134,24 +141,22 @@ class DataAgentController(Controller):
     # --------------------------
     @post("/create")
     async def create(self, request: Request, db: AsyncSession, user: User) -> Template:
-        form = await request.form()
+        payload = await DataAgentCreateRequest.from_form(request)
         error = None
         try:
             await data_agent_service.create_data_agent(
                 db,
                 user.id,
-                name=form.get("name", ""),
-                description=form.get("description", ""),
-                system_prompt=form.get("system_prompt", ""),
-                workspace_id=parse_optional_uuid(form.get("workspace_id"), "Workspace"),
-                llm_api_key_id=parse_optional_uuid(
-                    form.get("llm_api_key_id"), "AI API key",
-                ),
+                name=payload.name,
+                description=payload.description,
+                system_prompt=payload.system_prompt,
+                workspace_id=payload.workspace_id,
+                llm_api_key_id=payload.llm_api_key_id,
             )
         except HTTPException as exc:
             error = str(exc.detail)
 
-        return await self._rows(db, user, form.get("workspace_filter"), error)
+        return await self._rows(db, user, payload.workspace_filter, error)
 
     # --------------------------
     # UPDATE
@@ -164,25 +169,23 @@ class DataAgentController(Controller):
         db: AsyncSession,
         user: User,
     ) -> Template:
-        form = await request.form()
+        payload = await DataAgentUpdateRequest.from_form(request)
         error = None
         try:
             await data_agent_service.update_data_agent(
                 db,
                 user.id,
                 agent_id,
-                name=form.get("name", ""),
-                description=form.get("description", ""),
-                system_prompt=form.get("system_prompt", ""),
-                workspace_id=parse_optional_uuid(form.get("workspace_id"), "Workspace"),
-                llm_api_key_id=parse_optional_uuid(
-                    form.get("llm_api_key_id"), "AI API key",
-                ),
+                name=payload.name,
+                description=payload.description,
+                system_prompt=payload.system_prompt,
+                workspace_id=payload.workspace_id,
+                llm_api_key_id=payload.llm_api_key_id,
             )
         except HTTPException as exc:
             error = str(exc.detail)
 
-        return await self._rows(db, user, form.get("workspace_filter"), error)
+        return await self._rows(db, user, payload.workspace_filter, error)
 
     # --------------------------
     # ENABLE / DISABLE
@@ -195,16 +198,16 @@ class DataAgentController(Controller):
         db: AsyncSession,
         user: User,
     ) -> Template:
-        form = await request.form()
+        payload = await DataAgentSetActiveRequest.from_form(request)
         error = None
         try:
             await data_agent_service.set_data_agent_active(
-                db, user.id, agent_id, is_active=form.get("is_active") == "true",
+                db, user.id, agent_id, is_active=payload.is_active,
             )
         except HTTPException as exc:
             error = str(exc.detail)
 
-        return await self._rows(db, user, form.get("workspace_filter"), error)
+        return await self._rows(db, user, payload.workspace_filter, error)
 
     # --------------------------
     # DELETE
@@ -217,14 +220,14 @@ class DataAgentController(Controller):
         db: AsyncSession,
         user: User,
     ) -> Template:
-        form = await request.form()
+        payload = await DataAgentDeleteRequest.from_form(request)
         error = None
         try:
             await data_agent_service.delete_data_agent(db, user.id, agent_id)
         except HTTPException as exc:
             error = str(exc.detail)
 
-        return await self._rows(db, user, form.get("workspace_filter"), error)
+        return await self._rows(db, user, payload.workspace_filter, error)
 
     # --------------------------
     # Helpers
@@ -241,14 +244,16 @@ class DataAgentController(Controller):
     async def _rows(
         db: AsyncSession,
         user: User,
-        workspace_filter: str | None,
+        workspace_id: Optional[uuid.UUID],
         error: str | None,
     ) -> Template:
         """
         The HTMX response every mutation returns: marker + rebuilt table, still
         narrowed to whichever workspace the user was filtered to.
+
+        Takes the filter already parsed — the mutation schemas validate it on the
+        way in, so there is nothing left to interpret here.
         """
-        workspace_id = parse_optional_uuid(workspace_filter, "Workspace")
         agents = await data_agent_service.get_agent_views(db, user.id, workspace_id)
 
         return Template(

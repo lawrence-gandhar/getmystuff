@@ -19,6 +19,7 @@ from app.db.auth import require_auth
 from app.db.chatbot.queries import count_action_attachments
 from app.models.chatbot import ACTION_HTTP_METHODS, ACTION_PARAMETER_TYPES
 from app.models.user import User
+from app.schemas.chatbot import ChatbotActionRequest
 from app.services.chatbot.chatbot_action_service import (
     ActionInput,
     build_action_views,
@@ -64,7 +65,7 @@ class ChatbotActionController(Controller):
     async def create(self, request: Request, db: AsyncSession, user: User) -> Template:
         error = None
         try:
-            await create_action(db, user.id, read_action_form(await request.form()))
+            await create_action(db, user.id, await read_action_form(request))
         except HTTPException as e:
             error = str(e.detail)
 
@@ -76,7 +77,7 @@ class ChatbotActionController(Controller):
     ) -> Template:
         error = None
         try:
-            await update_action(db, user.id, action_id, read_action_form(await request.form()))
+            await update_action(db, user.id, action_id, await read_action_form(request))
         except HTTPException as e:
             error = str(e.detail)
 
@@ -118,18 +119,27 @@ class ChatbotActionController(Controller):
         )
 
 
-def read_action_form(form) -> ActionInput:
+async def read_action_form(request: Request) -> ActionInput:
     """
-    Read the shared action form. Also used by the chatbot settings controller's
-    quick-create endpoint, which posts the very same fields.
+    Read and validate the shared action form. Also used by the chatbot settings
+    controller's quick-create endpoint, which posts the very same fields.
+
+    ``ChatbotActionRequest`` does the validating; ``ActionInput`` is what
+    ``chatbot_action_service`` takes, and it stays as it is because the service
+    also owns the inner shapes (the header map, the typed parameter list) that no
+    schema can decide. So this converts one to the other — the description and the
+    timeout become the strings that dataclass declares, since an absent optional
+    field means "empty" to it rather than ``None``.
     """
+    payload = await ChatbotActionRequest.from_form(request)
+
     return ActionInput(
-        name=form.get("name", ""),
-        description=form.get("description", ""),
-        http_method=form.get("http_method", ""),
-        url=form.get("url", ""),
-        headers_json=form.get("headers_json", ""),
-        body_template=form.get("body_template", ""),
-        parameters_json=form.get("parameters_json", ""),
-        timeout_seconds=form.get("timeout_seconds", "10"),
+        name=payload.name,
+        description=payload.description or "",
+        http_method=payload.http_method,
+        url=payload.url,
+        headers_json=payload.headers_json,
+        body_template=payload.body_template,
+        parameters_json=payload.parameters_json,
+        timeout_seconds=str(payload.timeout_seconds),
     )

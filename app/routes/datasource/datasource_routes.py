@@ -1,7 +1,5 @@
-import re
 import asyncio
 import uuid
-from datetime import datetime
 from pathlib import Path
 
 from litestar import post, get, delete, Controller
@@ -28,12 +26,45 @@ from app.services.datasource.datasource_service import (
     datasource_crud,
 )
 from app.services.datasource.file_service import check_file_exists, upload_datasource_files
-from app.utils.file_utils import FILE_BASED_TYPES, ACCEPT_ATTRS, ALLOWED_EXTENSIONS
+from app.schemas.datasource import (
+    DatasourceCreateRequest,
+    DatasourceNameRequest,
+    FileExistsRequest,
+    FilePreviewQuery,
+    FilePreviewResponse,
+    FileUploadRequest,
+    ObjectStatusRequest,
+    TableListQuery,
+)
+from app.utils.file_utils import (
+    ACCEPT_ATTRS,
+    ALLOWED_EXTENSIONS,
+    FILE_BASED_TYPES,
+    read_upload_payloads,
+)
 from app.db.auth import require_auth
 from app.db.db_utils import fetch_file_schema
 
-# Compiled once at import time — reused on every validation request.
-_NAME_RE = re.compile(r'^[a-z0-9_]+$')
+_HTML = "text/html"
+
+
+def _name_feedback(message: str, available: bool) -> Response:
+    """
+    The inline badge the name field's blur check swaps in.
+
+    One builder for both outcomes so the markup — and the icon — cannot diverge
+    between the four places that used to write it out by hand.
+    """
+    css_class = "text-success" if available else "text-danger"
+    icon = "la-check-circle" if available else "la-times-circle"
+
+    return Response(
+        f"<div class='{css_class} small mt-1'>"
+        f"<i class='las {icon}'></i> {message}"
+        f"</div>",
+        media_type=_HTML,
+    )
+
 
 # ─────────────────────────────────────────────────────────────
 # File preview helpers — each runs inside asyncio.to_thread so
@@ -247,40 +278,28 @@ class DataSourceController(Controller):
         user: User,
     ) -> Response | Template:
 
-        form = await request.form()
-
-        datasource_name = form.get("datasource_name", "")
-        db_type = form.get("db_type")
-        host = form.get("host")
-        port = form.get("port")
-        database_name = form.get("database_name")
-        username = form.get("username")
-        password = form.get("password")
-
         try:
+            payload = await DatasourceCreateRequest.from_form(request)
+            db_type = payload.db_type
+
             datasource = await create_datasource(
                 db=db,
                 user_id=user.id,
-                datasource_name=datasource_name,
+                datasource_name=payload.datasource_name,
                 db_type=db_type,
-                host=host,
-                port=port,
-                database_name=database_name,
-                username=username,
-                password=password,
+                host=payload.host,
+                port=payload.port,
+                database_name=payload.database_name,
+                username=payload.username,
+                password=payload.password,
                 connection_tester=test_connection,
             )
 
             # For file-based datasources, process any files uploaded with
             # the creation form, then return the upload widget so the user
             # can add more files without leaving the offcanvas.
-            if db_type in FILE_BASED_TYPES:
-                raw_files = form.getall("files")
-                file_payloads = [
-                    {"filename": uf.filename, "content": await uf.read()}
-                    for uf in raw_files
-                    if hasattr(uf, "filename") and uf.filename
-                ]
+            if payload.is_file_based:
+                file_payloads = await read_upload_payloads(request)
                 upload_results = []
                 if file_payloads:
                     try:
@@ -347,15 +366,13 @@ class DataSourceController(Controller):
     ) -> Response:
         """Rename an existing datasource.  Returns an HTMX-friendly HTML fragment."""
 
-        form = await request.form()
-        datasource_name = form.get("datasource_name", "")
-
         try:
+            payload = await DatasourceNameRequest.from_form(request)
             await update_datasource_name(
                 db=db,
                 datasource_id=datasource_id,
                 user_id=user.id,
-                datasource_name=datasource_name,
+                datasource_name=payload.datasource_name,
             )
             return Response(
                 "<div class='alert alert-success'>Datasource renamed successfully</div>",
@@ -383,50 +400,24 @@ class DataSourceController(Controller):
         Real-time name validation endpoint consumed by the HTMX blur trigger
         on the datasource_name input.
 
-        Checks (in order):
-          1. Non-empty after stripping whitespace.
-          2. Length ≤ 255 characters.
-          3. Regex: only lowercase letters, digits, underscores.
-          4. Case-insensitive uniqueness via a PostgreSQL EXISTS query.
+        Two checks, in order:
+          1. The name's own rules — non-empty, ≤ 255 characters, and only
+             lowercase letters, digits and underscores. All three come from
+             ``DatasourceNameRequest``, which is the same schema the create and
+             rename endpoints validate with. That matters: this endpoint exists to
+             tell the user in advance whether a save will be accepted, so it must
+             not have its own copy of the rules to drift out of step with.
+          2. Case-insensitive uniqueness, via an EXISTS subquery — the one check
+             that needs the database and so cannot live in the schema.
 
         Always returns an HTML snippet so HTMX can swap it directly into
         the ``#datasource-name-feedback`` div — no JSON, no page reload.
         """
-        form = await request.form()
-        raw = form.get("datasource_name", "")
-        name = raw.strip().lower()
+        try:
+            name = (await DatasourceNameRequest.from_form(request)).datasource_name
+        except HTTPException as exc:
+            return _name_feedback(str(exc.detail), available=False)
 
-        # ── 1. Empty ────────────────────────────────────────────────────────
-        if not name:
-            return Response(
-                "<div class='text-danger small mt-1'>"
-                "<i class='las la-times-circle'></i> Name is required."
-                "</div>",
-                media_type="text/html",
-            )
-
-        # ── 2. Length ────────────────────────────────────────────────────────
-        if len(name) > 255:
-            return Response(
-                "<div class='text-danger small mt-1'>"
-                "<i class='las la-times-circle'></i> "
-                "Name must not exceed 255 characters."
-                "</div>",
-                media_type="text/html",
-            )
-
-        # ── 3. Character set ─────────────────────────────────────────────────
-        if not _NAME_RE.match(name):
-            return Response(
-                "<div class='text-danger small mt-1'>"
-                "<i class='las la-times-circle'></i> "
-                "Only lowercase letters (a–z), digits (0–9), "
-                "and underscores (_) are allowed."
-                "</div>",
-                media_type="text/html",
-            )
-
-        # ── 4. Case-insensitive uniqueness check ─────────────────────────────
         # Uses an EXISTS subquery so PostgreSQL stops scanning as soon as it
         # finds the first match — no full table scan, no row data returned.
         stmt = select(
@@ -435,24 +426,14 @@ class DataSourceController(Controller):
             )
         )
         result = await db.execute(stmt)
-        already_taken = result.scalar()
 
-        if already_taken:
-            return Response(
-                "<div class='text-danger small mt-1'>"
-                "<i class='las la-times-circle'></i> "
-                "This name is already taken. Please choose a different one."
-                "</div>",
-                media_type="text/html",
+        if result.scalar():
+            return _name_feedback(
+                "This name is already taken. Please choose a different one.",
+                available=False,
             )
 
-        # ── All checks passed ────────────────────────────────────────────────
-        return Response(
-            "<div class='text-success small mt-1'>"
-            "<i class='las la-check-circle'></i> Name is available."
-            "</div>",
-            media_type="text/html",
-        )
+        return _name_feedback("Name is available.", available=True)
 
     # --------------------------
     # GET TABLES / COLLECTIONS
@@ -600,11 +581,10 @@ class DataSourceController(Controller):
         user: User,
     ) -> Template:
 
-        form = await request.form()
-        new_status = form.get("status")
-
-        if new_status not in {"active", "inactive"}:
-            raise HTTPException(status_code=400)
+        # A status outside {active, inactive} used to raise a bare
+        # `HTTPException(status_code=400)` — a failed request with no explanation.
+        # The schema refuses it with a sentence instead.
+        new_status = (await ObjectStatusRequest.from_form(request)).status
 
         # Raises 404 when the datasource is not the caller's, and 400 with a
         # readable message when the parent table is inactive — the service owns
@@ -643,11 +623,7 @@ class DataSourceController(Controller):
         user: User,
     ) -> Template:
 
-        form = await request.form()
-        new_status = form.get("status")
-
-        if new_status not in {"active", "inactive"}:
-            raise HTTPException(status_code=400)
+        new_status = (await ObjectStatusRequest.from_form(request)).status
 
         # Raises 404 itself when the datasource is not the caller's.
         datasource = await toggle_table_status_service(
@@ -675,17 +651,15 @@ class DataSourceController(Controller):
         db: AsyncSession,
         user: User,
     ) -> Template:
-        search = request.query_params.get("search", "").lower()
-        status_filter = request.query_params.get("status_filter", "all")
-        sort_by = request.query_params.get("sort_by", "az")
+        query = TableListQuery.from_query(request)
 
         tables = await search_sort_tables(
             db=db,
             datasource_id=datasource_id,
             user_id=user.id,
-            search=search,
-            status_filter=status_filter,
-            sort_by=sort_by
+            search=query.search,
+            status_filter=query.status_filter,
+            sort_by=query.sort_by,
         )
 
         return Template(
@@ -761,13 +735,12 @@ class DataSourceController(Controller):
         Return an HTML badge for a single filename indicating whether a
         previous version already exists for this datasource.
         """
-        form = await request.form()
-        filename = form.get("filename", "").strip()
-
-        if not filename:
+        try:
+            filename = (await FileExistsRequest.from_form(request)).filename
+        except HTTPException as exc:
             return Response(
-                "<div class='text-danger small'>No filename provided.</div>",
-                media_type="text/html",
+                f"<div class='text-danger small'>{exc.detail}</div>",
+                media_type=_HTML,
             )
 
         info = await check_file_exists(
@@ -815,29 +788,23 @@ class DataSourceController(Controller):
         ``app/uploads/<datasource_id>/``.  Returns an HTML fragment
         listing per-file outcomes.
         """
-        form = await request.form()
-        raw_files = form.getall("files")
-        override = form.get("override", "no") == "yes"
-
-        if not raw_files:
+        try:
+            override = (await FileUploadRequest.from_form(request)).override
+        except HTTPException as exc:
             return Response(
-                "<div class='alert alert-warning'>No files were submitted.</div>",
-                media_type="text/html",
+                f"<div class='alert alert-danger'>{exc.detail}</div>",
+                status_code=exc.status_code,
+                media_type=_HTML,
             )
 
-        # Read file content here (framework-specific) before passing plain
-        # dicts to the framework-agnostic service layer.
-        file_payloads = []
-        for uf in raw_files:
-            if not hasattr(uf, "filename"):
-                continue
-            content = await uf.read()
-            file_payloads.append({"filename": uf.filename, "content": content})
+        # The file parts are read separately: bytes are not something a schema can
+        # validate, and their rules (extension, size) belong to file_service.
+        file_payloads = await read_upload_payloads(request)
 
         if not file_payloads:
             return Response(
                 "<div class='alert alert-warning'>No valid files were submitted.</div>",
-                media_type="text/html",
+                media_type=_HTML,
             )
 
         try:
@@ -852,7 +819,7 @@ class DataSourceController(Controller):
             return Response(
                 f"<div class='alert alert-danger'>{exc}</div>",
                 status_code=403,
-                media_type="text/html",
+                media_type=_HTML,
             )
 
         # Build an HTML summary of all per-file outcomes.
@@ -898,31 +865,30 @@ class DataSourceController(Controller):
         Never loads the full file — uses chunk iterators / skiprows so that
         only _PREVIEW_PAGE_SIZE rows are in memory at any time.
 
-        Query params
-        ------------
-        page     : int   (default 1)
-        file_id  : uuid  public id of a specific DatasourceFile record (optional)
+        The query string (``page``, optional ``file_id``) is read through
+        :class:`FilePreviewQuery`, and the body is built from
+        :class:`FilePreviewResponse` so the three shapes this can answer with — a
+        table, a formatted document, an error — are one declared contract instead
+        of whichever dict a reader happened to produce.
         """
         try:
-            page = max(1, int(request.query_params.get("page", "1")))
-        except (ValueError, TypeError):
-            page = 1
+            query = FilePreviewQuery.from_query(request)
+        except HTTPException as exc:
+            # An unreadable page number or file id is reported in the payload the
+            # widget already knows how to render, not as a failed request.
+            return FilePreviewResponse.failure(str(exc.detail)).payload()
 
-        file_id_str = request.query_params.get("file_id")
+        page = query.page
 
         # Verify ownership
         datasource = await datasource_crud.get_by_uuid(db, datasource_id)
         if not datasource or datasource.user_id != user.id:
-            return {"error": "Datasource not found"}
+            return FilePreviewResponse.failure("Datasource not found").payload()
 
         # Resolve the target file
-        if file_id_str:
-            try:
-                file_uuid = uuid.UUID(file_id_str)
-            except ValueError:
-                return {"error": "Invalid file ID"}
+        if query.file_id:
             stmt = select(DatasourceFile).where(
-                DatasourceFile.uuid == file_uuid,
+                DatasourceFile.uuid == query.file_id,
                 DatasourceFile.datasource_id == datasource.id,
                 DatasourceFile.is_active == True,  # noqa: E712
             )
@@ -942,12 +908,10 @@ class DataSourceController(Controller):
         target_file = result.scalar_one_or_none()
 
         if not target_file:
-            return {
-                "error": (
-                    "No uploaded files found for this datasource. "
-                    "Please upload a file first."
-                )
-            }
+            return FilePreviewResponse.failure(
+                "No uploaded files found for this datasource. "
+                "Please upload a file first."
+            ).payload()
 
         # All active files — sent to the frontend for the file selector
         all_stmt = (
@@ -970,21 +934,19 @@ class DataSourceController(Controller):
                 _read_file_chunk, target_file.file_path, page
             )
         except FileNotFoundError:
-            return {
-                "error": "File not found on disk. It may have been moved or deleted."
-            }
+            return FilePreviewResponse.failure(
+                "File not found on disk. It may have been moved or deleted."
+            ).payload()
         except ValueError as exc:
-            return {"error": str(exc)}
+            return FilePreviewResponse.failure(str(exc)).payload()
         except Exception as exc:  # noqa: BLE001
-            return {"error": f"Failed to read file: {exc}"}
+            return FilePreviewResponse.failure(f"Failed to read file: {exc}").payload()
 
         if chunk is None:
-            return {
-                "error": (
-                    "No data found at this page. "
-                    "The file may be empty or the page number is out of range."
-                )
-            }
+            return FilePreviewResponse.failure(
+                "No data found at this page. "
+                "The file may be empty or the page number is out of range."
+            ).payload()
 
         base = {
             "file_id": str(target_file.uuid),
@@ -994,17 +956,17 @@ class DataSourceController(Controller):
 
         # JSON / XML readers return a dict; tabular readers return a tuple
         if isinstance(chunk, dict):
-            return {**chunk, **base}
+            return FilePreviewResponse.build({**chunk, **base}).payload()
 
         columns, rows, has_next = chunk
-        return {
+        return FilePreviewResponse.build({
             "type": "table",
             "columns": columns,
             "rows": rows,
             "page": page,
             "has_next": has_next,
             **base,
-        }
+        }).payload()
 
     # --------------------------
     # FILE LIST (for file-based datasource Preview offcanvas)

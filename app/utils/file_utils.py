@@ -172,3 +172,59 @@ def ensure_knowledge_base_upload_dir(knowledge_base_uuid: str) -> Path:
     upload_dir = KNOWLEDGE_BASE_UPLOAD_BASE / str(knowledge_base_uuid)
     upload_dir.mkdir(parents=True, exist_ok=True)
     return upload_dir
+
+
+# ─────────────────────────────────────────────────────────────
+# Multipart upload helpers
+#
+# A file part is the one thing in a request body that a Pydantic schema cannot
+# validate: it is a stream, not a value, and its rules (extension, size) are
+# checked by the ingestion service after the bytes are in hand. So the schema
+# layer drops upload parts (see app.schemas.base.form_to_dict) and the two
+# helpers below are how a route reads them instead — without calling
+# request.form() itself, which is what the module-schemas audit forbids.
+#
+# Litestar caches the parsed form on the request, so a handler that reads its
+# scalar fields through a schema and its files through here parses the body once.
+# ─────────────────────────────────────────────────────────────
+
+async def read_upload_payloads(request, field: str = "files") -> list[dict]:
+    """
+    Every uploaded file on ``field``, as ``{"filename", "content"}`` dicts.
+
+    Reading the bytes here rather than in the service is deliberate: an
+    ``UploadFile`` is framework-specific, and the ingestion services take plain
+    dicts so they can be tested without a request at all.
+
+    Parts with no filename are skipped — an empty ``<input type="file">`` still
+    posts a part, and treating that as a zero-byte upload would create an empty
+    file record on every submit.
+    """
+    form = await request.form()
+    raw_files = form.getall(field, []) if hasattr(form, "getall") else []
+
+    payloads: list[dict] = []
+    for upload in raw_files:
+        if not getattr(upload, "filename", ""):
+            continue
+        payloads.append({"filename": upload.filename, "content": await upload.read()})
+
+    return payloads
+
+
+async def read_upload_field(request, field: str):
+    """
+    One optional uploaded file, or ``None`` when the input was left empty.
+
+    Used by the chatbot widget's branding form, where each image is its own
+    field and "not touched" has to be distinguishable from "cleared" — the
+    clearing is a separate checkbox, so this must return ``None`` rather than a
+    zero-byte part.
+    """
+    form = await request.form()
+    upload = form.get(field)
+
+    if upload is None or not getattr(upload, "filename", ""):
+        return None
+
+    return upload

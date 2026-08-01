@@ -20,6 +20,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from litestar.exceptions import HTTPException
 
+from app.schemas.auth import LoginRequest
+
+
 class AuthController(Controller):
     path = "/auth"
 
@@ -32,11 +35,11 @@ class AuthController(Controller):
 
     @post("/login")
     async def login(self, request: Request, db: AsyncSession) -> Redirect:
-        form = await request.form()
-        email = form.get("email")
-        password = form.get("password")
+        credentials = await LoginRequest.from_form(request)
 
-        user = await authenticate_user(db, email, password)
+        user = await authenticate_user(
+            db, credentials.email, credentials.password
+        )
 
         if not user:
             raise HTTPException(status_code=401, detail="Invalid credentials")

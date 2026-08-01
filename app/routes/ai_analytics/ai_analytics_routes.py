@@ -8,6 +8,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.auth import require_auth
 from app.models.user import User
+from app.schemas.ai_analytics import (
+    AiAnalyticsGenerateRequest,
+    AiAnalyticsHistoryQuery,
+)
 from app.services.ai_analytics.ai_analytics_service import generate_analytics, get_prompt_history
 
 
@@ -27,39 +31,24 @@ class AIAnalyticsController(Controller):
         user: User,
     ) -> Template | Response:
 
-        form = await request.form()
-
-        target_type = form.get("target_type", "")
-        target_name = form.get("target_name", "")
-        prompt = form.get("prompt", "")
-        file_id_raw = form.get("file_id", "")
-
-        file_id = None
-        if file_id_raw:
-            try:
-                file_id = uuid.UUID(file_id_raw)
-            except ValueError:
-                return Response(
-                    "<div class='alert alert-danger' data-success='false'>Invalid file reference.</div>",
-                    media_type="text/html",
-                    status_code=200,
-                )
-
         try:
+            payload = await AiAnalyticsGenerateRequest.from_form(request)
             history = await generate_analytics(
                 db=db,
                 user_id=user.id,
                 datasource_id=datasource_id,
-                target_type=target_type,
-                target_name=target_name,
-                prompt=prompt,
-                file_id=file_id,
+                target_type=payload.target_type,
+                target_name=payload.target_name,
+                prompt=payload.prompt,
+                file_id=payload.file_id,
             )
             return Template(
                 template_name="datasources/ai_analytics_result.htm",
                 context={"entry": history},
             )
         except HTTPException as e:
+            # A rejected payload and a failed run render into the same inline
+            # alert, always with 200, because the panel stays open either way.
             return Response(
                 f"<div class='alert alert-danger' data-success='false'>{e.detail}</div>",
                 media_type="text/html",
@@ -78,15 +67,14 @@ class AIAnalyticsController(Controller):
         user: User,
     ) -> Template:
 
-        target_type = request.query_params.get("target_type", "")
-        target_name = request.query_params.get("target_name", "")
+        query = AiAnalyticsHistoryQuery.from_query(request)
 
         entries = await get_prompt_history(
             db=db,
             user_id=user.id,
             datasource_id=datasource_id,
-            target_type=target_type,
-            target_name=target_name,
+            target_type=query.target_type,
+            target_name=query.target_name,
         )
 
         return Template(

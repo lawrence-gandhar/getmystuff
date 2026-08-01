@@ -16,13 +16,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.auth import require_auth
 from app.models.user import User
+from app.schemas.common import ErrorResponse
+from app.schemas.flow_builder import (
+    KnowledgeBaseManualTextRequest,
+    KnowledgeBaseStateResponse,
+)
 from app.services.flow_builder import knowledge_base_service
+from app.utils.file_utils import read_upload_payloads
 
 _JSON = "application/json"
 
 
 def _error_response(exc: HTTPException) -> Response:
-    return Response({"message": str(exc.detail)}, media_type=_JSON, status_code=exc.status_code)
+    """Every failure in this controller answers in the one error shape."""
+    return Response(
+        ErrorResponse.of(str(exc.detail)).payload(),
+        media_type=_JSON,
+        status_code=exc.status_code,
+    )
 
 
 class KnowledgeBaseController(Controller):
@@ -44,7 +55,12 @@ class KnowledgeBaseController(Controller):
             state = await knowledge_base_service.get_knowledge_base_state(db, user.id, flow_id, node_id)
         except HTTPException as e:
             return _error_response(e)
-        return Response(state, media_type=_JSON, status_code=200)
+
+        return Response(
+            KnowledgeBaseStateResponse.payload_for(state),
+            media_type=_JSON,
+            status_code=200,
+        )
 
     # --------------------------
     # UPLOAD — one or more files
@@ -58,15 +74,14 @@ class KnowledgeBaseController(Controller):
         db: AsyncSession,
         user: User,
     ) -> Response:
-        form = await request.form()
-        raw_files = form.getall("files")
-        file_payloads = [
-            {"filename": uf.filename, "content": await uf.read()}
-            for uf in raw_files
-            if hasattr(uf, "filename") and uf.filename
-        ]
+        file_payloads = await read_upload_payloads(request)
+
         if not file_payloads:
-            return Response({"message": "No files were provided"}, media_type=_JSON, status_code=400)
+            return Response(
+                ErrorResponse.of("No files were provided").payload(),
+                media_type=_JSON,
+                status_code=400,
+            )
 
         try:
             results = await knowledge_base_service.upload_documents(
@@ -90,15 +105,11 @@ class KnowledgeBaseController(Controller):
         user: User,
     ) -> Response:
         try:
-            payload = await request.json()
-        except Exception:
-            return Response({"message": "Invalid request body"}, media_type=_JSON, status_code=400)
-
-        try:
+            payload = await KnowledgeBaseManualTextRequest.from_json(request)
             document = await knowledge_base_service.add_manual_text(
                 db, user.id, flow_id, node_id,
-                label=payload.get("label", ""),
-                text=payload.get("text", ""),
+                label=payload.label,
+                text=payload.text,
             )
         except HTTPException as e:
             return _error_response(e)
@@ -140,4 +151,8 @@ class KnowledgeBaseController(Controller):
         except HTTPException as e:
             return _error_response(e)
 
-        return Response(state, media_type=_JSON, status_code=200)
+        return Response(
+            KnowledgeBaseStateResponse.payload_for(state),
+            media_type=_JSON,
+            status_code=200,
+        )

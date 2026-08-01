@@ -1,11 +1,19 @@
 from litestar import Controller, get, post
 from litestar.config.cors import CORSConfig
 from litestar.connection import Request
+from litestar.exceptions import HTTPException
 from litestar.middleware.base import DefineMiddleware
 from litestar.middleware.cors import CORSMiddleware
 from litestar.response import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.schemas.chatbot import (
+    ChatbotTurnResponse,
+    PublicChatbotMessageRequest,
+    PublicWidgetConfigQuery,
+    WidgetConfigResponse,
+)
+from app.schemas.common import StatusResponse
 from app.services.chatbot.chatbot_service import get_active_key_by_value, validate_origin
 from app.services.chatbot.chatbot_turn_service import TurnResult, answer_turn
 from app.services.chatbot.chatbot_widget_settings_service import (
@@ -14,6 +22,24 @@ from app.services.chatbot.chatbot_widget_settings_service import (
 )
 
 _JSON = "application/json"
+
+_INVALID_KEY = "Invalid or inactive chatbot key"
+_FORBIDDEN_ORIGIN = "This domain is not authorized to use this chatbot key"
+
+
+def _error(message: str, status_code: int) -> Response:
+    """
+    A rejection, in the application-wide ``{"status", "message"}`` envelope.
+
+    Every failure this controller can produce goes through here, so an anonymous
+    caller sees one shape whether the key was wrong, the domain was not allowed, or
+    the body could not be read.
+    """
+    return Response(
+        StatusResponse.error(message).payload(),
+        media_type=_JSON,
+        status_code=status_code,
+    )
 
 # Scoped to just this controller (via the `middleware` class attribute below),
 # not the app-level `cors_config` — the rest of the app relies on
@@ -52,29 +78,25 @@ class PublicChatbotController(Controller):
         trusted from the client.
         """
         origin = request.headers.get("origin")
-        api_key = request.query_params.get("api_key", "")
 
-        chatbot_key = await get_active_key_by_value(db, api_key) if api_key else None
+        try:
+            api_key = PublicWidgetConfigQuery.from_query(request).api_key
+        except HTTPException as exc:
+            return _error(str(exc.detail), 400)
+
+        chatbot_key = await get_active_key_by_value(db, api_key)
         if not chatbot_key:
-            return Response(
-                {"status": "error", "message": "Invalid or inactive chatbot key"},
-                media_type=_JSON,
-                status_code=404,
-            )
+            return _error(_INVALID_KEY, 404)
 
         if not validate_origin(chatbot_key, origin):
-            return Response(
-                {"status": "error", "message": "This domain is not authorized to use this chatbot key"},
-                media_type=_JSON,
-                status_code=403,
-            )
+            return _error(_FORBIDDEN_ORIGIN, 403)
 
         settings = await get_widget_settings_by_key_id(db, chatbot_key.id)
         api_base_url = str(request.base_url).rstrip("/")
         config = build_widget_public_config(settings, chatbot_key.name, api_base_url)
 
         return Response(
-            {"status": "success", **config},
+            WidgetConfigResponse.from_config(config).payload(),
             media_type=_JSON,
             status_code=200,
         )
@@ -84,35 +106,28 @@ class PublicChatbotController(Controller):
         origin = request.headers.get("origin")
 
         try:
-            body = await request.json()
-        except Exception:
-            return Response(
-                {"status": "error", "message": "Invalid request body"},
-                media_type=_JSON,
-                status_code=400,
-            )
+            payload = await PublicChatbotMessageRequest.from_json(request)
+        except HTTPException as exc:
+            # The only untrusted body in the application. A 400 here covers both a
+            # body that is not a JSON object and one whose fields are the wrong
+            # type or over their bounds — the schema decides, so no field is read
+            # before it has been checked.
+            return _error(str(exc.detail), exc.status_code)
 
-        api_key = (body or {}).get("api_key", "")
-        text = (body or {}).get("message", "")
-        session_token = (body or {}).get("session_id", "")
-        selected_value = (body or {}).get("selected_value")
-
-        chatbot_key = await get_active_key_by_value(db, api_key) if api_key else None
+        chatbot_key = await get_active_key_by_value(db, payload.api_key)
         if not chatbot_key:
-            return Response(
-                {"status": "error", "message": "Invalid or inactive chatbot key"},
-                media_type=_JSON,
-                status_code=404,
-            )
+            return _error(_INVALID_KEY, 404)
 
         if not validate_origin(chatbot_key, origin):
-            return Response(
-                {"status": "error", "message": "This domain is not authorized to use this chatbot key"},
-                media_type=_JSON,
-                status_code=403,
-            )
+            return _error(_FORBIDDEN_ORIGIN, 403)
 
-        result = await answer_turn(db, chatbot_key, text, session_token, selected_value)
+        result = await answer_turn(
+            db,
+            chatbot_key,
+            payload.message,
+            payload.session_id,
+            payload.selected_value,
+        )
         return _turn_response(result)
 
 
@@ -127,31 +142,13 @@ def _turn_response(result: TurnResult) -> Response:
     ``response_time_ms`` is the server-side time the turn took — the same
     number stored on the log row — so what a visitor sees in the widget and
     what the owner sees in Chatbot Analytics can never disagree.
-    """
-    if result.status == "error":
-        return Response(
-            {
-                "status": "error",
-                "message": result.message,
-                "response_time_ms": result.response_time_ms,
-            },
-            media_type=_JSON,
-            status_code=200,
-        )
 
+    ``ChatbotTurnResponse`` owns the two payload shapes (the answer, and the error
+    that carries only a message and the timing), including the ``text`` duplicate
+    of ``summary`` that the flow node types read their prompt from.
+    """
     return Response(
-        {
-            "status": "success",
-            "type": result.type,
-            "summary": result.summary,
-            "insights": result.insights,
-            "table": result.table,
-            # Duplicated as `text` for the flow node types (menu/dropdown/
-            # ask-input) whose prompt the widget reads from this field.
-            "text": result.summary,
-            "options": result.options,
-            "response_time_ms": result.response_time_ms,
-        },
+        ChatbotTurnResponse.from_turn(result).payload(),
         media_type=_JSON,
         status_code=200,
     )

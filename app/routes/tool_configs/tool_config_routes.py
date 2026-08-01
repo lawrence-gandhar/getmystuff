@@ -29,6 +29,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.auth import require_auth
 from app.models.tool_configs import AGGREGATION_FUNCTIONS, FILTER_OPERATORS
 from app.models.user import User
+from app.schemas.tool_configs import (
+    SchemaCascadeQuery,
+    TableColumnsResponse,
+    ToolConfigCreateRequest,
+    ToolConfigDeleteRequest,
+    ToolConfigListQuery,
+    ToolConfigSetEnabledRequest,
+    ToolConfigUpdateRequest,
+)
 from app.services.data_agents import data_agent_service
 from app.services.deep_agents.prompt_sync_service import sync_tool_routing_prompt
 from app.services.tool_configs import tool_config_service
@@ -74,11 +83,11 @@ class ToolConfigController(Controller):
     @get("/")
     async def index(
         self,
+        request: Request,
         db: AsyncSession,
         user: User,
-        agent: Optional[str] = None,
     ) -> Template:
-        agent_id = parse_optional_uuid(agent, "Data agent")
+        agent_id = ToolConfigListQuery.from_query(request).agent
         tool_configs = await tool_config_service.get_tool_config_views(
             db, user.id, agent_id,
         )
@@ -107,15 +116,16 @@ class ToolConfigController(Controller):
     @get("/new-form")
     async def new_form(
         self,
+        request: Request,
         db: AsyncSession,
         user: User,
-        agent: Optional[str] = None,
     ) -> Template:
         """
         Blank create form — the same partial the edit form uses. When the list is
         filtered to one agent, that agent is preselected.
         """
         try:
+            agent_id = ToolConfigListQuery.from_query(request).agent
             choices = await self._form_choices(db, user)
         except HTTPException as exc:
             return Template(
@@ -127,7 +137,7 @@ class ToolConfigController(Controller):
             template_name=_FORM_TEMPLATE,
             context={
                 "tool_config": None,
-                "preselected_agent_id": (agent or "").strip(),
+                "preselected_agent_id": str(agent_id) if agent_id else "",
                 "form_action": "/tool-configs/create",
                 "submit_label": "Create Tool Config",
                 **self._builder_defaults(),
@@ -187,15 +197,15 @@ class ToolConfigController(Controller):
     @get("/tables")
     async def tables(
         self,
+        request: Request,
         db: AsyncSession,
         user: User,
-        datasource_id: Optional[str] = None,
     ) -> Template:
         """
         Re-render the Table field for the datasource just picked, and reset the query
         builder along with it — see the partial for why the two move together.
         """
-        selection = parse_optional_uuid(datasource_id, "Datasource")
+        selection = SchemaCascadeQuery.from_query(request).datasource_id
 
         table_names: list = []
         schema_error = None
@@ -224,10 +234,9 @@ class ToolConfigController(Controller):
     @get("/fields")
     async def fields(
         self,
+        request: Request,
         db: AsyncSession,
         user: User,
-        datasource_id: Optional[str] = None,
-        table_name: Optional[str] = None,
     ) -> Template:
         """
         Re-render the query builder against the columns of the table just picked.
@@ -236,9 +245,9 @@ class ToolConfigController(Controller):
         different columns, so the previous selections — joins included — no longer
         mean anything.
         """
-        selection = parse_optional_uuid(datasource_id, "Datasource")
+        query = SchemaCascadeQuery.from_query(request)
         builder = await self._builder_context(
-            db, user, selection, table_name or "", config={},
+            db, user, query.datasource_id, query.table, config={},
         )
 
         return Template(template_name=_BUILDER_TEMPLATE, context=builder)
@@ -249,10 +258,9 @@ class ToolConfigController(Controller):
     @get("/columns")
     async def columns(
         self,
+        request: Request,
         db: AsyncSession,
         user: User,
-        datasource_id: Optional[str] = None,
-        table_name: Optional[str] = None,
     ) -> dict:
         """
         The columns of one table, for the join builder: joining a table has to add
@@ -263,49 +271,47 @@ class ToolConfigController(Controller):
         builder can show the reason next to the join row instead of the offcanvas
         being replaced by an error page mid-edit.
         """
-        selection = parse_optional_uuid(datasource_id, "Datasource")
-        name = (table_name or "").strip()
+        query = SchemaCascadeQuery.from_query(request)
+        name = query.table
 
-        if selection is None or not name:
-            return {"table_name": name, "columns": [], "error": "Pick a table first"}
+        if query.datasource_id is None or not name:
+            return TableColumnsResponse.failure(name, "Pick a table first").payload()
 
         try:
-            return {
-                "table_name": name,
-                "columns": await tool_config_service.get_column_choices(
-                    db, user.id, selection, name,
-                ),
-                "error": None,
-            }
+            columns = await tool_config_service.get_column_choices(
+                db, user.id, query.datasource_id, name,
+            )
         except HTTPException as exc:
-            return {"table_name": name, "columns": [], "error": str(exc.detail)}
+            return TableColumnsResponse.failure(name, str(exc.detail)).payload()
+
+        return TableColumnsResponse.build(
+            {"table_name": name, "columns": columns, "error": None}
+        ).payload()
 
     # --------------------------
     # CREATE
     # --------------------------
     @post("/create")
     async def create(self, request: Request, db: AsyncSession, user: User) -> Template:
-        form = await request.form()
+        payload = await ToolConfigCreateRequest.from_form(request)
         error = None
         resync: set[int] = set()
         try:
             tool_config = await tool_config_service.create_tool_config(
                 db,
                 user.id,
-                agent_id=parse_optional_uuid(form.get("data_agent_id"), "Data agent"),
-                datasource_id=parse_optional_uuid(
-                    form.get("datasource_id"), "Datasource",
-                ),
-                tool_name=form.get("tool_name", ""),
-                table_name=form.get("table_name", ""),
-                description=form.get("description", ""),
-                config_json=form.get("config_json", ""),
+                agent_id=payload.data_agent_id,
+                datasource_id=payload.datasource_id,
+                tool_name=payload.tool_name,
+                table_name=payload.table_name,
+                description=payload.description,
+                config_json=payload.config_json,
             )
             resync = {tool_config.data_agent_id}
         except HTTPException as exc:
             error = str(exc.detail)
 
-        return await self._rows(db, user, form.get("agent_filter"), error, resync)
+        return await self._rows(db, user, payload.agent_filter, error, resync)
 
     # --------------------------
     # UPDATE
@@ -318,7 +324,7 @@ class ToolConfigController(Controller):
         db: AsyncSession,
         user: User,
     ) -> Template:
-        form = await request.form()
+        payload = await ToolConfigUpdateRequest.from_form(request)
         error = None
         resync: set[int] = set()
         try:
@@ -326,19 +332,17 @@ class ToolConfigController(Controller):
                 db,
                 user.id,
                 tool_config_id,
-                agent_id=parse_optional_uuid(form.get("data_agent_id"), "Data agent"),
-                datasource_id=parse_optional_uuid(
-                    form.get("datasource_id"), "Datasource",
-                ),
-                tool_name=form.get("tool_name", ""),
-                table_name=form.get("table_name", ""),
-                description=form.get("description", ""),
-                config_json=form.get("config_json", ""),
+                agent_id=payload.data_agent_id,
+                datasource_id=payload.datasource_id,
+                tool_name=payload.tool_name,
+                table_name=payload.table_name,
+                description=payload.description,
+                config_json=payload.config_json,
             )
         except HTTPException as exc:
             error = str(exc.detail)
 
-        return await self._rows(db, user, form.get("agent_filter"), error)
+        return await self._rows(db, user, payload.agent_filter, error)
 
     # --------------------------
     # ENABLE / DISABLE
@@ -351,17 +355,17 @@ class ToolConfigController(Controller):
         db: AsyncSession,
         user: User,
     ) -> Template:
-        form = await request.form()
+        payload = await ToolConfigSetEnabledRequest.from_form(request)
         error = None
         resync: set[int] = set()
         try:
             resync = await tool_config_service.set_tool_config_enabled(
-                db, user.id, tool_config_id, is_enabled=form.get("is_enabled") == "true",
+                db, user.id, tool_config_id, is_enabled=payload.is_enabled,
             )
         except HTTPException as exc:
             error = str(exc.detail)
 
-        return await self._rows(db, user, form.get("agent_filter"), error, resync)
+        return await self._rows(db, user, payload.agent_filter, error, resync)
 
     # --------------------------
     # DELETE
@@ -374,7 +378,7 @@ class ToolConfigController(Controller):
         db: AsyncSession,
         user: User,
     ) -> Template:
-        form = await request.form()
+        payload = await ToolConfigDeleteRequest.from_form(request)
         error = None
         resync: set[int] = set()
         try:
@@ -384,7 +388,7 @@ class ToolConfigController(Controller):
         except HTTPException as exc:
             error = str(exc.detail)
 
-        return await self._rows(db, user, form.get("agent_filter"), error, resync)
+        return await self._rows(db, user, payload.agent_filter, error, resync)
 
     # --------------------------
     # Helpers
@@ -491,13 +495,16 @@ class ToolConfigController(Controller):
     async def _rows(
         db: AsyncSession,
         user: User,
-        agent_filter: str | None,
+        agent_id: Optional[uuid.UUID],
         error: str | None,
         resync_agent_ids: Iterable[int] | None = None,
     ) -> Template:
         """
         The HTMX response every mutation returns: marker + rebuilt table, still
         narrowed to whichever agent the user was filtered to.
+
+        The filter arrives already parsed — each mutation's request schema validated
+        it on the way in, so there is nothing left to interpret here.
 
         ``resync_agent_ids`` are the agents whose tool set just changed. Their Deep
         Agent routing prompts are regenerated in a background task — after this
@@ -506,7 +513,6 @@ class ToolConfigController(Controller):
         app.services.deep_agents.prompt_sync_service for why losing one of these
         tasks is safe.
         """
-        agent_id = parse_optional_uuid(agent_filter, "Data agent")
         tool_configs = await tool_config_service.get_tool_config_views(
             db, user.id, agent_id,
         )

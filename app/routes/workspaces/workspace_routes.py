@@ -21,6 +21,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.auth import require_auth
 from app.models.user import User
+from app.schemas.workspaces import (
+    WorkspaceCreateRequest,
+    WorkspaceSetActiveRequest,
+    WorkspaceUpdateRequest,
+)
 from app.services.workspaces import workspace_service
 
 _ROWS_TEMPLATE = "workspaces/partials/workspace_rows_response.htm"
@@ -89,14 +94,14 @@ class WorkspaceController(Controller):
     # --------------------------
     @post("/create")
     async def create(self, request: Request, db: AsyncSession, user: User) -> Template:
-        form = await request.form()
         error = None
         try:
+            payload = await WorkspaceCreateRequest.from_form(request)
             await workspace_service.create_workspace(
                 db,
                 user.id,
-                name=form.get("name", ""),
-                description=form.get("description", ""),
+                name=payload.name,
+                description=payload.description,
             )
         except HTTPException as exc:
             error = str(exc.detail)
@@ -114,15 +119,15 @@ class WorkspaceController(Controller):
         db: AsyncSession,
         user: User,
     ) -> Template:
-        form = await request.form()
         error = None
         try:
+            payload = await WorkspaceUpdateRequest.from_form(request)
             await workspace_service.update_workspace(
                 db,
                 user.id,
                 workspace_id,
-                name=form.get("name", ""),
-                description=form.get("description", ""),
+                name=payload.name,
+                description=payload.description,
             )
         except HTTPException as exc:
             error = str(exc.detail)
@@ -140,11 +145,11 @@ class WorkspaceController(Controller):
         db: AsyncSession,
         user: User,
     ) -> Template:
-        form = await request.form()
         error = None
         try:
+            payload = await WorkspaceSetActiveRequest.from_form(request)
             await workspace_service.set_workspace_active(
-                db, user.id, workspace_id, is_active=form.get("is_active") == "true",
+                db, user.id, workspace_id, is_active=payload.is_active,
             )
         except HTTPException as exc:
             error = str(exc.detail)

@@ -1,5 +1,3 @@
-import re
-import json
 import uuid
 
 from litestar import Controller, get, post, delete
@@ -10,6 +8,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.auth import require_auth
 from app.models.user import User
+from app.schemas.datasource import (
+    DatasourceDetailsResponse,
+    ToolBaseConfigCreateRequest,
+    ToolNameRequest,
+)
 from app.services.datasource.datasource_config_service import (
     create_config_with_subqueries,
     check_tool_name_exists,
@@ -22,10 +25,27 @@ from app.services.datasource.datasource_service import (
     delete_datasource_file,
 )
 from app.utils.query_joins import join_types_for
-from app.utils.validators import parse_json_object
 
-# Compiled once at import time — reused on every validation request.
-_TOOL_NAME_RE = re.compile(r'^[a-z0-9_]+$')
+_HTML = "text/html"
+
+
+def _tool_name_feedback(message: str, available: bool) -> Response:
+    """
+    The inline badge the tool-name blur check swaps in.
+
+    One builder for both outcomes, so the markup and the icon cannot diverge
+    between the four places that used to write it out by hand.
+    """
+    css_class = "text-success" if available else "text-danger"
+    icon = "la-check-circle" if available else "la-times-circle"
+
+    return Response(
+        f"<div class='{css_class} small mt-1'>"
+        f"<i class='las {icon}'></i> {message}"
+        f"</div>",
+        media_type=_HTML,
+    )
+
 
 # The join types each relational dialect supports, handed to the page so the Tool
 # Base Config builder can offer the right ones for whichever datasource the user
@@ -82,9 +102,9 @@ class DataSourceConfigurations(Controller):
             datasource_id=datasource_id,
             user_id=user.id,
         )
-        
+
         return {
-            "datasource_details": data
+            "datasource_details": DatasourceDetailsResponse.payload_for(data)
         }
         
 
@@ -132,63 +152,34 @@ class DataSourceConfigurations(Controller):
         db: AsyncSession,
         user: User,
     ) -> Response:
-        form = await request.form()
-        raw = form.get("tool_name", "")
-        name = raw.strip().lower()
+        """
+        Tell the user in advance whether this tool name will be accepted.
 
-        # ── 1. Empty ────────────────────────────────────────────────────────
-        if not name:
-            return Response(
-                "<div class='text-danger small mt-1'>"
-                "<i class='las la-times-circle'></i> Tool name is required."
-                "</div>",
-                media_type="text/html",
-            )
+        The name's own rules — required, length, character set — come from
+        ``ToolNameRequest``, which is the same schema
+        :meth:`create_configuration` validates with. Sharing it is the point: this
+        endpoint's whole job is to predict that save, so a second copy of the rules
+        here could only ever be wrong.
 
-        # ── 2. Length ────────────────────────────────────────────────────────
-        if len(name) > 255:
-            return Response(
-                "<div class='text-danger small mt-1'>"
-                "<i class='las la-times-circle'></i> "
-                "Tool name must not exceed 255 characters."
-                "</div>",
-                media_type="text/html",
-            )
+        Uniqueness is the one check that needs the database, so it stays below.
+        """
+        try:
+            name = (await ToolNameRequest.from_form(request)).tool_name
+        except HTTPException as exc:
+            return _tool_name_feedback(str(exc.detail), available=False)
 
-        # ── 3. Character set ─────────────────────────────────────────────────
-        if not _TOOL_NAME_RE.match(name):
-            return Response(
-                "<div class='text-danger small mt-1'>"
-                "<i class='las la-times-circle'></i> "
-                "Only lowercase letters (a–z), digits (0–9), "
-                "and underscores (_) are allowed."
-                "</div>",
-                media_type="text/html",
-            )
-
-        # ── 4. Uniqueness check ───────────────────────────────────────────────
-        exists = await check_tool_name_exists(
+        if await check_tool_name_exists(
             db=db,
             user_id=user.id,
             datasource_id=datasource_id,
             tool_name=name,
-        )
-        if exists:
-            return Response(
-                "<div class='text-danger small mt-1'>"
-                "<i class='las la-times-circle'></i> "
-                "This tool name is already taken. Please choose a different one."
-                "</div>",
-                media_type="text/html",
+        ):
+            return _tool_name_feedback(
+                "This tool name is already taken. Please choose a different one.",
+                available=False,
             )
 
-        # ── All checks passed ────────────────────────────────────────────────
-        return Response(
-            "<div class='text-success small mt-1'>"
-            "<i class='las la-check-circle'></i> Tool name is available."
-            "</div>",
-            media_type="text/html",
-        )
+        return _tool_name_feedback("Tool name is available.", available=True)
 
     # --------------------------
     # CREATE CONFIG
@@ -201,46 +192,37 @@ class DataSourceConfigurations(Controller):
         db: AsyncSession,
         user: User,
     ) -> Response:
+        """
+        Save one tool base config plus its subqueries.
 
-        form = await request.form()
-
-        tool_name = form.get("tool_name")
-        table_name = form.get("table_name")
-        subquery_configs_raw = form.get("subquery_configs", "[]")
-
+        Both JSON fields are hand-editable in the form, so a bad payload is a
+        fixable user mistake and gets said so. That was already true of
+        ``base_config``; ``subquery_configs`` used to be read with a ``json.loads``
+        whose ``except`` fell back to ``[]`` — a malformed payload silently
+        discarded every subquery the user had built and then reported success.
+        ``JsonArrayField`` refuses it instead.
+        """
         try:
-            subquery_configs = json.loads(subquery_configs_raw)
-            if not isinstance(subquery_configs, list):
-                subquery_configs = []
-        except (json.JSONDecodeError, TypeError):
-            subquery_configs = []
-
-        try:
-            # The base config is hand-editable in the form, so a bad payload is a
-            # fixable user mistake and gets said so — silently saving {} instead
-            # would throw away the query the user just built.
-            base_config = parse_json_object(
-                form.get("base_config", "{}"), "Base config",
-            )
+            payload = await ToolBaseConfigCreateRequest.from_form(request)
 
             await create_config_with_subqueries(
                 db=db,
                 user_id=user.id,
                 datasource_id=datasource_id,
-                tool_name=tool_name,
-                table_name=table_name,
-                base_config=base_config,
-                subquery_configs=subquery_configs,
+                tool_name=payload.tool_name,
+                table_name=payload.table_name,
+                base_config=payload.base_config,
+                subquery_configs=payload.subquery_configs,
             )
             return Response(
                 "<div class='alert alert-success' data-success='true'>Configuration Created Successfully</div>",
-                media_type="text/html",
+                media_type=_HTML,
                 status_code=200,
             )
         except HTTPException as e:
             return Response(
                 f"<div class='alert alert-danger' data-success='false'>{e.detail}</div>",
-                media_type="text/html",
+                media_type=_HTML,
                 status_code=200,
             )
 

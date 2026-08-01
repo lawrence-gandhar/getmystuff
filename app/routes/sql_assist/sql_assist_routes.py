@@ -20,7 +20,7 @@ unreachable datasource or a name already taken leaves the panel — and everythi
 into it — exactly where it was.
 """
 
-from typing import List, Optional
+import json
 
 from litestar import Controller, get, post
 from litestar.connection import Request
@@ -30,9 +30,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.auth import require_auth
 from app.models.user import User
+from app.schemas.sql_assist import (
+    SqlAssistCreateToolRequest,
+    SqlAssistFormQuery,
+    SqlAssistGenerateRequest,
+    SqlAssistTablesQuery,
+    SqlAssistToolFormRequest,
+)
 from app.services.sql_assist import sql_assist_service
 from app.services.tool_configs import tool_config_service
-from app.utils.validators import parse_optional_uuid
 
 _FORM_TEMPLATE = "sql_assist/partials/form.htm"
 _TABLES_TEMPLATE = "sql_assist/partials/tables_field.htm"
@@ -55,9 +61,9 @@ class SqlAssistController(Controller):
     @get("/form")
     async def form(
         self,
+        request: Request,
         db: AsyncSession,
         user: User,
-        agent: Optional[str] = None,
     ) -> Template:
         """
         The blank panel. Only relational datasources are listed — there is no SQL to
@@ -69,6 +75,7 @@ class SqlAssistController(Controller):
         looking at, and the rebuilt table keeps showing the same subset.
         """
         try:
+            agent_id = SqlAssistFormQuery.from_query(request).agent
             datasources = await sql_assist_service.get_datasource_choices(db, user.id)
             llm_keys = await sql_assist_service.get_llm_key_choices(db, user.id)
         except HTTPException as exc:
@@ -86,7 +93,7 @@ class SqlAssistController(Controller):
                 "tables": [],
                 "selected_datasource_id": "",
                 "schema_error": None,
-                "agent_filter": (agent or "").strip(),
+                "agent_filter": str(agent_id) if agent_id else "",
             },
         )
 
@@ -96,12 +103,12 @@ class SqlAssistController(Controller):
     @get("/tables")
     async def tables(
         self,
+        request: Request,
         db: AsyncSession,
         user: User,
-        datasource_id: Optional[str] = None,
     ) -> Template:
         """Re-render the table picker for the datasource just chosen."""
-        selection = parse_optional_uuid(datasource_id, "Datasource")
+        selection = SqlAssistTablesQuery.from_query(request).datasource_id
 
         table_names: list = []
         schema_error = None
@@ -135,26 +142,22 @@ class SqlAssistController(Controller):
         """
         Ask the model for a query, or for a better version of the last one.
 
-        The table list arrives as repeated form fields from a multi-select, so it is
-        read with ``getall`` — a single-value ``get`` would silently use one table
-        out of several.
+        The table list arrives as repeated form fields from a multi-select, which is
+        why the schema declares it in ``multi_fields`` — read as a single value it
+        would silently use one table out of several.
         """
-        form = await request.form()
+        payload = await SqlAssistGenerateRequest.from_form(request)
 
         try:
             result = await sql_assist_service.generate_sql(
                 db,
                 user.id,
-                datasource_id=parse_optional_uuid(
-                    form.get("datasource_id"), "Datasource",
-                ),
-                table_names=self._table_names(form),
-                prompt=form.get("prompt", ""),
-                llm_mode=form.get("llm_mode", ""),
-                llm_api_key_id=parse_optional_uuid(
-                    form.get("llm_api_key_id"), "AI API key",
-                ),
-                history_json=form.get("history_json", ""),
+                datasource_id=payload.datasource_id,
+                table_names=payload.table_names,
+                prompt=payload.prompt,
+                llm_mode=payload.llm_mode,
+                llm_api_key_id=payload.llm_api_key_id,
+                history_json=payload.history_json,
             )
         except HTTPException as exc:
             return Template(
@@ -163,7 +166,7 @@ class SqlAssistController(Controller):
                     "error": str(exc.detail),
                     # Keeps the conversation alive through a failed turn, so a
                     # refinement that times out doesn't reset the whole session.
-                    "history_json": form.get("history_json", "") or "[]",
+                    "history_json": payload.history_json or "[]",
                 },
             )
 
@@ -173,7 +176,7 @@ class SqlAssistController(Controller):
                 **result,
                 # Echoed so "Auto Create Tool" can ask for the same query to be
                 # converted without the user re-picking any of it.
-                **self._echo(form),
+                **payload.echo(),
             },
         )
 
@@ -198,22 +201,18 @@ class SqlAssistController(Controller):
         the tool builder holds columns, aggregations, grouping, filters and joins, and
         plenty of valid SQL needs more than that.
         """
-        form = await request.form()
-        echo = self._echo(form)
+        payload = await SqlAssistToolFormRequest.from_form(request)
+        echo = payload.echo()
 
         try:
             draft = await sql_assist_service.draft_tool_config(
                 db,
                 user.id,
-                datasource_id=parse_optional_uuid(
-                    form.get("datasource_id"), "Datasource",
-                ),
-                table_names=self._table_names(form),
-                sql=form.get("sql", ""),
-                llm_mode=form.get("llm_mode", ""),
-                llm_api_key_id=parse_optional_uuid(
-                    form.get("llm_api_key_id"), "AI API key",
-                ),
+                datasource_id=payload.datasource_id,
+                table_names=payload.table_names,
+                sql=payload.sql,
+                llm_mode=payload.llm_mode,
+                llm_api_key_id=payload.llm_api_key_id,
             )
             agents = await sql_assist_service.get_agent_choices(db, user.id)
         except HTTPException as exc:
@@ -221,7 +220,7 @@ class SqlAssistController(Controller):
                 template_name=_ERROR_TEMPLATE,
                 context={
                     "error": str(exc.detail),
-                    "history_json": form.get("history_json", "") or "[]",
+                    "history_json": payload.history_json or "[]",
                 },
             )
 
@@ -255,43 +254,44 @@ class SqlAssistController(Controller):
         ``tool_config_service`` — the same gate the query builder's own output goes
         through — so nothing here trusts what the browser posted back.
         """
-        form = await request.form()
-        agent_filter = form.get("agent_filter", "")
+        payload = await SqlAssistCreateToolRequest.from_form(request)
 
         try:
             tool_config = await sql_assist_service.create_tool_from_draft(
                 db,
                 user.id,
-                datasource_id=parse_optional_uuid(
-                    form.get("datasource_id"), "Datasource",
-                ),
-                agent_id=parse_optional_uuid(form.get("data_agent_id"), "Data agent"),
-                tool_name=form.get("tool_name", ""),
-                table_name=form.get("table_name", ""),
-                description=form.get("description", ""),
-                config_json=form.get("config_json", ""),
+                datasource_id=payload.datasource_id,
+                agent_id=payload.data_agent_id,
+                tool_name=payload.tool_name,
+                table_name=payload.table_name,
+                description=payload.description,
+                config_json=payload.config_json,
             )
         except HTTPException as exc:
             # Back to the same form, so a name that is already taken can be fixed
-            # without converting the query again.
+            # without converting the query again. Every value the user had is
+            # re-rendered from the validated payload rather than re-read from the
+            # form, so what comes back is what the server accepted.
             return Template(
                 template_name=_TOOL_FORM_TEMPLATE,
                 context={
                     "fits": True,
                     "reason": "",
                     "error": str(exc.detail),
-                    "tool_name": form.get("tool_name", ""),
-                    "description": form.get("description", ""),
-                    "table": form.get("table_name", ""),
-                    "config_json": form.get("config_json", ""),
-                    "preview": form.get("preview", ""),
-                    "selected_agent_id": form.get("data_agent_id", ""),
+                    "tool_name": payload.tool_name,
+                    "description": payload.description or "",
+                    "table": payload.table_name,
+                    "config_json": json.dumps(payload.config_json),
+                    "preview": payload.preview or "",
+                    "selected_agent_id": (
+                        str(payload.data_agent_id) if payload.data_agent_id else ""
+                    ),
                     "agents": await sql_assist_service.get_agent_choices(db, user.id),
-                    **self._echo(form),
+                    **payload.echo(),
                 },
             )
 
-        agent_id = parse_optional_uuid(agent_filter, "Data agent")
+        agent_id = payload.agent_filter
 
         return Template(
             template_name=_TOOL_CREATED_TEMPLATE,
@@ -305,38 +305,3 @@ class SqlAssistController(Controller):
                 ),
             },
         )
-
-    # --------------------------
-    # Helpers
-    # --------------------------
-    @staticmethod
-    def _echo(form) -> dict:
-        """
-        The fields every step of the panel has to hand on: which datasource and tables
-        the query was written against, which model wrote it, and the host page's agent
-        filter. Re-read from the form each time rather than held anywhere, so a
-        tampered value is just another value the services validate.
-        """
-        return {
-            "datasource_id": form.get("datasource_id", ""),
-            "llm_mode": form.get("llm_mode", ""),
-            "llm_api_key_id": form.get("llm_api_key_id", ""),
-            "agent_filter": form.get("agent_filter", ""),
-        }
-    @staticmethod
-    def _table_names(form) -> List[str]:
-        """
-        Every selected table.
-
-        Litestar's FormMultiDict exposes repeated keys through ``getall``, which
-        raises on a key that isn't there — hence the explicit default. ``get`` would
-        return only the first of several, silently generating a query against one
-        table when the user picked four.
-        """
-        if hasattr(form, "getall"):
-            return [str(name) for name in form.getall("table_names", [])]
-
-        value = form.get("table_names")
-        if value is None:
-            return []
-        return [str(name) for name in value] if isinstance(value, list) else [str(value)]
