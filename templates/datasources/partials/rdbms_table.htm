@@ -1,0 +1,90 @@
+{# RDBMS datasources table. See datasources/partials/file_table.htm for why the
+   wrapper <div> — not the <tbody> — carries hx-swap-oob. #}
+{% from "datasources/partials/type_groups.htm" import file_types, nosql_types %}
+<div id="dsRdbmsTable" class="table-responsive" hx-swap-oob="true">
+    <table class="table table-hover align-middle mb-0">
+        <thead class="table-light">
+            <tr>
+                <th>Datasource Name</th>
+                <th>Type</th>
+                <th>Host</th>
+                <th>Port</th>
+                <th>Database</th>
+                <th>Status</th>
+                <th width="350px">Action</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for datasource in datasources if datasource.db_type not in file_types and datasource.db_type not in nosql_types %}
+            <tr id="ds-row-{{ datasource.uuid }}">
+                <td>
+                    <span class="fw-semibold text-primary">
+                        <i class="las la-tag"></i>
+                        {{ datasource.datasource_name }}
+                    </span>
+                </td>
+                <td>
+                    <span class="badge bg-primary-subtle text-primary-emphasis border border-primary-subtle">
+                        {{ datasource.db_type | upper }}
+                    </span>
+                </td>
+                <td>{{ datasource.host }}</td>
+                <td>{{ datasource.port }}</td>
+                <td>{{ datasource.database_name }}</td>
+                <td>
+                    {% if datasource.is_active %}
+                        <span class="badge bg-success me-1">Active</span>
+                    {% else %}
+                        <span class="badge bg-secondary me-1">Inactive</span>
+                    {% endif %}
+                </td>
+                <td>
+                    <button
+                        class="btn btn-sm {% if datasource.is_active %}btn-outline-warning{% else %}btn-outline-success{% endif %}"
+                        hx-post="/datasource/{{ datasource.uuid }}/toggle-active"
+                        hx-target="#ds-row-{{ datasource.uuid }}"
+                        hx-swap="outerHTML"
+                    >
+                        {% if datasource.is_active %}
+                            Deactivate
+                        {% else %}
+                            Activate
+                        {% endif %}
+                    </button>
+
+                    {% if datasource.is_active %}
+                        <button
+                            class="btn btn-sm btn-outline-primary"
+                            onclick="dbOpen('{{ datasource.uuid }}', '{{ datasource.datasource_name }}')"
+                        >
+                            Preview
+                        </button>
+                    {% else %}
+                        <button
+                            class="btn btn-sm btn-outline-secondary"
+                            onclick="openRenameModal('{{ datasource.uuid }}', '{{ datasource.datasource_name }}')"
+                        >
+                            Rename
+                        </button>
+                        <button
+                            class="btn btn-sm btn-outline-danger"
+                            hx-post="/datasource/{{ datasource.uuid }}/delete"
+                            hx-target="#ds-row-{{ datasource.uuid }}"
+                            hx-swap="outerHTML"
+                            hx-confirm="Delete '{{ datasource.datasource_name }}'? This cannot be undone."
+                        >
+                            Delete
+                        </button>
+                    {% endif %}
+                </td>
+            </tr>
+            {% else %}
+            <tr>
+                <td colspan="7" class="text-center text-muted py-4">
+                    <i class="las la-info-circle fs-5"></i><br>No RDBMS datasources yet.
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>

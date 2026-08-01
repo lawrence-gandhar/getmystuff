@@ -188,3 +188,7 @@
     });
 }());
 </script>
+
+{# The datasource itself already exists by the time this widget is shown, so
+   refresh the tabs behind the offcanvas instead of leaving them stale. #}
+{% include "datasources/partials/tables_response.htm" %}

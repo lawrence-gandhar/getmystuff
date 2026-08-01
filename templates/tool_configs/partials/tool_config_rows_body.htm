@@ -1,0 +1,90 @@
+{# <tr> per tool config. Identifiers are always public uuids.
+
+   `query_preview` is built server-side by tool_config_service.build_query_preview
+   so the list, the form and any future runtime agree on what a config means. It is
+   shown for reading only and is never executed.
+
+   `agent_filter` travels with every mutation as a hidden hx-val so the rebuilt
+   table keeps showing the same subset the user was looking at. #}
+{% for tool in tool_configs %}
+<tr id="tool-config-row-{{ tool.uuid }}">
+    <td>
+        <div class="fw-semibold font-monospace small">{{ tool.tool_name }}</div>
+        {% if tool.description %}
+        <div class="text-muted small">{{ tool.description }}</div>
+        {% endif %}
+    </td>
+    <td>
+        <a
+            class="badge bg-light text-dark border text-decoration-none"
+            href="/tool-configs?agent={{ tool.agent_uuid }}"
+        >
+            <i class="las la-robot"></i> {{ tool.agent_name }}
+        </a>
+        {% if not tool.agent_is_active %}
+        <div class="small text-danger">Agent disabled</div>
+        {% endif %}
+    </td>
+    <td>
+        <span class="badge bg-light text-dark border">
+            <i class="las la-database"></i> {{ tool.datasource_name }}
+        </span>
+        {% if not tool.datasource_is_active %}
+        <div class="small text-danger">Datasource inactive</div>
+        {% endif %}
+    </td>
+    <td>
+        <code class="small text-break">{{ tool.query_preview }}</code>
+    </td>
+    <td>
+        {% if tool.is_enabled %}
+        <span class="badge bg-success">Enabled</span>
+        {% else %}
+        <span class="badge bg-secondary">Disabled</span>
+        {% endif %}
+    </td>
+    <td>
+        <div class="d-flex flex-wrap gap-1">
+            <button
+                type="button"
+                class="btn btn-sm btn-outline-secondary"
+                hx-get="/tool-configs/{{ tool.uuid }}/edit-form"
+                hx-target="#toolConfigOffcanvasContent"
+                hx-swap="innerHTML"
+                data-bs-toggle="offcanvas"
+                data-bs-target="#toolConfigOffcanvas"
+            >
+                Edit
+            </button>
+            <button
+                type="button"
+                class="btn btn-sm {% if tool.is_enabled %}btn-outline-secondary{% else %}btn-outline-success{% endif %}"
+                hx-post="/tool-configs/{{ tool.uuid }}/set-enabled"
+                hx-vals='{"is_enabled": "{{ "false" if tool.is_enabled else "true" }}", "agent_filter": "{{ agent_filter }}"}'
+                hx-target="#toolConfigResponse"
+                hx-swap="innerHTML"
+            >
+                {% if tool.is_enabled %}Disable{% else %}Enable{% endif %}
+            </button>
+            <button
+                type="button"
+                class="btn btn-sm btn-outline-danger"
+                hx-post="/tool-configs/{{ tool.uuid }}/delete"
+                hx-vals='{"agent_filter": "{{ agent_filter }}"}'
+                hx-target="#toolConfigResponse"
+                hx-swap="innerHTML"
+                hx-confirm="Delete tool config '{{ tool.tool_name }}'? Agent '{{ tool.agent_name }}' will lose that capability. This cannot be undone."
+            >
+                Delete
+            </button>
+        </div>
+    </td>
+</tr>
+{% else %}
+<tr>
+    <td colspan="6" class="text-center text-muted py-4">
+        <i class="las la-tools fs-4 d-block mb-1"></i>
+        No tool configs{% if agent_filter %} for this agent{% endif %} yet.
+    </td>
+</tr>
+{% endfor %}

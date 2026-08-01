@@ -51,7 +51,9 @@ from app.utils.turn_recorder import estimate_tokens, record_llm_call
 datasource_crud = CRUDQueryBuilder(DataSource)
 prompt_history_crud = CRUDQueryBuilder(PromptHistory)
 
-_ANTHROPIC_MODEL = "claude-opus-5"
+# Also read by app.services.deep_agents.model_factory so the Deep Agent answers
+# on the same Claude model as every other Anthropic path in the app.
+ANTHROPIC_MODEL = "claude-opus-5"
 _SAMPLE_ROW_LIMIT = 500
 _MAX_PROMPT_LEN = 2000
 _VALID_TARGET_TYPES = {"file", "table", "collection"}
@@ -95,12 +97,10 @@ _JSON_ONLY_INSTRUCTION = (
 # chatbot's configured persona) so a custom prompt can never license the model
 # to invent figures.
 _GROUNDING_ADDENDUM = (
-    "\n\nYou are also given a statistical profile computed directly from the "
-    "business's real dataset(s): exact sampled row count, computed aggregate "
-    "statistics per column, top categorical values, and a small row sample. "
-    "Never guess or fabricate a number — every figure in your answer must come "
-    "from the supplied profile(s). If the profile does not contain enough "
-    "information to answer precisely, say so explicitly instead of estimating."
+    "\n\nYou are also given a statistical profile of the business's real "
+    "dataset(s) (row count, per-column statistics, top values, a row sample). "
+    "Every figure you give must come from it — never guess or estimate; if it "
+    "cannot answer precisely, say so."
 )
 
 
@@ -264,13 +264,18 @@ async def _load_one_target(
 # Provider resolution — which saved key (if any) should answer this prompt
 # --------------------------------------------------------------------------
 
-async def _resolve_provider(
+async def resolve_provider(
     db: AsyncSession,
     user_id: int,
     forced_key_uuid: Optional[uuid.UUID] = None,
 ) -> Tuple[str, str, Optional[str], Optional[str]]:
     """
     Pick which configured AI provider should handle this prompt.
+
+    Public because the Deep Agents module needs the same decision to build its
+    LangChain chat model (app.services.deep_agents.model_factory). Re-implementing
+    the precedence there would mean two answers to "which key answers this", and
+    would duplicate the key decryption.
 
     When `forced_key_uuid` is given (a caller explicitly attached one saved
     key by reference, e.g. a Flow Builder AI Fallback node's "attached LLM
@@ -329,22 +334,15 @@ def _build_prompts(
         system_prompt = system_prompt_override + _GROUNDING_ADDENDUM
     else:
         system_prompt = (
-            "You are a data analyst embedded in the GetMyStuff analytics platform. "
-            "You are given a statistical profile computed directly from the user's "
-            "real dataset(s) — possibly more than one table/collection/file: exact "
-            "sampled row count, computed aggregate statistics per column, top "
-            "categorical values, and a small row sample, for each one. Never guess "
-            "or fabricate a number — every figure in your answer must come from "
-            "the supplied profile(s). If the profile does not contain enough "
-            "information to answer precisely, say so explicitly instead of "
-            "estimating. When a small table would directly answer the question, "
-            "include one; otherwise omit it."
+            "You are a data analyst in the GetMyStuff analytics platform. You are "
+            "given a statistical profile of the user's real dataset(s) — one per "
+            "table/collection/file: row count, per-column statistics, top values, "
+            "a row sample. Every figure you give must come from it — never guess "
+            "or estimate; if it cannot answer precisely, say so. Include a small "
+            "table only when it directly answers the question."
         )
     if extra_instructions:
-        system_prompt += (
-            "\n\nThe chatbot owner has set the following guardrails/instructions — "
-            f"always follow them: {extra_instructions}"
-        )
+        system_prompt += f"\n\nAlways follow the owner's guardrails: {extra_instructions}"
     user_content = (
         f"Dataset(s): {target_label}\n\n"
         f"Data profile (JSON):\n{json.dumps(profiles, default=str)}\n\n"
@@ -403,7 +401,7 @@ async def _call_claude_core(
 
     try:
         response = await _with_rate_limit_retry(lambda: client.messages.parse(
-            model=_ANTHROPIC_MODEL,
+            model=ANTHROPIC_MODEL,
             max_tokens=4096,
             system=system_prompt,
             messages=[{"role": "user", "content": user_content}],
@@ -420,7 +418,7 @@ async def _call_claude_core(
     usage = getattr(response, "usage", None)
     record_llm_call(
         provider="anthropic",
-        model=_ANTHROPIC_MODEL,
+        model=ANTHROPIC_MODEL,
         request_tokens=getattr(usage, "input_tokens", 0) or 0,
         response_tokens=getattr(usage, "output_tokens", 0) or 0,
     )
@@ -596,7 +594,7 @@ async def answer_structured(
     if use_inbuilt_llm:
         return await _call_ollama_core(system_prompt, user_content, output_model)
 
-    provider, api_key, base_url, model_name = await _resolve_provider(db, user_id, forced_key_uuid)
+    provider, api_key, base_url, model_name = await resolve_provider(db, user_id, forced_key_uuid)
 
     if provider == "anthropic":
         return await _call_claude_core(api_key, system_prompt, user_content, output_model)

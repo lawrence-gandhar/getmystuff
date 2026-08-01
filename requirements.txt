@@ -23,3 +23,22 @@ pypdf
 python-docx
 httpx
 pgvector
+alembic
+
+# --------------------------------------------------------------------------
+# Deep Agents — app/services/deep_agents/
+#
+# deepagents requires Python >= 3.11 (it imports typing.Required), which is why
+# this project runs in the Docker image rather than a local 3.10 venv. See
+# documentations/DEEP_AGENTS.md.
+#
+# LangChain is imported ONLY inside app/services/deep_agents/. Every other AI
+# path (ai_analytics_service, ai_inbuilt/ollama_client) stays on the anthropic /
+# openai SDKs and raw httpx exactly as before.
+# --------------------------------------------------------------------------
+deepagents
+langgraph
+langchain-core
+langchain-anthropic
+langchain-openai
+langchain-ollama

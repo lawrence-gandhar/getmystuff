@@ -1,0 +1,37 @@
+{# The table picker. Replaced wholesale (hx-swap="outerHTML") whenever the datasource
+   changes, so its options are always tables that exist in the selected one — read by
+   reflection, the same way the schema sent to the model is.
+
+   A multi-select rather than a single one: the query the user wants often spans
+   several tables, and the model can only join tables whose columns it was shown.
+   Every selected table's structure — columns, types, primary and foreign keys — goes
+   into the prompt, and the foreign keys are what make a generated join correct
+   instead of guessed. #}
+<div class="col-md-6" id="sqlAssistTablesField">
+    <label for="sqlAssistTables" class="form-label fw-semibold">
+        Tables <span class="text-danger">*</span>
+    </label>
+    <select
+        id="sqlAssistTables"
+        name="table_names"
+        class="form-select"
+        multiple
+        size="6"
+        required
+        {% if not tables %}disabled{% endif %}
+    >
+        {% for table in tables %}
+        <option value="{{ table }}">{{ table }}</option>
+        {% else %}
+        <option value="" disabled>Select a datasource first</option>
+        {% endfor %}
+    </select>
+    {% if schema_error %}
+    <div class="form-text text-danger">{{ schema_error }}</div>
+    {% else %}
+    <div class="form-text">
+        Ctrl-click (or Cmd-click) to include more than one, so the AI can join them —
+        up to 25. Only the tables you pick here are shown to the AI.
+    </div>
+    {% endif %}
+</div>

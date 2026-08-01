@@ -1,0 +1,59 @@
+{% extends "base/layout.htm" %}
+{% block title %}Data Agents | GetMyStuff{% endblock %}
+
+{% block content %}
+<div class="container mt-4" style="max-width: 100%;">
+
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h5 class="fw-semibold mb-0">
+            <i class="las la-robot text-primary"></i> Data Agents
+            {% if workspace_filter_name %}
+            <span class="badge bg-light text-dark border align-middle">
+                <i class="las la-layer-group"></i> {{ workspace_filter_name }}
+            </span>
+            {% endif %}
+        </h5>
+        <button
+            class="btn btn-primary btn-sm"
+            type="button"
+            hx-get="/data-agents/new-form{% if workspace_filter %}?workspace={{ workspace_filter }}{% endif %}"
+            hx-target="#agentModalContent"
+            hx-swap="innerHTML"
+            data-bs-toggle="modal"
+            data-bs-target="#agentModal"
+        >
+            <i class="las la-plus"></i> New Data Agent
+        </button>
+    </div>
+
+    <p class="text-muted small mb-3">
+        A data agent answers questions using the tools you give it. Assigning it to a
+        <a href="/workspaces">workspace</a> is optional and only groups it. What it can
+        actually reach is defined in <a href="/tool-configs">Tool Configs</a> — an agent with
+        no tool configs is inert.
+        {% if workspace_filter_name %}
+        This list is filtered to <strong>{{ workspace_filter_name }}</strong> —
+        <a href="/data-agents">show all agents</a>.
+        {% endif %}
+    </p>
+
+    <div id="agentResponse" class="mb-2"></div>
+
+    {% include "data_agents/partials/agents_table.htm" %}
+
+</div>
+
+<!-- ============================================
+     MODAL — NEW / EDIT DATA AGENT
+     Body fetched per open, so create and edit share one dialog and one partial.
+     ============================================ -->
+<div class="modal fade" tabindex="-1" id="agentModal" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content" id="agentModalContent">
+            <div class="modal-body text-center text-muted py-4">
+                <i class="las la-spinner la-spin fs-4"></i> Loading…
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

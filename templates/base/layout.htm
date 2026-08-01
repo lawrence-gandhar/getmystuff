@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{% block title %}GetMyStuff{% endblock %}</title>
 <link rel="icon" type="image/png" href="/static/images/favicon.png">
+<link href="/static/css/brand.css" rel="stylesheet">
 
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
@@ -37,7 +38,7 @@ body {
     top: 0;
     bottom: 0;
     left: 0;
-    padding-top: 70px;
+    padding-top: 110px;
     overflow-y: auto;
     transition: all 0.3s ease;
 }
@@ -82,7 +83,7 @@ body {
 .main-content {
     margin-left: 250px;
     flex: 1;
-    padding-top: 70px;
+    padding-top: 110px !important;
 }
 
 /* Navbar */
@@ -91,17 +92,12 @@ body {
     width: 100%;
     z-index: 1000;
     /* background: #ffffff; */
-    border-bottom: 1px solid #e5e7eb;
-}
-
-.navbar-brand span {
-    color: #2563eb;
-    font-weight: 600;
+    border-bottom: 1px solid #60a5fa;
 }
 
 .user-info {
     font-size: 14px;
-    color: #374151;
+    color: #ffffff;
 }
 
 .logout-btn {
@@ -130,8 +126,10 @@ body {
 <!-- 🔷 NAVBAR -->
 <nav class="navbar navbar-expand-lg navbar-custom">
     <div class="container-fluid">
-        <a class="navbar-brand" href="#">
-            <i class="las la-box-open"></i> Get<span style="color:#ffd43b">MyStuff</span>
+        {# The brand was href="#". Pointing it at the dashboard matches the sidebar
+           link below and is what clicking a logo is expected to do. #}
+        <a class="navbar-brand" href="/user/dashboard">
+            {% include "base/partials/brand.htm" %}
         </a>
 
         <div class="d-flex align-items-center ms-auto">
@@ -164,6 +162,18 @@ body {
 
         <a href="/datasource/configurations" class="{% if active == 'datasource_configuration' %}active{% endif %}">
             <i class="las la-code"></i> Configurations
+        </a>
+
+        <a href="/workspaces" class="{% if active == 'workspaces' %}active{% endif %}">
+            <i class="las la-layer-group"></i> Workspaces
+        </a>
+
+        <a href="/data-agents" class="{% if active == 'data_agents' %}active{% endif %}">
+            <i class="las la-robot"></i> Data Agents
+        </a>
+
+        <a href="/tool-configs" class="{% if active == 'tool_configs' %}active{% endif %}">
+            <i class="las la-tools"></i> Tool Configs
         </a>
 
         <a href="/ai-settings" class="{% if active == 'ai_settings' %}active{% endif %}">

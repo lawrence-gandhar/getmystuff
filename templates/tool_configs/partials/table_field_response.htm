@@ -1,0 +1,13 @@
+{# The response to picking a datasource: the Table field for that datasource, plus
+   an out-of-band reset of the query builder.
+
+   The builder has to go with it. A query — its joins especially — is built against
+   one datasource's tables, so leaving the previous one's builder on screen under a
+   newly chosen datasource would offer columns that are no longer there. Resetting it
+   puts the form back to "pick a table", which is where the datasource change left
+   it anyway. #}
+{% include "tool_configs/partials/table_field.htm" %}
+
+{% with oob_swap = True %}
+{% include "tool_configs/partials/query_builder.htm" %}
+{% endwith %}

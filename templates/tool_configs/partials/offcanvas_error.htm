@@ -1,0 +1,13 @@
+{# Offcanvas body for a form that couldn't be loaded (deleted row, wrong owner).
+   Rendered into the same body target as the form itself, so the user gets a
+   readable reason inside the panel they just opened instead of an empty shell or a
+   raw error page. The heading is retitled out of band, exactly as the form does. #}
+<h5 class="offcanvas-title" id="toolConfigOffcanvasLabel" hx-swap-oob="true">
+    <i class="las la-exclamation-circle text-danger"></i> Could not open
+</h5>
+
+<div class="alert alert-danger">{{ error }}</div>
+
+<button type="button" class="btn btn-outline-secondary" data-bs-dismiss="offcanvas">
+    Close
+</button>

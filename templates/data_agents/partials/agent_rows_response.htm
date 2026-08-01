@@ -1,0 +1,9 @@
+{# HTMX response for every data-agent mutation: the inline error (or a success
+   marker the modal's after-request hook closes itself on) plus an out-of-band
+   refresh of the agents table. #}
+{% if error %}
+<div class="alert alert-danger" data-success="false">{{ error }}</div>
+{% else %}
+<div data-success="true"></div>
+{% endif %}
+{% include "data_agents/partials/agents_table.htm" %}

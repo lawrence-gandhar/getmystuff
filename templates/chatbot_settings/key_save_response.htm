@@ -1,5 +1,6 @@
+{# Response for create/update: success marker into the offcanvas form's response
+   target (the form's after-request hook closes the offcanvas on it), plus an
+   out-of-band refresh of the download button and the agents table. #}
 <div data-success="true"></div>
 {% include "chatbot_settings/widget_download_button.htm" %}
-<tbody id="chatbotKeysTableBody" hx-swap-oob="true">
-{% include "chatbot_settings/key_rows_body.htm" %}
-</tbody>
+{% include "chatbot_settings/partials/keys_table.htm" %}

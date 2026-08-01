@@ -24,20 +24,36 @@ Database
 app/
 
 db/          shared infra (base.py, db_sessions.py, db_utils.py, models.py) + per-feature subfolders
-routes/      per-feature subfolders (auth/, dashboard/, datasource/, ai_settings/, ai_analytics/, chatbot/, chatbot_analytics/, flow_builder/)
-services/    per-feature subfolders (datasource/, ai_settings/, ai_analytics/, chatbot/, chatbot_analytics/, flow_builder/, ai_inbuilt/)
-models/      per-feature subfolders (user/, datasource/, ai_settings/, chatbot/, ai_analytics/, subscriptions/, flow_builder/, ai_inbuilt/)
+routes/      per-feature subfolders (auth/, dashboard/, datasource/, ai_settings/, ai_analytics/,
+             chatbot/, chatbot_analytics/, flow_builder/, workspaces/, data_agents/,
+             tool_configs/, sql_assist/, deep_agents/)
+services/    per-feature subfolders (datasource/, ai_settings/, ai_analytics/, chatbot/,
+             chatbot_analytics/, flow_builder/, ai_inbuilt/, workspaces/, data_agents/,
+             tool_configs/, sql_assist/, deep_agents/)
+models/      per-feature subfolders (user/, datasource/, ai_settings/, chatbot/, ai_analytics/,
+             subscriptions/, flow_builder/, ai_inbuilt/, workspaces/, data_agents/, tool_configs/)
 schemas/
 utils/
 templates/
 static/
 ```
 
+`deep_agents/` has no `models/` subfolder: it runs what Data Agents and Tool Configs
+already define, and owns no table of its own.
+
 Feature deep-dives: [FLOW_BUILDER.md](FLOW_BUILDER.md),
 [CHATBOT_AI_SETTINGS.md](CHATBOT_AI_SETTINGS.md) (per-agent prompt, prompt variables,
 language-model choice, webhook actions and flow attachment),
 [CHATBOT_ANALYTICS.md](CHATBOT_ANALYTICS.md) (per-turn performance logging and the
-dashboard over it), [AI_INBUILT.md](AI_INBUILT.md).
+dashboard over it), [AI_INBUILT.md](AI_INBUILT.md),
+[QUERY_JOINS.md](QUERY_JOINS.md) (joining several tables into one authored query, in both
+places a query is built), [SQL_ASSIST.md](SQL_ASSIST.md) (Ask AI — plain English to SQL from
+reflected schema, never from the data; and Auto Create Tool, which saves the result as a tool
+config that reopens fully editable in the query builder),
+[DEEP_AGENTS.md](DEEP_AGENTS.md) (running a data agent's tool configs as real queries so a
+chatbot answers from tool results and the language model never reads the database),
+[DOCKER_AND_LOCAL_LLM.md](DOCKER_AND_LOCAL_LLM.md) (why the app runs in a container on
+Python 3.12, and how the in-built Ollama models are configured and measured).
 
 Four objects the sidebar exposes separately, because their ownership differs:
 
@@ -105,6 +121,13 @@ Examples:
 * db_utils.py
 * validators.py
 * exceptions.py
+* query_joins.py — the join rules (which datasource types can join, which join types
+  each dialect has, how a `table.column` reference is checked) shared by the two
+  places a query is authored: the Tool Configs library and the Configurations page's
+  Tool Base Config panel. Its `build_join_sql` renders joins for *display* only; the
+  Deep Agents executor builds real joins from reflected tables
+* turn_recorder.py — per-turn token and timing accumulation via a ContextVar, so the
+  layer that knows a call's cost need not thread it up to the layer that logs the turn
 
 ---
 

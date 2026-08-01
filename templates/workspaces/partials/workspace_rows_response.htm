@@ -1,0 +1,9 @@
+{# HTMX response for every workspace mutation: the inline error (or a success
+   marker the modal's after-request hook closes itself on) plus an out-of-band
+   refresh of the workspaces table. #}
+{% if error %}
+<div class="alert alert-danger" data-success="false">{{ error }}</div>
+{% else %}
+<div data-success="true"></div>
+{% endif %}
+{% include "workspaces/partials/workspaces_table.htm" %}

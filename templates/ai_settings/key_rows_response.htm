@@ -1,9 +1,12 @@
-<div id="ai-settings-response" hx-swap-oob="true">
+{# Response for toggle-active/delete: any error message goes into the page-level
+   response target the row buttons point at, plus an out-of-band refresh of the
+   API keys table. #}
 {% if error %}
-    <div class="alert alert-danger alert-dismissible fade show mb-3">
-        {{ error }}
-        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-    </div>
-{% endif %}
+<div class="alert alert-danger alert-dismissible fade show mb-3" data-success="false">
+    {{ error }}
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
 </div>
-{% include "ai_settings/key_rows_body.htm" %}
+{% else %}
+<div data-success="true"></div>
+{% endif %}
+{% include "ai_settings/keys_table.htm" %}

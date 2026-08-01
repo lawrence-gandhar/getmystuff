@@ -43,7 +43,7 @@
             <button
                 class="btn btn-sm {% if key.is_active %}btn-outline-warning{% else %}btn-outline-success{% endif %}"
                 hx-post="/chatbot-settings/{{ key.uuid }}/toggle-active"
-                hx-target="#chatbotKeysTableBody"
+                hx-target="#chatbot-settings-response"
                 hx-swap="innerHTML"
             >
                 {% if key.is_active %}Deactivate{% else %}Activate{% endif %}
@@ -68,7 +68,7 @@
             <button
                 class="btn btn-sm btn-outline-danger"
                 hx-post="/chatbot-settings/{{ key.uuid }}/delete"
-                hx-target="#chatbotKeysTableBody"
+                hx-target="#chatbot-settings-response"
                 hx-swap="innerHTML"
                 hx-confirm="Delete agent '{{ key.name }}'? Any widget using it will stop working, and its flow is detached (but kept). This cannot be undone."
             >

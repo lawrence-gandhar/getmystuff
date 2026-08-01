@@ -1,0 +1,45 @@
+{# The tool config was created. Swapped into #sqlAssistToolPanel, and the host page's
+   table is rebuilt out of band by the include at the bottom — the same way every Tool
+   Configs mutation answers.
+
+   The Edit button opens the new tool in the Tool Config panel, which is the point of
+   the whole flow: what the AI drafted is a normal tool config, so it reopens in the
+   query builder with every column, aggregation, filter and join prefilled and
+   editable. It closes this panel first, since both are offcanvases. #}
+<div class="card border-success mb-0">
+    <div class="card-body">
+        <h6 class="fw-semibold text-success mb-2">
+            <i class="las la-check-circle"></i> Tool config created
+        </h6>
+
+        <p class="small mb-3">
+            <code>{{ tool_config.tool_name }}</code> is saved and enabled. It reads
+            <code>{{ tool_config.table_name }}</code>.
+        </p>
+
+        <div class="d-flex flex-wrap gap-2">
+            <button
+                type="button"
+                class="btn btn-sm btn-primary"
+                hx-get="/tool-configs/{{ tool_config.uuid }}/edit-form"
+                hx-target="#toolConfigOffcanvasContent"
+                hx-swap="innerHTML"
+                data-bs-toggle="offcanvas"
+                data-bs-target="#toolConfigOffcanvas"
+                onclick="bootstrap.Offcanvas.getInstance(document.getElementById('sqlAssistOffcanvas'))?.hide();"
+            >
+                <i class="las la-edit"></i> Edit tool config
+            </button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-dismiss="offcanvas">
+                Done
+            </button>
+        </div>
+
+        <p class="form-text mb-0 mt-2">
+            Ask something else above to build another one — the conversation is still
+            here.
+        </p>
+    </div>
+</div>
+
+{% include "tool_configs/partials/tool_configs_table.htm" %}

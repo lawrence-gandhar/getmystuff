@@ -1,0 +1,99 @@
+{% extends "base/layout.htm" %}
+{% block title %}Tool Configs | GetMyStuff{% endblock %}
+
+{% block content %}
+<div class="container mt-4" style="max-width: 100%;">
+
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h5 class="fw-semibold mb-0">
+            <i class="las la-tools text-primary"></i> Tool Configs
+            {% if agent_filter_name %}
+            <span class="badge bg-light text-dark border align-middle">
+                <i class="las la-robot"></i> {{ agent_filter_name }}
+            </span>
+            {% endif %}
+        </h5>
+        <div class="d-flex gap-2">
+            {# Ask AI is its own module (app/routes/sql_assist) — the button lives here
+               because this is where a query gets written, but the panel is
+               self-contained and reusable from any page with a datasource in view. #}
+            <button
+                class="btn btn-outline-primary btn-sm"
+                type="button"
+                hx-get="/sql-assist/form{% if agent_filter %}?agent={{ agent_filter }}{% endif %}"
+                hx-target="#sqlAssistOffcanvasContent"
+                hx-swap="innerHTML"
+                data-bs-toggle="offcanvas"
+                data-bs-target="#sqlAssistOffcanvas"
+            >
+                <i class="las la-magic"></i> Ask AI
+            </button>
+            <button
+                class="btn btn-primary btn-sm"
+                type="button"
+                hx-get="/tool-configs/new-form{% if agent_filter %}?agent={{ agent_filter }}{% endif %}"
+                hx-target="#toolConfigOffcanvasContent"
+                hx-swap="innerHTML"
+                data-bs-toggle="offcanvas"
+                data-bs-target="#toolConfigOffcanvas"
+            >
+                <i class="las la-plus"></i> New Tool Config
+            </button>
+        </div>
+    </div>
+
+    <p class="text-muted small mb-3">
+        A tool config is one query a <a href="/data-agents">data agent</a> is allowed to run:
+        pick the datasource and table, then choose the columns, aggregations, grouping and
+        filters — and on a relational datasource, any tables to join in. Disabling a tool
+        revokes it without losing the definition.
+        {% if agent_filter_name %}
+        This list is filtered to <strong>{{ agent_filter_name }}</strong> —
+        <a href="/tool-configs">show all tool configs</a>.
+        {% endif %}
+    </p>
+
+    <div id="toolConfigResponse" class="mb-2"></div>
+
+    {% include "tool_configs/partials/tool_configs_table.htm" %}
+
+</div>
+
+<!-- ============================================
+     OFFCANVAS — NEW / EDIT TOOL CONFIG
+     A wide panel rather than a modal, matching the Tool Base Config offcanvas on
+     the Configurations page: the query builder needs the room.
+
+     Only the body is fetched per open, so Bootstrap's own header/body structure
+     stays intact (an .offcanvas-body has to be a direct flex child of .offcanvas to
+     scroll). The form partial retitles the panel with an out-of-band swap of the
+     heading below.
+     ============================================ -->
+<div
+    class="offcanvas offcanvas-end"
+    tabindex="-1"
+    id="toolConfigOffcanvas"
+    aria-labelledby="toolConfigOffcanvasLabel"
+    style="width: 75vw;"
+    data-bs-backdrop="static"
+    data-bs-keyboard="false"
+>
+    <div class="offcanvas-header border-bottom">
+        <h5 class="offcanvas-title" id="toolConfigOffcanvasLabel">
+            <i class="las la-tools text-primary"></i> New Tool Config
+        </h5>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+    </div>
+
+    <div class="offcanvas-body" id="toolConfigOffcanvasContent">
+        <div class="text-center text-muted py-4">
+            <i class="las la-spinner la-spin fs-4"></i> Loading…
+        </div>
+    </div>
+</div>
+
+{% include "sql_assist/panel.htm" %}
+
+<script src="/static/js/tool_configs.js"></script>
+<script src="/static/js/sql_assist.js"></script>
+{% endblock %}

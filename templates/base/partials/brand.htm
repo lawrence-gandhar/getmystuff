@@ -1,0 +1,32 @@
+{# The GetMyStuff logo lockup — the one place it is defined.
+
+   Included by the app shell (layout.htm), the landing page (index.htm) and the login
+   page (login.htm). Before this, each of the three drew its own icon-plus-text version
+   with a *different* icon — la-box-open in two places, la-brain in the third — so the
+   product had three logos depending on where you were standing. One partial means a
+   brand change is one edit.
+
+   Size is set by a modifier class rather than an inline style (see ARCHITECTURE.md's
+   template rules); the classes live in static/css/base.css. Callers pass one via
+   `brand_class`:
+
+       {% with brand_class = "brand-logo-img--auth" %}
+           {% include "base/partials/brand.htm" %}
+       {% endwith %}
+
+   The asset is 425x160 with a transparent background. Every size below is smaller than
+   that, so the logo stays sharp on a 2x display without a separate @2x file.
+
+   The width/height attributes are the *intrinsic* dimensions, not the rendered ones —
+   the CSS overrides the height and leaves width automatic. They are here so the browser
+   knows the aspect ratio before the PNG loads and reserves the right space, instead of
+   reflowing the navbar as it arrives.
+
+   alt is the brand name, so a missing or blocked image degrades to the readable word
+   "GetMyStuff" rather than a broken-image icon. #}
+<img
+    src="/static/images/logo.png"
+    alt="GetMyStuff"
+    width="auto"
+    height="60"
+>

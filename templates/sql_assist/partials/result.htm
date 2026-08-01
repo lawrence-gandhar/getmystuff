@@ -1,0 +1,114 @@
+{# One attempt at the query, swapped into #sqlAssistResult.
+
+   The hidden history field is what makes refinement work: the form pulls it in with
+   hx-include, so generating again sends the attempts so far and the model improves on
+   the last one instead of starting over. It lives here, in the response, so the
+   conversation is whatever the server last confirmed rather than whatever the browser
+   has been holding.
+
+   `sql` is empty when the schema cannot answer the request — a real answer, not a
+   failure, so it is presented as one. #}
+{# Single-quoted on purpose: `tojson` escapes <, >, & and ' but deliberately leaves
+   double quotes alone, so the JSON would break out of a double-quoted attribute. #}
+<input
+    type="hidden"
+    id="sqlAssistHistory"
+    name="history_json"
+    value='{{ history | tojson }}'
+>
+
+{% if draft.sql %}
+{# Everything "Auto Create Tool" needs to convert this exact query, without the user
+   re-picking any of it. Posted as its own form because #sqlAssistResult sits outside
+   the main one — nesting forms is invalid HTML. #}
+<form
+    id="sqlAssistToolForm"
+    hx-post="/sql-assist/tool-form"
+    hx-target="#sqlAssistToolPanel"
+    hx-swap="innerHTML"
+    hx-indicator="#sqlAssistToolSpinner"
+    hx-disabled-elt="#sqlAssistAutoCreate"
+>
+    <input type="hidden" name="datasource_id" value="{{ datasource_id }}">
+    <input type="hidden" name="llm_mode" value="{{ llm_mode }}">
+    <input type="hidden" name="llm_api_key_id" value="{{ llm_api_key_id }}">
+    <input type="hidden" name="agent_filter" value="{{ agent_filter }}">
+    <input type="hidden" name="sql" value="{{ draft.sql }}">
+    {% for table in tables %}
+    <input type="hidden" name="table_names" value="{{ table }}">
+    {% endfor %}
+</form>
+
+<div class="card border-primary mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <strong><i class="las la-code text-primary"></i> {{ dialect }} Query</strong>
+        <div class="d-flex align-items-center gap-2">
+            <span id="sqlAssistToolSpinner" class="htmx-indicator text-muted small">
+                <i class="las la-spinner la-spin"></i> Reading the query…
+            </span>
+            <button
+                type="submit"
+                form="sqlAssistToolForm"
+                id="sqlAssistAutoCreate"
+                class="btn btn-sm btn-primary"
+            >
+                <i class="las la-tools"></i> Auto Create Tool
+            </button>
+            <button
+                type="button"
+                class="btn btn-sm btn-outline-primary"
+                data-copy-target="#sqlAssistSql"
+            >
+                <i class="las la-copy"></i> Copy
+            </button>
+        </div>
+    </div>
+    <div class="card-body bg-dark text-light font-monospace small">
+        <pre class="mb-0 text-wrap" id="sqlAssistSql">{{ draft.sql }}</pre>
+    </div>
+    <div class="card-footer bg-transparent small text-muted">
+        Read-only, and not run — review it before you use it.
+        {% if tables %}
+        Written against {{ tables | join(", ") }}.
+        {% endif %}
+        <strong>Auto Create Tool</strong> saves it as a tool config an agent can run.
+    </div>
+</div>
+
+{# Where the Auto Create Tool draft lands: the parsed query plus the name to save it
+   under, or the reason it cannot be represented as a tool. #}
+<div id="sqlAssistToolPanel"></div>
+{% else %}
+<div class="alert alert-warning small">
+    <i class="las la-exclamation-triangle"></i>
+    <strong>No query for this one.</strong> The AI could not answer your request from
+    the schema of the tables you picked — see below, and try including another table
+    or rewording what you need.
+</div>
+{% endif %}
+
+<div class="card mb-3">
+    <div class="card-header">
+        <strong><i class="las la-comment-dots text-muted"></i> What it did</strong>
+    </div>
+    <div class="card-body">
+        <p class="mb-0 small">{{ draft.explanation }}</p>
+
+        {% if draft.assumptions %}
+        <hr class="my-3">
+        <p class="fw-semibold small mb-1">Assumptions it made</p>
+        <ul class="small mb-0">
+            {% for assumption in draft.assumptions %}
+            <li>{{ assumption }}</li>
+            {% endfor %}
+        </ul>
+        {% endif %}
+    </div>
+</div>
+
+<p class="text-muted small mb-0">
+    <i class="las la-redo-alt"></i>
+    Not quite right? Edit the prompt above and generate again — this is refinement
+    {{ history | length }} of the same conversation, and the AI still sees only the
+    schema.
+</p>

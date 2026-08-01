@@ -49,6 +49,73 @@
     </div>
 </div>
 
+<!-- DATA AGENT — its own form, like Conversation Flow above: the attachment is
+     stored on the chatbot key row, not in this agent's AI settings. -->
+<div class="row g-3">
+    <div class="col-lg-7">
+        <div class="card shadow-sm mb-3">
+            <div class="card-header bg-white fw-semibold d-flex justify-content-between align-items-center">
+                <span><i class="las la-robot text-primary"></i> Data Agent</span>
+                <a class="btn btn-sm btn-outline-secondary" href="/data-agents">
+                    <i class="las la-external-link-alt"></i> Open Data Agents
+                </a>
+            </div>
+            <div class="card-body">
+                <p class="text-muted small mb-3">
+                    Attach a data agent and this chatbot answers data questions by running
+                    that agent's tools &mdash; the model sees only what a tool returns, never
+                    your tables. Leave it unset and the chatbot answers from a statistical
+                    profile of its data scope, which is what it does today.
+                </p>
+
+                <form method="post" action="/chatbot-settings/{{ key.uuid }}/data-agent"
+                      class="row g-2 align-items-end">
+                    <div class="col-md-5">
+                        <label for="caiWorkspaceSelect" class="form-label fw-semibold small mb-1">
+                            Workspace
+                        </label>
+                        <select class="form-select" id="caiWorkspaceSelect" name="workspace_id"
+                                hx-get="/deep-agents/agent-options"
+                                hx-trigger="change"
+                                hx-target="#caiDataAgentField"
+                                hx-swap="innerHTML"
+                                hx-include="this">
+                            <option value="">All workspaces</option>
+                            {% for workspace in workspaces %}
+                            <option value="{{ workspace.uuid }}"
+                                    {% if selected_workspace_id == workspace.uuid %}selected{% endif %}>
+                                {{ workspace.name }}{% if not workspace.is_active %} (archived){% endif %}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="col-md-7">
+                        <label for="deepAgentSelect" class="form-label fw-semibold small mb-1">
+                            Agent
+                        </label>
+                        <div id="caiDataAgentField">
+                            {% include "deep_agents/partials/agent_options.htm" %}
+                        </div>
+                    </div>
+
+                    <div class="col-12 d-flex gap-2 mt-2">
+                        <button type="submit" class="btn btn-outline-primary">
+                            <i class="las la-link"></i> Save data agent
+                        </button>
+                        {% if selected_agent_id %}
+                        <a class="btn btn-outline-secondary"
+                           href="/deep-agents/{{ selected_agent_id }}/console">
+                            <i class="las la-vial"></i> Test this agent
+                        </a>
+                        {% endif %}
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
 <form id="chatbotAiSettingsForm"
       method="post"
       action="/chatbot-settings/{{ key.uuid }}/ai-settings"

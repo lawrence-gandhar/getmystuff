@@ -1,0 +1,51 @@
+{% extends "base/layout.htm" %}
+{% block title %}Workspaces | GetMyStuff{% endblock %}
+
+{% block content %}
+<div class="container mt-4" style="max-width: 100%;">
+
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h5 class="fw-semibold mb-0">
+            <i class="las la-layer-group text-primary"></i> Workspaces
+        </h5>
+        <button
+            class="btn btn-primary btn-sm"
+            type="button"
+            hx-get="/workspaces/new-form"
+            hx-target="#workspaceModalContent"
+            hx-swap="innerHTML"
+            data-bs-toggle="modal"
+            data-bs-target="#workspaceModal"
+        >
+            <i class="las la-plus"></i> New Workspace
+        </button>
+    </div>
+
+    <p class="text-muted small mb-3">
+        A workspace groups the data agents you build for one project, team or environment.
+        Agents themselves live in <a href="/data-agents">Data Agents</a> and are assigned to a
+        workspace from there — so archiving a workspace only stops new agents being assigned
+        to it, and deleting one leaves its agents in place as unassigned.
+    </p>
+
+    <div id="workspaceResponse" class="mb-2"></div>
+
+    {% include "workspaces/partials/workspaces_table.htm" %}
+
+</div>
+
+<!-- ============================================
+     MODAL — NEW / EDIT WORKSPACE
+     The body is fetched per open (hx-get above and on each row's Edit button),
+     so create and edit share one dialog and one form partial.
+     ============================================ -->
+<div class="modal fade" tabindex="-1" id="workspaceModal" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content" id="workspaceModalContent">
+            <div class="modal-body text-center text-muted py-4">
+                <i class="las la-spinner la-spin fs-4"></i> Loading…
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

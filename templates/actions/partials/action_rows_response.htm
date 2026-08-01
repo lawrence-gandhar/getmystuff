@@ -1,5 +1,5 @@
 {# HTMX response for every library mutation: inline error (or success marker) into
-   the response target, plus an out-of-band swap of the actions table body. #}
+   the response target, plus an out-of-band refresh of the actions table. #}
 {% if error %}
 <div class="alert alert-danger py-2 small mb-0" data-success="false">
     <i class="las la-exclamation-circle"></i> {{ error }}
@@ -7,6 +7,4 @@
 {% else %}
 <div data-success="true"></div>
 {% endif %}
-<tbody id="actionsTableBody" hx-swap-oob="true">
-{% include "actions/partials/action_rows_body.htm" %}
-</tbody>
+{% include "actions/partials/actions_table.htm" %}

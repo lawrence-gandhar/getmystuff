@@ -1,0 +1,33 @@
+{# "Add an action from your library" picker. Rendered both by the settings page and
+   by every attach/detach response, so the list of still-attachable actions stops
+   being stale as soon as one is added or removed. Swapped out of band by id — see
+   the note in chatbot_settings/partials/actions_table.htm. #}
+<div id="chatbotActionPickerWrap" class="col-md-8" hx-swap-oob="true">
+    <label for="cbActionPicker" class="form-label fw-semibold small mb-1">
+        Add an action from your library
+    </label>
+    <select class="form-select" id="cbActionPicker" name="action_id"
+            {% if not attachable_actions %}disabled{% endif %} required>
+        {% if attachable_actions %}
+        <option value="">Select an action&hellip;</option>
+        {% for option in attachable_actions %}
+        <option value="{{ option.uuid }}">{{ option.name }} &mdash; {{ option.description | truncate(70) }}</option>
+        {% endfor %}
+        {% else %}
+        <option value="">No active actions left to add</option>
+        {% endif %}
+    </select>
+    <div class="form-text">
+        Only <strong>active</strong> actions you haven't added yet are listed.
+        {% if not attachable_actions %}
+        Create one with <em>New Action</em>, or activate an existing one in
+        <a href="/actions">Actions</a>.
+        {% endif %}
+    </div>
+</div>
+<div id="chatbotActionPickerSubmitWrap" class="col-md-4" hx-swap-oob="true">
+    <button type="submit" class="btn btn-outline-primary"
+            {% if not attachable_actions %}disabled{% endif %}>
+        <i class="las la-plus"></i> Add to this agent
+    </button>
+</div>

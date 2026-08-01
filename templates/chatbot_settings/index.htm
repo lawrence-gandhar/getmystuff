@@ -38,25 +38,7 @@
     <!-- RESPONSE AREA -->
     <div id="chatbot-settings-response" class="mb-3"></div>
 
-    <div class="card shadow-sm">
-        <div class="table-responsive">
-            <table class="table table-hover align-middle mb-0">
-                <thead class="table-light">
-                    <tr>
-                        <th>Name</th>
-                        <th>Target</th>
-                        <th>Publishable Key</th>
-                        <th>Allowed Domains</th>
-                        <th style="width:100px;">Status</th>
-                        <th style="width:280px;">Actions</th>
-                    </tr>
-                </thead>
-                <tbody id="chatbotKeysTableBody">
-                    {% include "chatbot_settings/key_rows_body.htm" %}
-                </tbody>
-            </table>
-        </div>
-    </div>
+    {% include "chatbot_settings/partials/keys_table.htm" %}
 
 </div>
 
@@ -155,6 +137,57 @@
                     The widget will be able to answer questions about every table, collection, or file
                     currently in this datasource.
                 </div>
+
+                {# ---- Optional Deep Agent attachment: Workspace -> Data Agent ----
+
+                   Both optional. Left blank, the widget answers from a statistical
+                   profile of the target chosen above — exactly as every chatbot did
+                   before data agents existed. With an agent picked, the assistant
+                   instead runs that agent's tools and only ever sees their results.
+
+                   The agent list is a cascade off the workspace, and the fragment is
+                   served by /deep-agents/agent-options so this form and the AI tab's
+                   own picker cannot offer different sets of agents. #}
+                <fieldset class="mb-3 border rounded p-2">
+                    <legend class="form-label fw-semibold h6 px-1">
+                        Data Agent <span class="text-muted fw-normal small">(optional)</span>
+                    </legend>
+
+                    <div class="mb-2">
+                        <label for="cbWorkspaceSelect" class="form-label small fw-semibold mb-1">
+                            Workspace
+                        </label>
+                        <select
+                            id="cbWorkspaceSelect"
+                            name="workspace_id"
+                            class="form-select"
+                            hx-get="/deep-agents/agent-options"
+                            hx-trigger="change"
+                            hx-target="#cbDataAgentField"
+                            hx-swap="innerHTML"
+                            hx-include="this"
+                        >
+                            <option value="">All workspaces</option>
+                            {% for workspace in workspaces %}
+                            <option value="{{ workspace.uuid }}">
+                                {{ workspace.name }}{% if not workspace.is_active %} (archived){% endif %}
+                            </option>
+                            {% endfor %}
+                        </select>
+                        <div class="form-text">
+                            Narrows the agent list below. An agent doesn't need a workspace.
+                        </div>
+                    </div>
+
+                    <div>
+                        <label for="deepAgentSelect" class="form-label small fw-semibold mb-1">
+                            Agent
+                        </label>
+                        <div id="cbDataAgentField">
+                            {% include "deep_agents/partials/agent_options.htm" %}
+                        </div>
+                    </div>
+                </fieldset>
             </div>
 
             <div id="cbTargetReadonly" class="mb-3 alert alert-secondary py-2 small" style="display:none;">

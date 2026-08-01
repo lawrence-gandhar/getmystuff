@@ -1,0 +1,25 @@
+# The local 3.10 virtualenv must never reach the image — it would shadow the
+# 3.12 site-packages installed by the Dockerfile.
+venv/
+.venv/
+
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+.git/
+.gitignore
+
+# Secrets are supplied through docker-compose.yml's env_file / environment, not
+# baked into an image layer.
+.env
+
+.idea/
+.vscode/
+*.swp
+
+# Runtime artefacts — mounted as volumes instead.
+uploads/
+*.log
+*.sqlite
+*.db

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from urllib.parse import quote_plus
 
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, AsyncEngine
-from sqlalchemy import text, select, and_
+from sqlalchemy import inspect, text, select, and_
 from sqlalchemy.exc import SQLAlchemyError
 
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -327,6 +327,147 @@ async def fetch_rdbms_schema(url: str, db_type: str, table_name: str):
     except SQLAlchemyError:
         await _register_failure(wrapper)
         raise
+
+
+# ==========================================================
+# REFLECTED METADATA (SQLAlchemy Inspector)
+#
+# A second, deliberately separate way to read an RDBMS's shape, used where the
+# *only* thing that may be read is the shape: the AI SQL assistant is shown table
+# names, column names and types, primary keys and foreign keys, and never a row of
+# the user's data.
+#
+# Nothing here hand-writes SQL. Reflection goes through SQLAlchemy's Inspector,
+# which emits its own dialect-correct catalog queries — so there is no query string
+# in this application for a table or column name to be interpolated into, and
+# adding a dialect adds no branch here (contrast fetch_rdbms_tables /
+# fetch_rdbms_schema above, which keep a per-dialect query for the older callers
+# that already depend on their exact output).
+#
+# Inspector is a sync API, so it runs inside `conn.run_sync` on the async engine's
+# connection — the standard way to reflect over an AsyncEngine.
+# ==========================================================
+
+# Reflecting a table costs a catalog round-trip, and every table reflected also
+# lands in an AI prompt, so the count is bounded rather than "however many the
+# caller asked for".
+MAX_REFLECTED_TABLES = 25
+
+
+async def fetch_rdbms_table_names(url: str) -> List[str]:
+    """
+    Every table and view name in the database's default schema, via reflection.
+
+    Views are included because they are as queryable as a table — for generating a
+    SELECT they are equally valid targets.
+    """
+    engine = await get_engine(url)
+    wrapper = _engine_cache[url]
+
+    def _list(sync_conn) -> List[str]:
+        inspector = inspect(sync_conn)
+        return sorted(set(inspector.get_table_names()) | set(inspector.get_view_names()))
+
+    try:
+        async with engine.connect() as conn:
+            names = await conn.run_sync(_list)
+        await _register_success(wrapper)
+        return names
+
+    except SQLAlchemyError:
+        await _register_failure(wrapper)
+        raise
+
+
+async def fetch_rdbms_metadata(
+    url: str,
+    table_names: List[str],
+) -> List[Dict[str, Any]]:
+    """
+    Reflect the structure of the named tables — columns with their types, primary
+    keys, and foreign keys.
+
+    Only names that actually exist are reflected; the caller compares what it asked
+    for against what came back and reports the difference, rather than a missing
+    table being quietly absent from the result (see
+    sql_assist_service.generate_sql).
+
+    Foreign keys are included because they are what makes a generated join correct
+    rather than guessed. Column defaults and comments are left out: they can carry
+    literal values from the database, and this path exists precisely to send nothing
+    but structure.
+
+    Returns one entry per table::
+
+        {"table": "orders", "kind": "table",
+         "columns": [{"name": "id", "type": "INTEGER", "nullable": False}],
+         "primary_key": ["id"],
+         "foreign_keys": [{"columns": ["customer_id"],
+                           "references_table": "customers",
+                           "references_columns": ["id"]}]}
+    """
+    engine = await get_engine(url)
+    wrapper = _engine_cache[url]
+
+    def _reflect(sync_conn) -> List[Dict[str, Any]]:
+        inspector = inspect(sync_conn)
+        tables = set(inspector.get_table_names())
+        views = set(inspector.get_view_names())
+
+        wanted = [name for name in table_names if name in tables or name in views]
+
+        return [
+            _reflect_one(inspector, name, is_view=name in views and name not in tables)
+            for name in wanted[:MAX_REFLECTED_TABLES]
+        ]
+
+    try:
+        async with engine.connect() as conn:
+            metadata = await conn.run_sync(_reflect)
+        await _register_success(wrapper)
+        return metadata
+
+    except SQLAlchemyError:
+        await _register_failure(wrapper)
+        raise
+
+
+def _reflect_one(inspector, table_name: str, is_view: bool) -> Dict[str, Any]:
+    """
+    One table's structure as plain JSON-able data.
+
+    Keys and constraints are only asked for on real tables — a view has none, and
+    some dialects raise rather than return empty when asked about one.
+    """
+    entry: Dict[str, Any] = {
+        "table": table_name,
+        "kind": "view" if is_view else "table",
+        "columns": [
+            {
+                "name": column["name"],
+                "type": str(column.get("type")),
+                "nullable": bool(column.get("nullable", True)),
+            }
+            for column in inspector.get_columns(table_name)
+        ],
+    }
+
+    if is_view:
+        return entry
+
+    primary_key = inspector.get_pk_constraint(table_name) or {}
+    entry["primary_key"] = list(primary_key.get("constrained_columns") or [])
+    entry["foreign_keys"] = [
+        {
+            "columns": list(fk.get("constrained_columns") or []),
+            "references_table": fk["referred_table"],
+            "references_columns": list(fk.get("referred_columns") or []),
+        }
+        for fk in inspector.get_foreign_keys(table_name)
+        if fk.get("referred_table")
+    ]
+
+    return entry
 
 
 async def fetch_mongo_schema(uri: str, database: str, collection: str):

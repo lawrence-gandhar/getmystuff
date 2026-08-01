@@ -18,10 +18,6 @@ body {
     font-size: 22px;
 }
 
-.navbar-brand span {
-    color: #ffd700;
-}
-
 /* ===== HERO SECTION ===== */
 .hero-section {
     padding: 120px 0 80px;

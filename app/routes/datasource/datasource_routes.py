@@ -312,12 +312,18 @@ class DataSourceController(Controller):
                             f".{e}" for e in sorted(ALLOWED_EXTENSIONS.get(db_type, set()))
                         ),
                         "initial_results": upload_results,
+                        # Refreshes the three datasource tabs out of band, so the
+                        # new datasource shows up without a manual page reload.
+                        "datasources": await get_user_datasources(db=db, user_id=user.id),
                     },
                 )
 
-            return Response(
-                "<div class='alert alert-success'>Datasource Added Successfully</div>",
-                media_type="text/html",
+            return Template(
+                template_name="datasources/create_response.htm",
+                context={
+                    "error": None,
+                    "datasources": await get_user_datasources(db=db, user_id=user.id),
+                },
             )
         except HTTPException as e:
             # Preserve the original HTTP status code (400 / 409 / 422) so

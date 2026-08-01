@@ -5,7 +5,8 @@ body {
 
 /* Navbar */
 .navbar-custom {
-    background: linear-gradient(90deg, #4e73df, #1cc88a);
+    /* background: linear-gradient(90deg, #4e73df, #1cc88a); */
+    background:#111827;
     padding: 0.8rem 1.5rem;
 }
 

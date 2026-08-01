@@ -30,7 +30,7 @@
                 class="btn btn-sm {% if flow.is_active %}btn-outline-secondary{% else %}btn-outline-success{% endif %}"
                 hx-post="/flow-builder/{{ flow.uuid }}/set-active"
                 hx-vals='{"is_active": "{{ "false" if flow.is_active else "true" }}"}'
-                hx-target="#flowsTableBody"
+                hx-target="#flow-builder-response"
                 hx-swap="innerHTML"
             >
                 {% if flow.is_active %}Make Draft{% else %}Make Active{% endif %}
@@ -38,7 +38,7 @@
             <button
                 class="btn btn-sm btn-outline-danger"
                 hx-post="/flow-builder/{{ flow.uuid }}/delete"
-                hx-target="#flowsTableBody"
+                hx-target="#flow-builder-response"
                 hx-swap="innerHTML"
                 hx-confirm="Delete flow '{{ flow.name }}'?{% if flow.chatbot_name %} It is attached to {{ flow.chatbot_name }}, which will stop using it.{% endif %} This cannot be undone."
             >

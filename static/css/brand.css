@@ -1,0 +1,45 @@
+/* ===== BRAND LOGO =====
+   Styles for templates/base/partials/brand.htm.
+
+   Its own file, not base.css, because base.css also paints a full-page gradient
+   background and white text — correct for the login page, which is the only template
+   that loads it, and wrong for the app shell and the landing page. Those two need the
+   logo sizes without the background, so the sizes live here and all three templates
+   link this.
+
+   `width: auto` with an explicit height
+   is what keeps the 425x160 asset in proportion at every size; the <img> carries its
+   intrinsic dimensions so the browser reserves the space before the PNG arrives.
+
+   The asset already carries its own glow, so no shadow or border is added here — the
+   logo has to sit on the white app navbar and on the login page's gradient without
+   looking like it was pasted onto either. */
+.brand-logo-img {
+    width: auto;
+    max-width: 100%;
+    display: inline-block;
+    vertical-align: middle;
+}
+
+/* App shell and landing-page navbars. Fits the ~56px Bootstrap navbar without
+   forcing it taller. */
+.brand-logo-img--nav {
+    height: 90px;
+}
+
+/* Login page, where the logo is the page's heading rather than a corner mark. */
+.brand-logo-img--auth {
+    height: 64px;
+}
+
+@media (max-width: 576px) {
+    /* The wordmark is nearly 3:1, so on a narrow screen the nav version has to come
+       down or it crowds out everything beside it. */
+    .brand-logo-img--nav {
+        height: 30px;
+    }
+
+    .brand-logo-img--auth {
+        height: 52px;
+    }
+}

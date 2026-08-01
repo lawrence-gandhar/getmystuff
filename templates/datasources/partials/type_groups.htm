@@ -1,0 +1,6 @@
+{# Single source of truth for how a datasource's db_type maps to a tab on the
+   Data Sources page. Consumers pull these in with
+       {% from "datasources/partials/type_groups.htm" import file_types, nosql_types %}
+   so the page and every HTMX partial group datasources the same way. #}
+{% set file_types = ["csv", "xls", "json", "parquet", "avro"] %}
+{% set nosql_types = ["mongodb"] %}

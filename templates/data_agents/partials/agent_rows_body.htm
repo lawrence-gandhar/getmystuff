@@ -1,0 +1,116 @@
+{# <tr> per data agent. Identifiers are always the agent's public uuid.
+
+   `workspace_filter` travels with every mutation as a hidden hx-val so the
+   rebuilt table keeps showing the same subset the user was looking at. #}
+{% for agent in agents %}
+<tr id="agent-row-{{ agent.uuid }}">
+    <td>
+        <div class="fw-semibold">{{ agent.name }}</div>
+        {% if agent.description %}
+        <div class="text-muted small">{{ agent.description }}</div>
+        {% endif %}
+    </td>
+    <td>
+        {% if agent.workspace_name %}
+        <a
+            class="badge bg-light text-dark border text-decoration-none"
+            href="/data-agents?workspace={{ agent.workspace_uuid }}"
+        >
+            <i class="las la-layer-group"></i> {{ agent.workspace_name }}
+        </a>
+        {% else %}
+        <span class="text-muted small">Unassigned</span>
+        {% endif %}
+    </td>
+    <td>
+        {% if agent.tool_count %}
+        <a
+            class="badge bg-info text-decoration-none"
+            href="/tool-configs?agent={{ agent.uuid }}"
+        >
+            {{ agent.tool_count }}
+        </a>
+        {% else %}
+        <span class="text-muted small">None</span>
+        {% endif %}
+    </td>
+    <td>
+        {% if agent.llm_key_label %}
+        <span class="badge bg-light text-dark border">
+            <i class="las la-key"></i> {{ agent.llm_key_label }}
+        </span>
+        {% else %}
+        <span class="text-muted small">Not set</span>
+        {% endif %}
+    </td>
+    <td>
+        {% if agent.is_active %}
+        <span class="badge bg-success">Active</span>
+        {% else %}
+        <span class="badge bg-secondary">Disabled</span>
+        {% endif %}
+    </td>
+    <td>
+        <div class="d-flex flex-wrap gap-1">
+            <a
+                class="btn btn-sm btn-outline-primary"
+                href="/tool-configs?agent={{ agent.uuid }}"
+            >
+                <i class="las la-tools"></i> Tools
+            </a>
+            {# Only offered once the agent has something to run — a console for an
+               agent with no tools can only report that it has none. #}
+            <a
+                class="btn btn-sm btn-outline-info{% if not agent.tool_count %} disabled{% endif %}"
+                href="/deep-agents/{{ agent.uuid }}/console"
+                {% if not agent.tool_count %}
+                tabindex="-1"
+                aria-disabled="true"
+                title="Give this agent a tool config first"
+                {% endif %}
+            >
+                <i class="las la-vial"></i> Test
+            </a>
+            <button
+                type="button"
+                class="btn btn-sm btn-outline-secondary"
+                hx-get="/data-agents/{{ agent.uuid }}/edit-form"
+                hx-target="#agentModalContent"
+                hx-swap="innerHTML"
+                data-bs-toggle="modal"
+                data-bs-target="#agentModal"
+            >
+                Edit
+            </button>
+            <button
+                type="button"
+                class="btn btn-sm {% if agent.is_active %}btn-outline-secondary{% else %}btn-outline-success{% endif %}"
+                hx-post="/data-agents/{{ agent.uuid }}/set-active"
+                hx-vals='{"is_active": "{{ "false" if agent.is_active else "true" }}", "workspace_filter": "{{ workspace_filter }}"}'
+                hx-target="#agentResponse"
+                hx-swap="innerHTML"
+            >
+                {% if agent.is_active %}Disable{% else %}Enable{% endif %}
+            </button>
+            <button
+                type="button"
+                class="btn btn-sm btn-outline-danger"
+                hx-post="/data-agents/{{ agent.uuid }}/delete"
+                hx-vals='{"workspace_filter": "{{ workspace_filter }}"}'
+                hx-target="#agentResponse"
+                hx-swap="innerHTML"
+                hx-confirm="Delete data agent '{{ agent.name }}'?{% if agent.tool_count %} Its {{ agent.tool_count }} tool config(s) will be deleted too.{% endif %} This cannot be undone."
+            >
+                Delete
+            </button>
+        </div>
+    </td>
+</tr>
+{% else %}
+<tr>
+    <td colspan="6" class="text-center text-muted py-4">
+        <i class="las la-robot fs-4 d-block mb-1"></i>
+        No data agents{% if workspace_filter %} in this workspace{% endif %} yet.
+    </td>
+</tr>
+{% endfor %}

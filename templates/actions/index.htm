@@ -24,26 +24,7 @@
 
     <div id="actionsResponse" class="mb-2"></div>
 
-    <div class="card shadow-sm">
-        <div class="table-responsive">
-            <table class="table table-hover align-middle mb-0">
-                <thead class="table-light">
-                    <tr>
-                        <th>Name</th>
-                        <th style="width:90px;">Method</th>
-                        <th>URL</th>
-                        <th style="width:180px;">Parameters</th>
-                        <th style="width:90px;" class="text-center">Agents</th>
-                        <th style="width:100px;">Status</th>
-                        <th style="width:230px;" class="text-end">Actions</th>
-                    </tr>
-                </thead>
-                <tbody id="actionsTableBody">
-                    {% include "actions/partials/action_rows_body.htm" %}
-                </tbody>
-            </table>
-        </div>
-    </div>
+    {% include "actions/partials/actions_table.htm" %}
 </div>
 
 {% include "actions/partials/action_form.htm" %}

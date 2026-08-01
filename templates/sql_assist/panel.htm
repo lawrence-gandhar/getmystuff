@@ -1,0 +1,31 @@
+{# The Ask AI panel shell. Included by any page that wants the button, which fetches
+   /sql-assist/form into the body below — so a second host page needs only this include
+   plus a button pointing at #sqlAssistOffcanvasContent.
+
+   Only the body is fetched per open, leaving Bootstrap's own header/body structure
+   intact (an .offcanvas-body has to be a direct flex child of .offcanvas to scroll).
+   The form partial retitles the heading with an out-of-band swap, matching the Tool
+   Config panel next to it.
+
+   Not backdrop="static" like that one: nothing is being edited here that a stray click
+   could lose, and a generated query is cheap to ask for again. #}
+<div
+    class="offcanvas offcanvas-end"
+    tabindex="-1"
+    id="sqlAssistOffcanvas"
+    aria-labelledby="sqlAssistOffcanvasLabel"
+    style="width: 65vw;"
+>
+    <div class="offcanvas-header border-bottom">
+        <h5 class="offcanvas-title" id="sqlAssistOffcanvasLabel">
+            <i class="las la-magic text-primary"></i> Ask AI — Build a SQL Query
+        </h5>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+    </div>
+
+    <div class="offcanvas-body" id="sqlAssistOffcanvasContent">
+        <div class="text-center text-muted py-4">
+            <i class="las la-spinner la-spin fs-4"></i> Loading…
+        </div>
+    </div>
+</div>

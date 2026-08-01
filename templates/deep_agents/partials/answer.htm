@@ -1,0 +1,45 @@
+{# One console answer.
+
+   The tools-called list is the point of this fragment, not decoration. An answer
+   containing figures with an empty tool list means the model produced them without
+   reading anything — the exact failure this feature exists to prevent — so it is
+   shown on every answer rather than hidden behind a debug toggle. #}
+
+{% if error %}
+<div class="alert alert-danger mb-0">
+    <i class="las la-exclamation-triangle"></i> {{ error }}
+</div>
+{% else %}
+<div class="card shadow-sm mb-3">
+    <div class="card-header bg-white d-flex justify-content-between align-items-center">
+        <span class="fw-semibold"><i class="las la-comment text-primary"></i> Answer</span>
+        <span class="badge bg-light text-dark border">{{ model }}</span>
+    </div>
+
+    <div class="card-body">
+        <p class="text-muted small mb-2"><em>{{ question }}</em></p>
+        <div class="mb-0" style="white-space: pre-wrap;">{{ answer }}</div>
+    </div>
+
+    <div class="card-footer bg-white small">
+        {% if tools_called %}
+        <span class="text-success fw-semibold">
+            <i class="las la-check-circle"></i>
+            Read from {{ tools_called | length }} tool call{% if tools_called | length != 1 %}s{% endif %}:
+        </span>
+        {% for tool in tools_called %}
+        <code class="ms-1">{{ tool }}</code>
+        {% endfor %}
+        {% else %}
+        <span class="text-warning fw-semibold">
+            <i class="las la-exclamation-circle"></i> No tool was called.
+        </span>
+        <span class="text-muted">
+            Nothing was read from your data, so this answer contains no figures from it.
+            If it looks like it does, the tool descriptions in
+            <a href="/tool-configs">Tool Configs</a> probably do not match the question.
+        </span>
+        {% endif %}
+    </div>
+</div>
+{% endif %}

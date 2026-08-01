@@ -19,7 +19,7 @@
             <button
                 class="btn btn-sm {% if key.is_active %}btn-outline-warning{% else %}btn-outline-success{% endif %}"
                 hx-post="/ai-settings/{{ key.uuid }}/toggle-active"
-                hx-target="#aiKeysTableBody"
+                hx-target="#ai-settings-response"
                 hx-swap="innerHTML"
             >
                 {% if key.is_active %}Deactivate{% else %}Activate{% endif %}
@@ -34,7 +34,7 @@
             <button
                 class="btn btn-sm btn-outline-danger"
                 hx-post="/ai-settings/{{ key.uuid }}/delete"
-                hx-target="#aiKeysTableBody"
+                hx-target="#ai-settings-response"
                 hx-swap="innerHTML"
                 hx-confirm="Delete API key '{{ key.label }}'? This cannot be undone."
             >

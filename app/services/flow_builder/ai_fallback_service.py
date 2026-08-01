@@ -32,8 +32,8 @@ _VALID_CONTEXT_SOURCES = {"datasource", "knowledge_base", "prompt"}
 _VALID_LLM_MODES = {"in_built", "attached"}
 
 _FALLBACK_BASE_SYSTEM_PROMPT = (
-    "You are an AI assistant answering on behalf of a chatbot widget embedded "
-    "on the business's website. Be concise, helpful, and professional."
+    "You answer for a chatbot widget on the business's website. Be concise, "
+    "helpful, and professional."
 )
 
 
@@ -49,9 +49,9 @@ def _parse_uuid(value) -> Optional[uuid.UUID]:
 def _combine_instructions(guardrails: str, custom_prompt: str) -> str:
     parts = []
     if guardrails:
-        parts.append(f"Guardrails (must always be followed): {guardrails}")
+        parts.append(f"Guardrails: {guardrails}")
     if custom_prompt:
-        parts.append(f"Additional instructions: {custom_prompt}")
+        parts.append(f"Also: {custom_prompt}")
     return "\n\n".join(parts)
 
 
@@ -69,16 +69,15 @@ def _build_system_prompt(
     system_prompt = base_prompt.strip() or _FALLBACK_BASE_SYSTEM_PROMPT
     if has_context:
         system_prompt += (
-            " You are given reference material retrieved from the business's "
-            "knowledge base below — ground your answer in it, and say so "
-            "explicitly if it doesn't contain enough information to answer."
+            " Ground your answer in the knowledge base content below, and say so "
+            "if it doesn't cover the question."
         )
     else:
         system_prompt += " Answer helpfully from your own general knowledge."
     if guardrails:
-        system_prompt += f"\n\nGuardrails you must always follow: {guardrails}"
+        system_prompt += f"\n\nAlways follow these guardrails: {guardrails}"
     if custom_prompt:
-        system_prompt += f"\n\nAdditional instructions: {custom_prompt}"
+        system_prompt += f"\n\nAlso: {custom_prompt}"
     return system_prompt
 
 

@@ -1,0 +1,43 @@
+{# The Table field. Replaced wholesale (hx-swap="outerHTML") whenever the datasource
+   changes, so its options are always the objects that really exist in the selected
+   datasource — tables, collections or files, depending on its type.
+
+   Picking a table cascades once more, into the query builder, so the column
+   dropdowns offer that table's real fields. #}
+<div class="col-md-6" id="toolTableField">
+    <label for="toolTable" class="form-label fw-semibold">
+        Table <span class="text-danger">*</span>
+    </label>
+    <select
+        id="toolTable"
+        name="table_name"
+        class="form-select"
+        required
+        {% if not tables %}disabled{% endif %}
+        hx-get="/tool-configs/fields"
+        hx-target="#toolQueryBuilder"
+        hx-swap="outerHTML"
+        hx-trigger="change"
+        hx-include="#toolDatasource"
+        hx-indicator="#toolSchemaSpinner"
+    >
+        {% if tables %}
+        <option value="">Select a table…</option>
+        {% for table in tables %}
+        <option
+            value="{{ table }}"
+            {% if selected_table == table %}selected{% endif %}
+        >
+            {{ table }}
+        </option>
+        {% endfor %}
+        {% else %}
+        <option value="">Select a datasource first</option>
+        {% endif %}
+    </select>
+    {% if schema_error %}
+    <div class="form-text text-danger">{{ schema_error }}</div>
+    {% else %}
+    <div class="form-text">The table, collection or file this tool reads.</div>
+    {% endif %}
+</div>

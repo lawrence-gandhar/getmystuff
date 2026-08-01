@@ -1,7 +1,10 @@
-<div id="chatbot-settings-response" hx-swap-oob="true" class="mb-3">
-    {% if error %}
-    <div class="alert alert-danger" data-success="false">{{ error }}</div>
-    {% endif %}
-</div>
+{# Response for toggle-active/delete: any error message goes into the page-level
+   response target the row buttons point at, plus an out-of-band refresh of the
+   download button and the agents table. #}
+{% if error %}
+<div class="alert alert-danger" data-success="false">{{ error }}</div>
+{% else %}
+<div data-success="true"></div>
+{% endif %}
 {% include "chatbot_settings/widget_download_button.htm" %}
-{% include "chatbot_settings/key_rows_body.htm" %}
+{% include "chatbot_settings/partials/keys_table.htm" %}

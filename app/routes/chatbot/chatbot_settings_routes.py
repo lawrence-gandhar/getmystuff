@@ -33,9 +33,11 @@ from app.services.chatbot.chatbot_service import (
     get_chatbot_key,
     get_conversation_history,
     get_user_chatbot_keys,
+    set_chatbot_data_agent,
     toggle_active_status,
     update_chatbot_key,
 )
+from app.services.data_agents import data_agent_service
 from app.services.chatbot.chatbot_widget_settings_service import (
     ALLOWED_HEADER_FONTS,
     ALLOWED_SEND_BUTTON_STYLES,
@@ -48,6 +50,8 @@ from app.services.chatbot.chatbot_widget_settings_service import (
 )
 from app.services.datasource.datasource_service import get_user_datasources
 from app.services.flow_builder import flow_service
+from app.services.workspaces import workspace_service
+from app.utils.validators import parse_optional_uuid
 
 _SETTINGS_TEMPLATE = "chatbot_settings/widget_settings.htm"
 
@@ -63,12 +67,21 @@ class ChatbotSettingsController(Controller):
     async def index(self, db: AsyncSession, user: User) -> Template:
         keys = await get_user_chatbot_keys(db, user.id)
         datasources = await get_user_datasources(db=db, user_id=user.id)
+
         return Template(
             template_name="chatbot_settings/index.htm",
             context={
                 "user": user,
                 "keys": keys,
                 "datasources": datasources,
+                # The create form's optional Workspace -> Data Agent picker. The agent
+                # list starts unfiltered ("All workspaces") and is re-rendered by
+                # /deep-agents/agent-options when a workspace is chosen — the same
+                # fragment, so the two states cannot disagree.
+                "workspaces": await workspace_service.get_workspace_choices(db, user.id),
+                "agents": await data_agent_service.get_agent_views(db, user.id),
+                "selected_agent_id": "",
+                "field_name": "data_agent_id",
                 "active": "chatbot_settings",
             },
         )
@@ -117,6 +130,12 @@ class ChatbotSettingsController(Controller):
                 target_names=target_names,
                 file_ids=file_ids,
                 allowed_origins_raw=form.get("allowed_origins", ""),
+                # Optional. Blank means "no agent", which is the pre-existing
+                # behaviour, so an untouched form creates the chatbot it always did.
+                workspace_id=parse_optional_uuid(form.get("workspace_id"), "Workspace"),
+                data_agent_id=parse_optional_uuid(
+                    form.get("data_agent_id"), "Data agent",
+                ),
             )
         except HTTPException as e:
             return Response(
@@ -243,6 +262,17 @@ class ChatbotSettingsController(Controller):
             "",
         )
 
+        # The attached data agent, as public uuids for the picker. The agent list is
+        # deliberately not filtered to the stored workspace: the agent may have been
+        # moved out of it, or have none at all, and either way it must still appear as
+        # the current selection rather than vanish from its own form.
+        selected_agent_uuid = await data_agent_service.get_agent_public_id(
+            db, user.id, key.data_agent_id,
+        )
+        selected_workspace_uuid = await workspace_service.get_workspace_public_id(
+            db, user.id, key.workspace_id,
+        )
+
         return {
             "user": user,
             "key": key,
@@ -262,6 +292,13 @@ class ChatbotSettingsController(Controller):
             "attachable_actions": build_action_views(attachable_actions),
             "attached_flow": attached_flow,
             "attachable_flows": attachable_flows,
+            # Deep Agent attachment picker (AI & Prompt tab). `field_name` and
+            # `agents` feed the shared deep_agents/partials/agent_options.htm include.
+            "workspaces": await workspace_service.get_workspace_choices(db, user.id),
+            "agents": await data_agent_service.get_agent_views(db, user.id),
+            "selected_agent_id": selected_agent_uuid,
+            "selected_workspace_id": selected_workspace_uuid,
+            "field_name": "data_agent_id",
             **action_form_context(),
             **extra,
         }
@@ -441,6 +478,48 @@ class ChatbotSettingsController(Controller):
         )
 
     # --------------------------
+    # DATA AGENT — which data agent (if any) answers this chatbot's data questions
+    # --------------------------
+    @post("/{key_id:uuid}/data-agent")
+    async def save_data_agent(
+        self,
+        key_id: uuid.UUID,
+        request: Request,
+        db: AsyncSession,
+        user: User,
+    ) -> Template:
+        """
+        Attach a data agent to this chatbot, or clear it with an empty selection.
+
+        Unlike the datasource target, this is editable after creation: swapping which
+        agent answers is a normal change, whereas repointing a published widget at
+        different data is not.
+        """
+        form = await request.form()
+        error = None
+
+        try:
+            await set_chatbot_data_agent(
+                db,
+                user.id,
+                key_id,
+                workspace_id=parse_optional_uuid(form.get("workspace_id"), "Workspace"),
+                data_agent_id=parse_optional_uuid(
+                    form.get("data_agent_id"), "Data agent",
+                ),
+            )
+        except HTTPException as e:
+            error = str(e.detail)
+
+        return Template(
+            template_name=_SETTINGS_TEMPLATE,
+            context=await self._settings_page_context(
+                db, user, key_id, str(request.base_url).rstrip("/"),
+                active_tab="ai", error=error, success=error is None,
+            ),
+        )
+
+    # --------------------------
     # ACTIONS — attach/detach library actions (HTMX partials). Creating and
     # editing an action itself lives in the Actions library
     # (see ChatbotActionController), since one action can serve many agents.
@@ -454,6 +533,9 @@ class ChatbotSettingsController(Controller):
             context={
                 "key": await get_chatbot_key(db, user.id, key_id),
                 "actions": build_action_views(actions),
+                # The picker is refreshed out of band alongside the table, so the
+                # options it offers stay in step with what is already attached.
+                "attachable_actions": await get_attachable_actions(db, user.id, key_id),
                 "error": error,
             },
         )

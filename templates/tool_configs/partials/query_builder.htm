@@ -1,0 +1,155 @@
+{# The query builder: joins, columns, aggregations, grouping and filters over the
+   columns of the selected table, laid out like the Tool Base Config builder on the
+   Configurations page — one card per section with its Add button in the header,
+   the generated SQL below it, and the JSON payload last.
+
+   Replaced wholesale (hx-swap="outerHTML") whenever the table changes, so the
+   dropdowns always offer that table's real fields. The repeating rows, the SQL
+   preview and the JSON field are all kept in step by static/js/tool_configs.js:
+   one JSON field rather than parallel form arrays, so the server has exactly one
+   place to parse and validate the shape (the same convention as the action
+   parameter rows in chatbot_ai_settings.js).
+
+   The Joins card is rendered only when the datasource can execute a join — a CSV
+   file or a Mongo collection has no second table to join to. `join_types` is empty
+   in that case (see app.utils.query_joins.join_types_for), which is also true
+   before a datasource is chosen, so one check covers both.
+
+   The JSON field lives outside the "no columns yet" branch so the form always
+   submits something parseable; blank means "no query settings", which the service
+   reads as "all columns". #}
+<div
+    class="mb-4 border rounded p-3 bg-light-subtle"
+    id="toolQueryBuilder"
+    data-query-builder
+    {# Set when the builder rides along on another swap — changing the datasource
+       has to clear a query built against the previous one. #}
+    {% if oob_swap %}hx-swap-oob="true"{% endif %}
+>
+
+    {% if schema_error %}
+    <div class="alert alert-warning small mb-0">
+        <i class="las la-exclamation-triangle"></i> {{ schema_error }}
+    </div>
+    {% elif not columns %}
+    <p class="text-muted small mb-0">
+        Pick a datasource and a table above to build the query.
+    </p>
+    {% else %}
+
+    {% if join_types %}
+    <!-- JOINS — RDBMS only -->
+    <div class="card mb-3">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <strong>Joins</strong>
+            <button
+                type="button"
+                class="btn btn-sm btn-outline-primary"
+                data-builder-add="joins"
+                {% if not join_tables %}disabled title="This datasource has no other table to join to"{% endif %}
+            >
+                + Add Join
+            </button>
+        </div>
+        <div class="card-body" data-builder-rows="joins"></div>
+        <div class="card-footer bg-transparent">
+            <span class="form-text mb-0">
+                Each join matches a table already in the query against a new one.
+                Joining a table adds its columns to every dropdown below as
+                <code>table.column</code>.
+            </span>
+        </div>
+    </div>
+
+    {# Says so when removing a join takes selections with it, or when a joined
+       table's columns could not be read — neither is allowed to happen quietly. #}
+    <div class="alert alert-info small py-2 d-none" data-builder-notice></div>
+    {% endif %}
+
+    <!-- COLUMNS -->
+    <div class="card mb-3">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <strong>Columns</strong>
+            <button type="button" class="btn btn-sm btn-outline-primary" data-builder-add="columns">
+                + Add Column
+            </button>
+        </div>
+        <div class="card-body" data-builder-rows="columns"></div>
+    </div>
+
+    <!-- AGGREGATIONS -->
+    <div class="card mb-3">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <strong>Aggregations</strong>
+            <button type="button" class="btn btn-sm btn-outline-primary" data-builder-add="aggregations">
+                + Add Aggregation
+            </button>
+        </div>
+        <div class="card-body" data-builder-rows="aggregations"></div>
+    </div>
+
+    <!-- GROUP BY -->
+    <div class="card mb-3">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <strong>Group By</strong>
+            <button type="button" class="btn btn-sm btn-outline-primary" data-builder-add="group_by">
+                + Add Group
+            </button>
+        </div>
+        <div class="card-body" data-builder-rows="group_by"></div>
+    </div>
+
+    <!-- FILTERS -->
+    <div class="card mb-3">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <strong>Filters</strong>
+            <button type="button" class="btn btn-sm btn-outline-primary" data-builder-add="filters">
+                + Add Filter
+            </button>
+        </div>
+        <div class="card-body" data-builder-rows="filters"></div>
+    </div>
+
+    <!-- GENERATED SQL — read-only, never executed -->
+    <div class="card mb-3">
+        <div class="card-header">
+            <strong>Generated SQL</strong>
+        </div>
+        <div class="card-body bg-dark text-light font-monospace small">
+            <pre class="mb-0" data-builder-preview></pre>
+        </div>
+    </div>
+
+    {% endif %}
+
+    <!-- QUERY CONFIG JSON — rewritten by the builder on every change, and still
+         editable by hand: whatever is submitted is validated server-side. -->
+    <div class="mb-0">
+        <label for="toolConfigJson" class="form-label fw-semibold">Query Config</label>
+        <textarea
+            id="toolConfigJson"
+            name="config_json"
+            class="form-control font-monospace"
+            rows="8"
+            data-builder-json
+        ></textarea>
+        <div class="form-text">
+            JSON object, kept in step with the builder above. Leave empty to select
+            every column.
+        </div>
+    </div>
+
+    <script type="application/json" data-builder-data>{{
+        {
+            "base_table": base_table,
+            "datasource_id": datasource_id,
+            "columns": columns,
+            "column_map": column_map,
+            "join_tables": join_tables,
+            "join_types": join_types,
+            "config": config,
+            "aggregation_functions": aggregation_functions,
+            "filter_operators": filter_operators,
+        } | tojson
+    }}</script>
+</div>

@@ -65,6 +65,36 @@ guardrails/prompt on top — but its **LLM choice wins** for the turns it handle
 
 ---
 
+# Data agent
+
+The AI & Prompt tab's *Data Agent* card optionally attaches one data agent to this chatbot,
+picked as a **Workspace → Data Agent** cascade. It is stored on the chatbot key
+(`chatbot_api_keys.data_agent_id`), not in these AI settings — the same arrangement as the
+Conversation Flow card above, and its own form for the same reason.
+
+With an agent attached, `generate_reply` routes the turn to that agent's Deep Agent instead of
+`run_grounded_prompt`. That changes what the model can see:
+
+| | No agent (default) | Agent attached |
+|---|---|---|
+| What the model receives | a statistical profile of up to 500 sampled rows | tool descriptions, plus the rows a tool it called returned |
+| Reads the database | yes, to build the profile | never — only the tools do |
+| Grounding | `_GROUNDING_ADDENDUM` appended to the owner's prompt | generated tool-routing rules appended to the agent's own `system_prompt` |
+| Webhook actions | run | **not run** — see below |
+
+The chatbot's own prompt and prompt variables are not used on the agent path: a data agent has
+its own `system_prompt`, and that is what pairs with its tool list. The chatbot's LLM mode and
+pinned key *are* still honoured.
+
+If the agent cannot answer — no enabled tools, disabled, a key with no model name — the failure
+is logged and the turn falls back to the profile answer, so a misconfigured agent never becomes
+an error bubble in a published widget. Full detail in [DEEP_AGENTS.md](DEEP_AGENTS.md).
+
+**Nothing changes for a chatbot with no agent attached**, which is every chatbot created before
+this feature.
+
+---
+
 # Conversation flow
 
 The AI & Prompt tab's *Conversation Flow* card attaches one Flow Builder flow to this agent
@@ -183,7 +213,14 @@ circular.
 
 # Known limitations
 
-* The prompt's `EXIT BEHAVIOUR` is honoured as text only — the model sends the closing message,
+* The prompt's `EXIT` rule is honoured as text only — the model sends the closing message,
   but the widget session is not terminated; there is no signal channel for that yet.
 * Turns are stateless: no conversation history is sent to the model (pre-existing behaviour).
 * One action per turn, no chaining (see the router-pass trade-off above).
+* **Webhook actions do not run on the data-agent path.** The action router is a second model
+  call that picks a webhook, and a Deep Agent already decides which tool to call for itself —
+  running both would put two independent routers in charge of one turn. Actions on an
+  agent-backed chatbot are a follow-up.
+* **A Flow Builder AI Fallback node does not use the attached data agent.** It keeps answering
+  through `answer_message` / `answer_freeform`; only the non-flow branch of `generate_reply`
+  routes to the agent.

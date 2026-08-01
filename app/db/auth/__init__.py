@@ -9,3 +9,4 @@ from app.db.auth.auth import (  # noqa: F401
     require_role,
     require_auth,
 )
+from app.db.auth.create_fake_user import create_fake_user  # noqa: F401

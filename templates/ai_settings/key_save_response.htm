@@ -1,4 +1,5 @@
+{# Response for create/update: success marker into the offcanvas form's response
+   target (the form's after-request hook closes the offcanvas on it), plus an
+   out-of-band refresh of the API keys table. #}
 <div data-success="true"></div>
-<tbody id="aiKeysTableBody" hx-swap-oob="true">
-{% include "ai_settings/key_rows_body.htm" %}
-</tbody>
+{% include "ai_settings/keys_table.htm" %}

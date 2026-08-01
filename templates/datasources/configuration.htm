@@ -96,29 +96,10 @@
     <!-- HEADER -->
     <div class="d-flex justify-content-between align-items-center mb-4">
         <div>
-            <h4 class="mb-0 fw-semibold">
+            <h5 class="mb-0 fw-semibold">
                 <i class="las la-sliders-h text-primary"></i>
                 Configuration
-            </h4>
-        </div>
-
-        <div class="d-flex gap-2">
-            <button
-                class="btn btn-primary btn-sm"
-                type="button"
-                data-bs-toggle="offcanvas"
-                data-bs-target="#toolConfigOffcanvas"
-            >
-                <i class="las la-plus"></i> New Tool Config
-            </button>
-            <button
-                class="btn btn-outline-secondary btn-sm"
-                type="button"
-                data-bs-toggle="offcanvas"
-                data-bs-target="#agentConfigOffcanvas"
-            >
-                <i class="las la-robot"></i> New Agent Config
-            </button>
+            </h5>
         </div>
     </div>
 
@@ -148,16 +129,6 @@
             </button>
             <button class="dsv-nav-btn" data-dsv-target="tab-nosql">
                 <i class="las la-leaf"></i> Collections
-            </button>
-
-            <hr class="mx-3 my-2">
-            <span class="dsv-section-label">Configurations</span>
-
-            <button class="dsv-nav-btn" data-dsv-target="tab-tool-cfg">
-                <i class="las la-tools"></i> Tool Configs
-            </button>
-            <button class="dsv-nav-btn" data-dsv-target="tab-agent-cfg">
-                <i class="las la-robot"></i> Agent Configs
             </button>
 
         </div>
@@ -288,46 +259,6 @@
                 </div>
             </div>
 
-            <!-- TOOL CONFIGS TAB -->
-            <div class="dsv-tab-pane" id="tab-tool-cfg">
-                <div class="d-flex justify-content-between align-items-center mb-3">
-                    <h6 class="fw-semibold mb-0">
-                        <i class="las la-tools text-warning"></i> Tool Base Configurations
-                    </h6>
-                    <button
-                        class="btn btn-primary btn-sm"
-                        type="button"
-                        data-bs-toggle="offcanvas"
-                        data-bs-target="#toolConfigOffcanvas"
-                    >
-                        <i class="las la-plus"></i> Add
-                    </button>
-                </div>
-                <div class="text-muted text-center py-4">
-                    <i class="las la-inbox fs-4"></i><br>No tool configurations yet.
-                </div>
-            </div>
-
-            <!-- AGENT CONFIGS TAB -->
-            <div class="dsv-tab-pane" id="tab-agent-cfg">
-                <div class="d-flex justify-content-between align-items-center mb-3">
-                    <h6 class="fw-semibold mb-0">
-                        <i class="las la-robot text-info"></i> Agent Configurations
-                    </h6>
-                    <button
-                        class="btn btn-outline-secondary btn-sm"
-                        type="button"
-                        data-bs-toggle="offcanvas"
-                        data-bs-target="#agentConfigOffcanvas"
-                    >
-                        <i class="las la-plus"></i> Add
-                    </button>
-                </div>
-                <div class="text-muted text-center py-4">
-                    <i class="las la-inbox fs-4"></i><br>No agent configurations yet.
-                </div>
-            </div>
-
         </div><!-- /.flex-grow-1 -->
     </div><!-- /#dsvPanel -->
     <!-- END TABBED VIEW -->
@@ -430,7 +361,8 @@
 
         <p class="text-muted small mb-4">
             Define a base configuration for a tool against the
-            <strong>{{ table_name }}</strong> datasource object.
+            <strong>{{ table_name }}</strong> datasource object. On a relational
+            datasource the query can join further tables in.
         </p>
 
         <!-- INLINE ERROR/SUCCESS BANNER (inside offcanvas so it's visible) -->
@@ -495,6 +427,31 @@
             <div class="mb-4 border rounded p-3 bg-light-subtle">
 
             <div class="query-builder">
+
+            <!-- JOINS — relational datasources only.
+                 Shown by renderJoins() when the open datasource can execute a join;
+                 a file or a collection has no second table to join to. -->
+            <div class="card mb-3" id="joinsSection" style="display:none;">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <strong>Joins</strong>
+                    <button type="button" class="btn btn-sm btn-outline-primary"
+                            onclick="addJoin()">
+                        + Add Join
+                    </button>
+                </div>
+                <div class="card-body" id="joinsContainer"></div>
+                <div class="card-footer bg-transparent">
+                    <span class="form-text mb-0">
+                        Each join matches a table already in the query against a new one.
+                        Joining a table adds its columns to the dropdowns below as
+                        <code>table.column</code>.
+                    </span>
+                </div>
+            </div>
+
+            <!-- Says so when removing a join takes selections with it — losing what
+                 the user selected is never allowed to happen quietly. -->
+            <div class="alert alert-info small py-2" id="joinsNotice" style="display:none;"></div>
 
             <!-- COLUMNS -->
             <div class="card mb-3">
@@ -1004,9 +961,15 @@ let queryState = {
     aggregations: [],     // { type, column, alias }
     groupBy: [],          // multiple
     filters: [],          // multiple
+    joins: [],            // { type, table, left_table, left_column, right_column }
     orderBy: [],
     limit: null
 };
+
+// The join types each relational dialect has, straight from the server so the
+// dropdown can never offer one the save would reject (app.utils.query_joins).
+// Empty for a file or collection datasource, which is what hides the Joins card.
+const JOIN_TYPES_BY_DB_TYPE = {{ join_types_by_db_type | default({}, true) | tojson }};
 
 // =========================================================
 // Category offcanvas registry
@@ -1275,8 +1238,11 @@ function resetToolConfigForm() {
     queryState.aggregations = [];
     queryState.groupBy = [];
     queryState.filters = [];
+    queryState.joins = [];
     queryState.orderBy = [];
     queryState.limit = null;
+
+    showJoinsNotice("");
 
     // Clear form inputs
     const tcForm = document.querySelector("#toolConfigOffcanvas form");
@@ -1313,6 +1279,7 @@ function resetToolConfigForm() {
     if (tableNameInput) tableNameInput.value = currentTableName || "";
 
     addAggregation();
+    renderJoins();
     renderAggregations();
     renderFilters();
     renderGroupBy();
@@ -1358,8 +1325,11 @@ document
         queryState.aggregations = [];
         queryState.groupBy = [];
         queryState.filters = [];
+        queryState.joins = [];
         queryState.orderBy = [];
         queryState.limit = null;
+
+        showJoinsNotice("");
 
         // Clear text/textarea fields only (skip selects)
         const form = this.querySelector("form");
@@ -1373,7 +1343,7 @@ document
         const columnsEl = document.getElementById("columnsContainer");
         if (columnsEl) columnsEl.innerHTML = `<p class="text-muted small mb-0">No columns selected — defaults to <code>*</code></p>`;
 
-        ["aggregationContainer", "groupByContainer", "filterContainer"].forEach(id => {
+        ["joinsContainer", "aggregationContainer", "groupByContainer", "filterContainer"].forEach(id => {
             const el = document.getElementById(id);
             if (el) el.innerHTML = "";
         });
@@ -1410,6 +1380,7 @@ function updateBaseConfigJSON() {
         aggregations: queryState.aggregations.length > 0 ? queryState.aggregations : null,
         group_by: queryState.groupBy.length > 0 ? queryState.groupBy : null,
         filters: queryState.filters.length > 0 ? queryState.filters : null,
+        joins: queryState.joins.length > 0 ? queryState.joins : null,
     };
 
     const textarea = document.querySelector("textarea[name='base_config']");
@@ -1907,11 +1878,358 @@ function renderAggregations() {
     updateSQLPreview();
 }
 
-function buildColumnDropdown(selected, onChange) {
-    let options = currentTableColumns
-        .map(col =>
-            `<option value="${col}" ${col === selected ? "selected" : ""}>${col}</option>`
+// =========================================================
+// JOINS (relational datasources only)
+//
+// A join brings a second table into the query, so two rules follow from one
+// existing:
+//
+//   1. Every column reference becomes `table.column` — with two tables in play a
+//      bare `id` is ambiguous. Adding the first join qualifies what is already
+//      selected; removing the last one unqualifies it again, so nothing chosen is
+//      lost either way.
+//   2. The dropdowns below draw on every joined table's columns, which come from
+//      globalConfigurationData — the whole datasource's schema, already loaded for
+//      the table list behind this panel, so no extra round trip is needed.
+//
+// Everything here is convenience. datasource_config_service re-validates the joins
+// and every reference in them on save, whatever this produces.
+// =========================================================
+
+function joinTypeChoices() {
+    return JOIN_TYPES_BY_DB_TYPE[globalDbType] || [];
+}
+
+function joinsSupported() {
+    return joinTypeChoices().length > 0;
+}
+
+/** Every table this query reads: the base table plus each joined one. */
+function queryTables() {
+    return [currentTableName].concat(queryState.joins.map(j => j.table));
+}
+
+/** Active tables in this datasource — the candidates for a join. */
+function joinableTables() {
+    return Object.entries(globalConfigurationData || {})
+        .filter(([, data]) => data.status === "active")
+        .map(([name]) => name);
+}
+
+/** The columns of one table in this datasource. */
+function columnsForTable(table) {
+    if (table === currentTableName) return currentTableColumns;
+
+    const data = (globalConfigurationData || {})[table];
+    if (!data || !data.column_data) return [];
+
+    return Object.values(data.column_data).map(col => col.column_name);
+}
+
+function firstColumnOf(table) {
+    return columnsForTable(table)[0] || "";
+}
+
+/**
+ * The column on the joined table most likely to be the match: a foreign key named
+ * after the table it is matched against (`customers.id` → `customer_id`), the same
+ * column name, or failing both its first column.
+ *
+ * A starting point only — the dropdown is right there. It exists because the
+ * one-click case is overwhelmingly a foreign key, and offering column one of the
+ * table instead reads as a wrong answer.
+ */
+function matchingColumn(table, leftTable, leftColumn) {
+    const columns = columnsForTable(table);
+    const candidates = [
+        `${leftTable}_${leftColumn}`,
+        `${leftTable.replace(/s$/, "")}_${leftColumn}`,
+        leftColumn
+    ];
+
+    return candidates.find(c => columns.includes(c)) || firstColumnOf(table);
+}
+
+/** Tables still free to join — the base table and the ones already joined are not. */
+function joinTableChoices(index) {
+    const taken = queryState.joins
+        .filter((_, position) => position !== index)
+        .map(j => j.table);
+
+    return joinableTables().filter(
+        t => t !== currentTableName && !taken.includes(t)
+    );
+}
+
+/** The tables a join at this position may match against: the ones before it. */
+function tablesBefore(index) {
+    return [currentTableName].concat(
+        queryState.joins.slice(0, index).map(j => j.table)
+    );
+}
+
+function addJoin() {
+    const table = joinTableChoices(queryState.joins.length)[0];
+    if (!table) {
+        showJoinsNotice("Every other table in this datasource is already joined.");
+        return;
+    }
+
+    const tables = queryTables();
+    const leftTable = tables[tables.length - 1];
+    const leftColumn = firstColumnOf(leftTable);
+    const wasUnjoined = queryState.joins.length === 0;
+
+    queryState.joins.push({
+        type: joinTypeChoices()[0][0],
+        table: table,
+        left_table: leftTable,
+        left_column: leftColumn,
+        right_column: matchingColumn(table, leftTable, leftColumn)
+    });
+
+    // The query now reads more than one table, so every reference has to say which.
+    if (wasUnjoined) qualifyReferences();
+
+    renderJoins();
+    renderQueryBuilder();
+}
+
+function updateJoin(index, field, value) {
+    queryState.joins[index][field] = value;
+    renderJoins();
+    renderQueryBuilder();
+}
+
+/** Point a join at a different table; anything selected from the old one goes. */
+function updateJoinTable(index, value) {
+    const join = queryState.joins[index];
+    const previous = join.table;
+    join.table = value;
+    join.right_column = matchingColumn(value, join.left_table, join.left_column);
+
+    dropTables([previous]);
+    renderJoins();
+    renderQueryBuilder();
+}
+
+/** Match a join against a different table, and default to one of its columns. */
+function updateJoinLeftTable(index, value) {
+    const join = queryState.joins[index];
+    join.left_table = value;
+    join.left_column = firstColumnOf(value);
+    join.right_column = matchingColumn(join.table, value, join.left_column);
+    renderJoins();
+    renderQueryBuilder();
+}
+
+/**
+ * Remove one join — and with it any join that matched against the table it brought
+ * in, plus every column reference to those tables. Reported rather than done
+ * quietly: the user is losing selections they made.
+ */
+function removeJoin(index) {
+    const removed = queryState.joins[index].table;
+    queryState.joins.splice(index, 1);
+
+    const dropped = dropTables([removed]);
+    if (queryState.joins.length === 0) unqualifyReferences();
+
+    renderJoins();
+    renderQueryBuilder();
+
+    showJoinsNotice(dropped
+        ? `Removed the join on '${removed}', along with ${dropped} selection(s) that referred to a table it brought in.`
+        : "");
+}
+
+/**
+ * Drop everything that depends on the given tables: joins matching against them
+ * (and, in turn, the tables those joins brought in), and every column reference
+ * qualified with any of them. Returns how many references were dropped.
+ */
+function dropTables(tables) {
+    const gone = tables.slice();
+    let searching = true;
+
+    while (searching) {
+        searching = false;
+        queryState.joins = queryState.joins.filter(join => {
+            if (!gone.includes(join.left_table)) return true;
+            gone.push(join.table);
+            searching = true;
+            return false;
+        });
+    }
+
+    // A table is only really gone if no remaining join brings it back in.
+    const live = queryTables();
+    const dead = gone.filter(t => !live.includes(t));
+    if (dead.length === 0) return 0;
+
+    const refersToDeadTable = value => dead.includes(tableOf(value));
+    let dropped = 0;
+
+    ["columns", "aggregations", "filters"].forEach(section => {
+        const kept = queryState[section].filter(e => !refersToDeadTable(e.column));
+        dropped += queryState[section].length - kept.length;
+        queryState[section] = kept;
+    });
+
+    const keptGroups = queryState.groupBy.filter(c => !refersToDeadTable(c));
+    dropped += queryState.groupBy.length - keptGroups.length;
+    queryState.groupBy = keptGroups;
+
+    return dropped;
+}
+
+/** The table half of a `table.column` reference, or "" when it is bare. */
+function tableOf(reference) {
+    const value = reference || "";
+    const separator = value.indexOf(".");
+    return separator === -1 ? "" : value.slice(0, separator);
+}
+
+/** Qualify every bare reference with the base table. */
+function qualifyReferences() {
+    mapReferences(ref => (!ref || ref.includes(".") ? ref : `${currentTableName}.${ref}`));
+}
+
+/** Strip the base table back off every reference that carries it. */
+function unqualifyReferences() {
+    const prefix = `${currentTableName}.`;
+    mapReferences(ref => (ref && ref.startsWith(prefix) ? ref.slice(prefix.length) : ref));
+}
+
+/** Rewrite the column reference of every row in every section. */
+function mapReferences(rewrite) {
+    queryState.columns.forEach(e => { e.column = rewrite(e.column); });
+    queryState.aggregations.forEach(e => { e.column = rewrite(e.column); });
+    queryState.filters.forEach(e => { e.column = rewrite(e.column); });
+    queryState.groupBy = queryState.groupBy.map(rewrite);
+}
+
+/** Re-render everything whose dropdowns are built from column references. */
+function renderQueryBuilder() {
+    renderColumns();
+    renderAggregations();
+    renderGroupBy();
+    renderFilters();
+    updateBaseConfigJSON();
+}
+
+function showJoinsNotice(message) {
+    const notice = document.getElementById("joinsNotice");
+    if (!notice) return;
+    notice.textContent = message || "";
+    notice.style.display = message ? "" : "none";
+}
+
+function renderJoins() {
+    const section = document.getElementById("joinsSection");
+    const container = document.getElementById("joinsContainer");
+    if (!section || !container) return;
+
+    if (!joinsSupported()) {
+        section.style.display = "none";
+        container.innerHTML = "";
+        return;
+    }
+
+    section.style.display = "";
+
+    if (queryState.joins.length === 0) {
+        container.innerHTML = `<p class="text-muted small mb-0">No joins — this query reads one table.</p>`;
+        updateSQLPreview();
+        return;
+    }
+
+    const header = `
+        <div class="row g-2 mb-1 small text-muted fw-semibold">
+            <div class="col-md-2">Join type</div>
+            <div class="col-md-2">Table to join</div>
+            <div class="col-md-4">Matching table and column</div>
+            <div class="col-md-3">= joined table column</div>
+            <div class="col-md-1"></div>
+        </div>
+    `;
+
+    container.innerHTML = header + queryState.joins.map((join, index) => {
+        const typeOptions = joinTypeChoices().map(([value, label]) =>
+            `<option value="${value}" ${join.type === value ? "selected" : ""}>${label}</option>`
         ).join("");
+
+        return `
+            <div class="row g-2 mb-2 align-items-center">
+                <div class="col-md-2">
+                    <select class="form-select"
+                        onchange="updateJoin(${index}, 'type', this.value)">
+                        ${typeOptions}
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    ${buildDropdown(joinTableChoices(index), join.table,
+                        `updateJoinTable(${index}, this.value)`)}
+                </div>
+                <div class="col-md-4">
+                    <div class="row g-2">
+                        <div class="col-6">
+                            ${buildDropdown(tablesBefore(index), join.left_table,
+                                `updateJoinLeftTable(${index}, this.value)`)}
+                        </div>
+                        <div class="col-6">
+                            ${buildDropdown(columnsForTable(join.left_table), join.left_column,
+                                `updateJoin(${index}, 'left_column', this.value)`)}
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    ${buildDropdown(columnsForTable(join.table), join.right_column,
+                        `updateJoin(${index}, 'right_column', this.value)`)}
+                </div>
+                <div class="col-md-1 text-end">
+                    <button type="button" class="btn btn-sm btn-danger" title="Remove"
+                        onclick="removeJoin(${index})">✕</button>
+                </div>
+            </div>
+        `;
+    }).join("");
+
+    updateSQLPreview();
+}
+
+/**
+ * The column references the dropdowns offer: bare names while the query reads one
+ * table, `table.column` once it reads more than one.
+ */
+function columnChoices() {
+    if (queryState.joins.length === 0) return currentTableColumns;
+
+    const references = [];
+    queryTables().forEach(table => {
+        columnsForTable(table).forEach(column => {
+            references.push(`${table}.${column}`);
+        });
+    });
+
+    return references;
+}
+
+/**
+ * A <select> over plain string values.
+ *
+ * A selected value that is not among the choices is kept as a choice of its own
+ * rather than being silently replaced by the first one — a query built against a
+ * table that has since changed shows what it actually holds.
+ */
+function buildDropdown(values, selected, onChange) {
+    const choices = values.slice();
+    if (selected && !choices.includes(selected)) choices.unshift(selected);
+    if (choices.length === 0) choices.unshift("");
+
+    const options = choices.map(value =>
+        `<option value="${value}" ${value === selected ? "selected" : ""}>${value || "—"}</option>`
+    ).join("");
 
     return `
         <select class="form-select"
@@ -1919,6 +2237,10 @@ function buildColumnDropdown(selected, onChange) {
             ${options}
         </select>
     `;
+}
+
+function buildColumnDropdown(selected, onChange) {
+    return buildDropdown(columnChoices(), selected, onChange);
 }
 
 
@@ -1980,6 +2302,14 @@ function buildSubquerySQL(sqData) {
     return sql;
 }
 
+/** The SQL keyword for a join type. Mirrors query_joins.JOIN_TYPE_SQL. */
+function joinKeyword(type) {
+    if (type === "left") return "LEFT JOIN";
+    if (type === "right") return "RIGHT JOIN";
+    if (type === "full") return "FULL OUTER JOIN";
+    return "INNER JOIN";
+}
+
 function updateSQLPreview() {
     const parts = [];
 
@@ -2002,6 +2332,13 @@ function updateSQLPreview() {
 
     let sql = "SELECT " + (parts.length > 0 ? parts.join(", ") : "*");
     sql += `\nFROM ${queryState.table}`;
+
+    queryState.joins.forEach(join => {
+        if (!join.table || !join.left_table) return;
+        sql += `\n${joinKeyword(join.type)} ${join.table}` +
+               `\n  ON ${join.left_table}.${join.left_column || "…"}` +
+               ` = ${join.table}.${join.right_column || "…"}`;
+    });
 
     if (queryState.filters.length > 0) {
         sql += "\nWHERE " + queryState.filters

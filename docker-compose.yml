@@ -1,0 +1,165 @@
+# GetMyStuff — development stack.
+#
+#   docker compose up --build
+#   -> app       http://localhost:8003
+#      postgres  localhost:5433  (5433 on the host so it cannot collide with a
+#                                 local postgres already using 5432)
+#      ollama    localhost:11435
+#
+# The app runs on Python 3.12 here. That is the point of this file: `deepagents`
+# requires >= 3.11, so the Deep Agents feature cannot run in the project's local
+# 3.10 virtualenv at all. See documentations/DEEP_AGENTS.md.
+
+services:
+  # --------------------------------------------------------------------------
+  # Application database. pgvector/pgvector rather than plain postgres: the
+  # in-built LLM's knowledge_chunks table stores 768-dim embeddings in a
+  # `vector` column (app/models/ai_inbuilt/models.py), which needs the
+  # extension present before the table can be created.
+  # --------------------------------------------------------------------------
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      # Development defaults, overridable from the shell or a .env in this
+      # directory: POSTGRES_PASSWORD=... docker compose up. This database is only
+      # published on localhost:5433 and holds no production data — but the
+      # defaults are here for convenience, not because a shared password is fine.
+      # Set real values before this stack is reachable from anywhere else.
+      POSTGRES_USER: ${POSTGRES_USER:-getmystuff}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-getmystuff}
+      POSTGRES_DB: ${POSTGRES_DB:-getmystuff}
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Creates the vector extension on first boot. The Alembic revision also
+      # runs CREATE EXTENSION IF NOT EXISTS, but main.py's create_all path does
+      # not — so without this, a fresh volume fails on the vector column.
+      - ./docker/postgres-init.sql:/docker-entrypoint-initdb.d/10-extensions.sql:ro
+    healthcheck:
+      # The app's on_startup runs create_all immediately, so it must not start
+      # before the database is actually accepting connections.
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-getmystuff} -d ${POSTGRES_DB:-getmystuff}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  # --------------------------------------------------------------------------
+  # In-built local LLM. Optional: the app only calls it when a chatbot or an AI
+  # Fallback node is set to "in-built" mode.
+  #
+  # Models are NOT baked into the image, and this container has its own volume
+  # separate from any Ollama already installed on the host. The `ollama-init`
+  # service below pulls them on first `up`, so no manual step is needed.
+  #
+  # ALTERNATIVE — reuse a host Ollama that already has the models, instead of
+  # downloading them again. Two changes are needed, and the second is on the
+  # host, which is why this is not the default:
+  #
+  #   1. here: drop this service, and on `app` set
+  #        OLLAMA_BASE_URL: http://host.docker.internal:11434
+  #        extra_hosts: ["host.docker.internal:host-gateway"]
+  #   2. on the host: Ollama binds 127.0.0.1 by default, so it is unreachable
+  #      from a container. It has to be started with OLLAMA_HOST=0.0.0.0, which
+  #      also exposes it beyond localhost — worth knowing before you do it.
+  #
+  # Note for Deep Agents: qwen3:1.7b tool-calls unreliably, so a data agent asked
+  # to run on the in-built model is refused with a clear message rather than
+  # being allowed to silently skip its tools and answer from nothing. Pull
+  # qwen3:8b (or llama3.1:8b) and set OLLAMA_CHAT_MODEL to it to lift that.
+  # --------------------------------------------------------------------------
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11435:11434"
+    volumes:
+      - ollama:/root/.ollama
+    restart: unless-stopped
+
+  # --------------------------------------------------------------------------
+  # One-shot model pull. Runs to completion, then exits — `app` waits on it via
+  # service_completed_successfully, so the first request never hits a missing
+  # model and preload_models() never logs a failure on a fresh volume.
+  #
+  # No volume mount: `ollama pull` here is just a client call to OLLAMA_HOST, so
+  # the server container does the download into its own volume. Mounting it in
+  # both places would have two processes writing one blob store.
+  #
+  # Idempotent and cheap on later boots — an already-present model returns
+  # immediately, so this only costs wall-clock the first time.
+  # --------------------------------------------------------------------------
+  ollama-init:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_started
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    # The image's entrypoint is the ollama binary itself, so it has to be
+    # replaced to run a shell script.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      # `ollama list` is the readiness probe: depends_on only waits for the
+      # container to start, not for the HTTP server inside it to accept calls.
+      - |
+        set -e
+        until ollama list >/dev/null 2>&1; do
+          echo "waiting for ollama server..."
+          sleep 2
+        done
+        for model in "${OLLAMA_CHAT_MODEL:-qwen3:1.7b}" "${OLLAMA_EMBED_MODEL:-nomic-embed-text}"; do
+          echo "pulling $$model"
+          ollama pull "$$model"
+        done
+        echo "model pull complete"
+    restart: "no"
+
+  app:
+    build: .
+    # --reload for development. The bind mount below is what makes it useful;
+    # drop both for a production-shaped run.
+    command: uvicorn main:app --host 0.0.0.0 --port 8003 --reload
+    ports:
+      - "8003:8003"
+    environment:
+      # Compose values win over .env: load_dotenv() does not override variables
+      # that are already present in the real environment. That is what lets the
+      # same .env file keep working for a local (non-Docker) run.
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-getmystuff}:${POSTGRES_PASSWORD:-getmystuff}@db:5432/${POSTGRES_DB:-getmystuff}
+      OLLAMA_BASE_URL: http://ollama:11434
+      # Data agents only. Everything else in-built stays on OLLAMA_CHAT_MODEL
+      # (qwen3:1.7b) because a single structured-output call does not need an 8B
+      # model, and on a CPU-only host the bigger one is roughly 3x slower. A Deep
+      # Agent does need it: it has to hold a tool-calling loop, which qwen3:1.7b
+      # cannot do reliably. Pull it first:
+      #   docker compose exec ollama ollama pull qwen3:8b
+      # Not preloaded at startup — that would pin ~5 GB resident for a feature that
+      # may go unused, so the first data-agent turn pays the model load instead.
+      OLLAMA_DEEP_AGENT_MODEL: ${OLLAMA_DEEP_AGENT_MODEL:-qwen3:8b}
+    env_file:
+      # Everything not overridden above — ANTHROPIC_API_KEY, the OLLAMA_* tuning
+      # values, SECRET_KEY. Missing file is fatal, so keep .env present.
+      - .env
+    volumes:
+      # Live code reload. Excluding the local venv matters: it is a Python 3.10
+      # tree and would shadow the image's 3.12 site-packages.
+      - .:/app
+      - /app/venv
+      - uploads:/app/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+      # Wait for the pull to finish rather than just for the server to be up:
+      # preload_models() runs in on_startup, and on a fresh volume it would
+      # otherwise race the download and log a failure for every model.
+      ollama-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  ollama:
+  uploads:

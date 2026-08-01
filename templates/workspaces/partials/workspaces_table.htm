@@ -1,0 +1,27 @@
+{# The whole workspaces table, rendered both by the list page and by every
+   mutation response.
+
+   The wrapper <div> — not the <tbody> — carries hx-swap-oob. htmx parses a
+   response fragment with DOMParser, and the HTML parser discards a <tbody> or
+   <tr> that is not already inside a <table>, so an out-of-band swap keyed on the
+   <tbody> is dropped without any error and the table silently keeps its stale
+   rows. Sending the whole <table> inside a <div> is parse-safe. The attribute is
+   inert on the initial page render: htmx only honours it on response fragments. #}
+<div id="workspacesTable" class="card shadow-sm" hx-swap-oob="true">
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th>Name</th>
+                    <th style="width:120px;">Data Agents</th>
+                    <th style="width:110px;">Status</th>
+                    <th style="width:170px;">Last Updated</th>
+                    <th style="width:300px;">Actions</th>
+                </tr>
+            </thead>
+            <tbody id="workspacesTableBody">
+                {% include "workspaces/partials/workspace_rows_body.htm" %}
+            </tbody>
+        </table>
+    </div>
+</div>

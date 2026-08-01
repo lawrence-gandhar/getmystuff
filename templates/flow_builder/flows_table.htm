@@ -1,0 +1,28 @@
+{# The whole flows table, rendered both by the list page and by every mutation
+   response.
+
+   The wrapper <div> — not the <tbody> — carries hx-swap-oob. htmx parses a
+   response fragment with DOMParser, and the HTML parser discards a <tbody> or
+   <tr> that is not already inside a <table>, so returning bare rows (or an
+   out-of-band swap keyed on the <tbody>) loses the markup without any error and
+   the table silently keeps its stale rows. Sending the whole <table> inside a
+   <div> is parse-safe. The attribute is inert on the initial page render: htmx
+   only honours it on response fragments. #}
+<div id="flowsTable" class="card shadow-sm" hx-swap-oob="true">
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th>Name</th>
+                    <th style="width:100px;">Status</th>
+                    <th style="width:200px;">Attached Agent</th>
+                    <th style="width:180px;">Last Updated</th>
+                    <th style="width:300px;">Actions</th>
+                </tr>
+            </thead>
+            <tbody id="flowsTableBody">
+                {% include "flow_builder/flow_row_body.htm" %}
+            </tbody>
+        </table>
+    </div>
+</div>

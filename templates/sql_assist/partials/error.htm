@@ -1,0 +1,16 @@
+{# A failed attempt, swapped into #sqlAssistResult in place of a result.
+
+   The history field is re-rendered unchanged so a turn that failed — a provider
+   timeout, a table dropped since the panel opened — doesn't discard the conversation
+   that got this far. Everything typed into the form is untouched, because only the
+   result area was swapped. #}
+<input
+    type="hidden"
+    id="sqlAssistHistory"
+    name="history_json"
+    value="{{ history_json }}"
+>
+
+<div class="alert alert-danger small mb-0">
+    <i class="las la-exclamation-circle"></i> {{ error }}
+</div>

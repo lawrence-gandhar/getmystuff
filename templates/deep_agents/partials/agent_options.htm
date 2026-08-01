@@ -1,0 +1,41 @@
+{# The Data Agent <select>, re-rendered whenever a workspace is chosen.
+
+   Shared by the Chatbot Settings create form and the AI tab's attachment form, which
+   is why the field name is a parameter: each host form keeps its own name instead of
+   one dictating the other's markup.
+
+   The empty option is always first and always selectable — attaching an agent is
+   optional, and a chatbot with none answers exactly as it did before this feature. #}
+<select
+    class="form-select"
+    id="deepAgentSelect"
+    name="{{ field_name }}"
+>
+    <option value="">No data agent &mdash; answer from a data profile</option>
+
+    {% for agent in agents %}
+    <option
+        value="{{ agent.uuid }}"
+        {% if selected_agent_id == agent.uuid %}selected{% endif %}
+    >
+        {{ agent.name }}
+        {%- if not agent.is_active %} (disabled){% endif %}
+        {%- if agent.tool_count == 0 %} — no tools yet{% endif %}
+    </option>
+    {% endfor %}
+</select>
+
+{% if error %}
+<div class="form-text text-danger">{{ error }}</div>
+{% elif not agents %}
+<div class="form-text">
+    No data agents here yet &mdash; create one in
+    <a href="/data-agents" target="_blank">Data Agents</a>, then give it a tool in
+    <a href="/tool-configs" target="_blank">Tool Configs</a>.
+</div>
+{% else %}
+<div class="form-text">
+    With an agent attached, the assistant answers data questions by running that
+    agent's tools. Its own instructions and tool list decide what it can reach.
+</div>
+{% endif %}

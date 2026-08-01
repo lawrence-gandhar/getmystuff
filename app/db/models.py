@@ -30,3 +30,6 @@ from app.models.flow_builder import (  # noqa: F401
     FlowNodeKnowledgeDocument,
 )
 from app.models.ai_inbuilt import KnowledgeChunk  # noqa: F401
+from app.models.workspaces import Workspace  # noqa: F401
+from app.models.data_agents import DataAgent  # noqa: F401
+from app.models.tool_configs import ToolConfig  # noqa: F401

@@ -1,0 +1,162 @@
+{% extends "base/layout.htm" %}
+{% block title %}{{ agent.name }} — Test Console | GetMyStuff{% endblock %}
+
+{% block content %}
+{# The test console: ask an agent a question and see which of its tools answered.
+
+   Exists so an agent can be verified before a visitor talks to it — and so the
+   guarantee that the model reads nothing but tool output is something an operator can
+   check on every answer, not something they have to trust. #}
+<div class="container mt-4" style="max-width: 100%;">
+
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h5 class="fw-semibold mb-0">
+            <i class="las la-vial text-primary"></i> {{ agent.name }}
+            <span class="badge {% if agent.is_active %}bg-success{% else %}bg-secondary{% endif %} align-middle">
+                {% if agent.is_active %}Active{% else %}Disabled{% endif %}
+            </span>
+        </h5>
+        <a href="/data-agents" class="btn btn-outline-secondary btn-sm">
+            <i class="las la-arrow-left"></i> Back to Data Agents
+        </a>
+    </div>
+
+    {% if agent.description %}
+    <p class="text-muted small mb-3">{{ agent.description }}</p>
+    {% endif %}
+
+    <div class="row g-3">
+        <div class="col-lg-7">
+
+            {# ---- Blocking conditions, before the form ---- #}
+            {% if not agent.is_active %}
+            <div class="alert alert-warning py-2 small">
+                This agent is switched off, so it will refuse to answer. Enable it on the
+                <a href="/data-agents">Data Agents</a> page.
+            </div>
+            {% endif %}
+
+            {% if not agent.tools %}
+            <div class="alert alert-warning py-2 small">
+                This agent has <strong>no enabled tools</strong>, so it cannot look anything
+                up and will say so. Give it one in
+                <a href="/tool-configs?agent={{ agent.uuid }}">Tool Configs</a>.
+            </div>
+            {% endif %}
+
+            {% if agent.unsupported_tools %}
+            <div class="alert alert-warning py-2 small">
+                These tools read a datasource that cannot be queried this way (only
+                PostgreSQL, MySQL and SQLite can):
+                {% for tool in agent.unsupported_tools %}<code>{{ tool }}</code>{% if not loop.last %}, {% endif %}{% endfor %}.
+                The agent will tell the user they are unavailable rather than guess.
+            </div>
+            {% endif %}
+
+            {# ---- Ask ---- #}
+            <div class="card shadow-sm mb-3">
+                <div class="card-header bg-white fw-semibold">
+                    <i class="las la-question-circle text-primary"></i> Ask a question
+                </div>
+                <div class="card-body">
+                    <form
+                        hx-post="/deep-agents/{{ agent.uuid }}/ask"
+                        hx-target="#deepAgentAnswer"
+                        hx-swap="innerHTML"
+                        hx-indicator="#deepAgentSpinner"
+                    >
+                        <label for="deepAgentQuestion" class="form-label fw-semibold visually-hidden">
+                            Question
+                        </label>
+                        <textarea
+                            class="form-control mb-2"
+                            id="deepAgentQuestion"
+                            name="question"
+                            rows="3"
+                            maxlength="2000"
+                            required
+                            placeholder="e.g. How many units did we ship per SKU?"
+                        ></textarea>
+
+                        <button type="submit" class="btn btn-primary"
+                                {% if not agent.tools or not agent.is_active %}disabled{% endif %}>
+                            <i class="las la-paper-plane"></i> Ask
+                        </button>
+                        <span id="deepAgentSpinner" class="htmx-indicator ms-2 text-muted small">
+                            <span class="spinner-border spinner-border-sm"></span>
+                            Thinking &mdash; this runs real queries, so give it a moment&hellip;
+                        </span>
+                    </form>
+                </div>
+            </div>
+
+            <div id="deepAgentAnswer"></div>
+        </div>
+
+        {# ---- What this agent can reach ---- #}
+        <div class="col-lg-5">
+            <div class="card shadow-sm mb-3">
+                <div class="card-header bg-white fw-semibold d-flex justify-content-between align-items-center">
+                    <span><i class="las la-tools text-primary"></i> Tools ({{ agent.tools | length }})</span>
+                    <a class="btn btn-sm btn-outline-secondary"
+                       href="/tool-configs?agent={{ agent.uuid }}">Manage</a>
+                </div>
+                <div class="card-body p-0">
+                    {% if agent.tools %}
+                    <ul class="list-group list-group-flush">
+                        {% for tool in agent.tools %}
+                        <li class="list-group-item">
+                            <code class="fw-semibold">{{ tool.tool_name }}</code>
+                            <div class="text-muted small">
+                                {{ tool.description or "No description — the agent has only the field list to route on." }}
+                            </div>
+                            <div class="text-muted small">
+                                <i class="las la-database"></i>
+                                {{ tool.table_name }} in {{ tool.datasource_name }}
+                                ({{ tool.db_type | upper }})
+                            </div>
+                        </li>
+                        {% endfor %}
+                    </ul>
+                    {% else %}
+                    <p class="text-muted small m-3 mb-0">No enabled tools.</p>
+                    {% endif %}
+                </div>
+            </div>
+
+            <div class="card shadow-sm">
+                <div class="card-header bg-white fw-semibold">
+                    <i class="las la-shield-alt text-primary"></i> How this agent answers
+                </div>
+                <div class="card-body small text-muted">
+                    <p class="mb-2">
+                        The language model is never given your data. It sees your instructions,
+                        the tool descriptions above, and the rows a tool returns when it calls
+                        one &mdash; nothing else, and no connection of its own.
+                    </p>
+                    <p class="mb-2">
+                        Each tool runs a fixed query saved in Tool Configs and takes no
+                        arguments, so the model chooses <em>which</em> tool to call, never what
+                        it queries.
+                    </p>
+                    <p class="mb-2">
+                        Every answer below lists the tools it called. An answer with figures and
+                        no tool call would mean the model invented them.
+                    </p>
+                    <p class="mb-0">
+                        Tool guidance last generated:
+                        {% if agent.tool_prompt_synced_at %}
+                        {{ agent.tool_prompt_synced_at.strftime("%d %b %Y %H:%M") }}
+                        {% if agent.prompt_is_stale %}
+                        <span class="badge bg-warning text-dark">rebuilding on next answer</span>
+                        {% endif %}
+                        {% else %}
+                        never &mdash; it will be generated on the first answer.
+                        {% endif %}
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

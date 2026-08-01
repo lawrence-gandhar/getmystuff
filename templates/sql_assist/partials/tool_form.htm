@@ -1,0 +1,160 @@
+{# Auto Create Tool — the generated query expressed as a Tool Config, plus the name to
+   save it under. Swapped into #sqlAssistToolPanel.
+
+   `fits` false means the query needs SQL the tool builder cannot hold (ORDER BY, a
+   window function, a subquery…). That is shown as a reason rather than a form: a tool
+   that quietly differs from the query the user just read would be worse than no tool.
+
+   Everything below the name is already decided — the table, the parsed query, the
+   description — so the form asks for the two things only the user can answer: what to
+   call it, and which agent gets it. A tool config belongs to exactly one agent
+   (`data_agents.id` is NOT NULL), so the agent is required, not a nicety.
+
+   `config_json` travels in a hidden field and is re-validated server-side by
+   tool_config_service on the way in, exactly as the query builder's own output is. #}
+{% if not fits %}
+<div class="alert alert-warning small mb-0">
+    <i class="las la-exclamation-triangle"></i>
+    <strong>This query can't be saved as a tool config.</strong>
+    {{ reason }}
+    <div class="mt-2">
+        A tool config holds columns, aggregations, grouping, filters and joins. Refine
+        the query above to stay within those, or copy the SQL and use it elsewhere.
+    </div>
+</div>
+{% else %}
+<div class="card border-success mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <strong><i class="las la-tools text-success"></i> New Tool Config</strong>
+        <span class="badge bg-success-subtle text-success-emphasis border border-success-subtle">
+            Ready to create
+        </span>
+    </div>
+
+    <div class="card-body">
+        {% if error %}
+        <div class="alert alert-danger small">
+            <i class="las la-exclamation-circle"></i> {{ error }}
+        </div>
+        {% endif %}
+
+        <form
+            hx-post="/sql-assist/create-tool"
+            hx-target="#sqlAssistToolPanel"
+            hx-swap="innerHTML"
+            hx-indicator="#sqlAssistCreateSpinner"
+            hx-disabled-elt="#sqlAssistCreateBtn"
+        >
+            <input type="hidden" name="datasource_id" value="{{ datasource_id }}">
+            <input type="hidden" name="llm_mode" value="{{ llm_mode }}">
+            <input type="hidden" name="llm_api_key_id" value="{{ llm_api_key_id }}">
+            <input type="hidden" name="agent_filter" value="{{ agent_filter }}">
+            <input type="hidden" name="table_name" value="{{ table }}">
+            <input type="hidden" name="config_json" value='{{ config_json }}'>
+            {# Display-only, carried so a rejected name re-renders the same panel
+               without converting the query a second time. #}
+            <input type="hidden" name="preview" value="{{ preview }}">
+
+            <div class="row g-3">
+                <div class="col-md-6">
+                    <label for="sqlAssistToolName" class="form-label fw-semibold">
+                        Tool Name <span class="text-danger">*</span>
+                    </label>
+                    <input
+                        type="text"
+                        id="sqlAssistToolName"
+                        name="tool_name"
+                        class="form-control font-monospace"
+                        value="{{ tool_name }}"
+                        maxlength="255"
+                        pattern="[a-zA-Z][a-zA-Z0-9_]*"
+                        title="Start with a letter; letters, numbers and underscores only"
+                        required
+                        autocomplete="off"
+                    >
+                    <div class="form-text">
+                        Suggested by the AI — change it if you like. Must be unique for
+                        the agent below. Allowed: <code>a-z</code>, <code>0-9</code>,
+                        <code>_</code>.
+                    </div>
+                </div>
+
+                <div class="col-md-6">
+                    <label for="sqlAssistToolAgent" class="form-label fw-semibold">
+                        Data Agent <span class="text-danger">*</span>
+                    </label>
+                    {% if agents %}
+                    <select
+                        id="sqlAssistToolAgent"
+                        name="data_agent_id"
+                        class="form-select"
+                        required
+                    >
+                        <option value="">Select a data agent…</option>
+                        {% for agent in agents %}
+                        <option
+                            value="{{ agent.uuid }}"
+                            {% if selected_agent_id == agent.uuid %}selected{% endif %}
+                        >
+                            {{ agent.name }}{% if not agent.is_active %} (disabled){% endif %}
+                        </option>
+                        {% endfor %}
+                    </select>
+                    <div class="form-text">
+                        The agent that will be able to run this query.
+                    </div>
+                    {% else %}
+                    <p class="text-muted small mb-0">
+                        No data agents yet — create one in
+                        <a href="/data-agents">Data Agents</a> first. A tool config has
+                        to belong to an agent.
+                    </p>
+                    {% endif %}
+                </div>
+
+                <div class="col-12">
+                    <label for="sqlAssistToolDescription" class="form-label fw-semibold">
+                        Description
+                    </label>
+                    <textarea
+                        id="sqlAssistToolDescription"
+                        name="description"
+                        class="form-control"
+                        rows="2"
+                        maxlength="2000"
+                    >{{ description }}</textarea>
+                    <div class="form-text">
+                        What this tool answers — the agent uses it to decide when to
+                        call it.
+                    </div>
+                </div>
+
+                <div class="col-12">
+                    <label class="form-label fw-semibold">
+                        Reads <code>{{ table }}</code>
+                    </label>
+                    <pre class="bg-dark text-light font-monospace small rounded p-3 mb-1 text-wrap">{{ preview }}</pre>
+                    <div class="form-text">
+                        The query as the tool builder will hold it. Reopen the tool with
+                        <strong>Edit</strong> afterwards to adjust any part of it.
+                    </div>
+                </div>
+            </div>
+
+            <div class="d-flex align-items-center gap-2 mt-3">
+                <button
+                    type="submit"
+                    id="sqlAssistCreateBtn"
+                    class="btn btn-success"
+                    {% if not agents %}disabled{% endif %}
+                >
+                    <i class="las la-save"></i> Create Tool Config
+                </button>
+                <span id="sqlAssistCreateSpinner" class="htmx-indicator text-muted small">
+                    <i class="las la-spinner la-spin"></i> Creating…
+                </span>
+            </div>
+        </form>
+    </div>
+</div>
+{% endif %}

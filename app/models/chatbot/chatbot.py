@@ -82,6 +82,38 @@ class ChatbotApiKey(Base):
     # Requests whose Origin header isn't in this list are rejected.
     allowed_origins: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
 
+    # ----------------------------------------------------------------------
+    # Deep Agent attachment (optional)
+    #
+    # With data_agent_id set, a visitor's data question is answered by that
+    # agent's Deep Agent — the model chooses among the agent's tool configs and
+    # only ever sees their results. With it NULL, the chatbot answers exactly as
+    # it always has, from a statistical profile of the target data. NULL is the
+    # default precisely so attaching this feature changes nothing until an
+    # operator opts a chatbot in.
+    #
+    # workspace_id is stored only because the picker is a Workspace -> Data Agent
+    # cascade: keeping the chosen workspace lets the form re-open on the right
+    # branch instead of making the operator navigate to it again. It is not used
+    # at answer time.
+    #
+    # Both are ON DELETE SET NULL: deleting a workspace or an agent must degrade
+    # a live widget back to the default behaviour, never break it mid-conversation.
+    # ----------------------------------------------------------------------
+    workspace_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger,
+        ForeignKey("workspaces.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    data_agent_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger,
+        ForeignKey("data_agents.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     created_at: Mapped[DateTime] = mapped_column(

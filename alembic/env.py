@@ -1,5 +1,7 @@
 import asyncio
+import os
 from logging.config import fileConfig
+from dotenv import load_dotenv
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
@@ -10,6 +12,16 @@ from app.db import models  # Import all models
 
 config = context.config
 fileConfig(config.config_file_name)
+
+# DATABASE_URL wins over alembic.ini's sqlalchemy.url, so migrations run against
+# whichever database the *app* is configured to use. Without this, alembic.ini's
+# hardcoded localhost URL is the only target, and `alembic upgrade head` inside the
+# Docker container cannot reach the db service at all. Same precedence as
+# app/db/db_sessions.py, so the two can never point at different databases.
+load_dotenv()
+
+if os.getenv("DATABASE_URL"):
+    config.set_main_option("sqlalchemy.url", os.environ["DATABASE_URL"])
 
 target_metadata = Base.metadata
 

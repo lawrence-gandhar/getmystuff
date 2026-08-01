@@ -25,56 +25,12 @@
               hx-post="/chatbot-settings/{{ key.uuid }}/actions/attach"
               hx-target="#chatbotActionsResponse"
               hx-swap="innerHTML">
-            <div class="col-md-8">
-                <label for="cbActionPicker" class="form-label fw-semibold small mb-1">
-                    Add an action from your library
-                </label>
-                <select class="form-select" id="cbActionPicker" name="action_id"
-                        {% if not attachable_actions %}disabled{% endif %} required>
-                    {% if attachable_actions %}
-                    <option value="">Select an action&hellip;</option>
-                    {% for option in attachable_actions %}
-                    <option value="{{ option.uuid }}">{{ option.name }} &mdash; {{ option.description | truncate(70) }}</option>
-                    {% endfor %}
-                    {% else %}
-                    <option value="">No active actions left to add</option>
-                    {% endif %}
-                </select>
-                <div class="form-text">
-                    Only <strong>active</strong> actions you haven't added yet are listed.
-                    {% if not attachable_actions %}
-                    Create one with <em>New Action</em>, or activate an existing one in
-                    <a href="/actions">Actions</a>.
-                    {% endif %}
-                </div>
-            </div>
-            <div class="col-md-4">
-                <button type="submit" class="btn btn-outline-primary"
-                        {% if not attachable_actions %}disabled{% endif %}>
-                    <i class="las la-plus"></i> Add to this agent
-                </button>
-            </div>
+            {% include "chatbot_settings/partials/action_picker.htm" %}
         </form>
 
         <div id="chatbotActionsResponse" class="mb-2"></div>
 
-        <div class="table-responsive">
-            <table class="table table-sm align-middle mb-0">
-                <thead class="table-light">
-                    <tr>
-                        <th>Name</th>
-                        <th>Method</th>
-                        <th>URL</th>
-                        <th>Parameters</th>
-                        <th>Status</th>
-                        <th class="text-end">Actions</th>
-                    </tr>
-                </thead>
-                <tbody id="chatbotActionsTableBody">
-                    {% include "chatbot_settings/partials/action_rows_body.htm" %}
-                </tbody>
-            </table>
-        </div>
+        {% include "chatbot_settings/partials/actions_table.htm" %}
     </div>
 </div>
 

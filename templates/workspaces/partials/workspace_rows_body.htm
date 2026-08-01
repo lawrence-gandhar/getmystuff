@@ -1,0 +1,84 @@
+{# <tr> per workspace. Identifiers are always the workspace's public uuid.
+
+   The agents in a workspace are not listed here — Data Agents is its own module,
+   so the count links across to it filtered by this workspace. #}
+{% for workspace in workspaces %}
+<tr id="workspace-row-{{ workspace.uuid }}">
+    <td>
+        <div class="fw-semibold">{{ workspace.name }}</div>
+        {% if workspace.description %}
+        <div class="text-muted small">{{ workspace.description }}</div>
+        {% endif %}
+    </td>
+    <td>
+        {% if workspace.agent_count %}
+        <a
+            class="badge bg-info text-decoration-none"
+            href="/data-agents?workspace={{ workspace.uuid }}"
+        >
+            {{ workspace.agent_count }}
+        </a>
+        {% else %}
+        <span class="text-muted small">None</span>
+        {% endif %}
+    </td>
+    <td>
+        {% if workspace.is_active %}
+        <span class="badge bg-success">Active</span>
+        {% else %}
+        <span class="badge bg-secondary">Archived</span>
+        {% endif %}
+    </td>
+    <td class="small text-muted">
+        {{ workspace.updated_at.strftime("%Y-%m-%d %H:%M") if workspace.updated_at else "" }}
+    </td>
+    <td>
+        <div class="d-flex flex-wrap gap-1">
+            <a
+                class="btn btn-sm btn-outline-primary"
+                href="/data-agents?workspace={{ workspace.uuid }}"
+            >
+                <i class="las la-robot"></i> Agents
+            </a>
+            <button
+                type="button"
+                class="btn btn-sm btn-outline-secondary"
+                hx-get="/workspaces/{{ workspace.uuid }}/edit-form"
+                hx-target="#workspaceModalContent"
+                hx-swap="innerHTML"
+                data-bs-toggle="modal"
+                data-bs-target="#workspaceModal"
+            >
+                Edit
+            </button>
+            <button
+                type="button"
+                class="btn btn-sm {% if workspace.is_active %}btn-outline-secondary{% else %}btn-outline-success{% endif %}"
+                hx-post="/workspaces/{{ workspace.uuid }}/set-active"
+                hx-vals='{"is_active": "{{ "false" if workspace.is_active else "true" }}"}'
+                hx-target="#workspaceResponse"
+                hx-swap="innerHTML"
+            >
+                {% if workspace.is_active %}Archive{% else %}Restore{% endif %}
+            </button>
+            <button
+                type="button"
+                class="btn btn-sm btn-outline-danger"
+                hx-post="/workspaces/{{ workspace.uuid }}/delete"
+                hx-target="#workspaceResponse"
+                hx-swap="innerHTML"
+                hx-confirm="Delete workspace '{{ workspace.name }}'?{% if workspace.agent_count %} Its {{ workspace.agent_count }} data agent(s) will be kept, but left unassigned.{% endif %} This cannot be undone."
+            >
+                Delete
+            </button>
+        </div>
+    </td>
+</tr>
+{% else %}
+<tr>
+    <td colspan="5" class="text-center text-muted py-4">
+        <i class="las la-layer-group fs-4 d-block mb-1"></i>
+        No workspaces yet — create one to group your data agents.
+    </td>
+</tr>
+{% endfor %}

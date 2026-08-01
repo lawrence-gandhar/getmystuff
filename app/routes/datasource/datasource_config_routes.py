@@ -21,9 +21,21 @@ from app.services.datasource.datasource_service import (
     get_datasource_objects,
     delete_datasource_file,
 )
+from app.utils.query_joins import join_types_for
+from app.utils.validators import parse_json_object
 
 # Compiled once at import time — reused on every validation request.
 _TOOL_NAME_RE = re.compile(r'^[a-z0-9_]+$')
+
+# The join types each relational dialect supports, handed to the page so the Tool
+# Base Config builder can offer the right ones for whichever datasource the user
+# opens — the panel is reused for all of them without a round trip. Built from the
+# same source the server validates against (app.utils.query_joins), so the dropdown
+# can never offer a join the save would then reject.
+_JOIN_TYPES_BY_DB_TYPE = {
+    db_type: join_types_for(db_type)
+    for db_type in ("postgres", "mysql", "sqlite")
+}
 
 
 class DataSourceConfigurations(Controller):
@@ -50,6 +62,7 @@ class DataSourceConfigurations(Controller):
                 "datasources": datasources,
                 "table_name": "",
                 "config":{},
+                "join_types_by_db_type": _JOIN_TYPES_BY_DB_TYPE,
                 "user": user,
                 "active": "datasource_configuration"
             },
@@ -102,6 +115,7 @@ class DataSourceConfigurations(Controller):
                 "datasource_id": datasource_id,
                 "table_name": table_name,
                 "config":config,
+                "join_types_by_db_type": _JOIN_TYPES_BY_DB_TYPE,
                 "user": user,
             },
         )
@@ -192,13 +206,7 @@ class DataSourceConfigurations(Controller):
 
         tool_name = form.get("tool_name")
         table_name = form.get("table_name")
-        base_config_raw = form.get("base_config", "{}")
         subquery_configs_raw = form.get("subquery_configs", "[]")
-
-        try:
-            base_config = json.loads(base_config_raw)
-        except (json.JSONDecodeError, TypeError):
-            base_config = {}
 
         try:
             subquery_configs = json.loads(subquery_configs_raw)
@@ -208,6 +216,13 @@ class DataSourceConfigurations(Controller):
             subquery_configs = []
 
         try:
+            # The base config is hand-editable in the form, so a bad payload is a
+            # fixable user mistake and gets said so — silently saving {} instead
+            # would throw away the query the user just built.
+            base_config = parse_json_object(
+                form.get("base_config", "{}"), "Base config",
+            )
+
             await create_config_with_subqueries(
                 db=db,
                 user_id=user.id,

@@ -1,0 +1,166 @@
+{# Ask AI — the panel body, fetched into #sqlAssistOffcanvas when the button is
+   clicked. Laid out like the Tool Config form so the two panels read as one product.
+
+   One cascade: Datasource → GET /sql-assist/tables replaces the table picker, whose
+   options come from the same reflection the generated query's schema does — so the
+   picker can never offer a table the model would not be shown.
+
+   The prompt box doubles as the refinement box: after a result, typing a follow-up
+   and generating again sends the conversation so far (the hidden history field the
+   result partial writes, pulled in by hx-include) plus the same schema. A refinement
+   therefore reaches no further into the datasource than the first attempt did.
+
+   Only relational datasources are listed — see sql_assist_service for why there is
+   no SQL to generate for a file or a collection. #}
+<h5 class="offcanvas-title" id="sqlAssistOffcanvasLabel" hx-swap-oob="true">
+    <i class="las la-magic text-primary"></i> Ask AI — Build a SQL Query
+</h5>
+
+<p class="text-muted small mb-4">
+    Describe what you need in plain English and the AI writes the SQL for it. It is
+    given your schema only — table names, column names and types, keys — and never
+    reads a row of your data. The query is not run; it is yours to review.
+</p>
+
+{% if not datasources %}
+<div class="alert alert-warning small mb-0">
+    <i class="las la-exclamation-triangle"></i>
+    No relational datasource yet. Ask AI writes SQL, so it needs a PostgreSQL, MySQL
+    or SQLite datasource — add one on the
+    <a href="/datasource">Data Sources</a> page.
+</div>
+{% else %}
+
+<form
+    id="sqlAssistForm"
+    hx-post="/sql-assist/generate"
+    hx-target="#sqlAssistResult"
+    hx-swap="innerHTML"
+    hx-include="#sqlAssistHistory"
+    hx-indicator="#sqlAssistSpinner"
+    hx-disabled-elt="#sqlAssistSubmit"
+>
+    {# The host page's agent filter, carried through every step so a tool created from
+       here lands on the agent the user was looking at. #}
+    <input type="hidden" name="agent_filter" value="{{ agent_filter | default('', true) }}">
+    <div class="row g-3 mb-3">
+        <div class="col-md-6">
+            <label for="sqlAssistDatasource" class="form-label fw-semibold">
+                Datasource <span class="text-danger">*</span>
+            </label>
+            <select
+                id="sqlAssistDatasource"
+                name="datasource_id"
+                class="form-select"
+                required
+                hx-get="/sql-assist/tables"
+                hx-target="#sqlAssistTablesField"
+                hx-swap="outerHTML"
+                hx-trigger="change"
+                hx-indicator="#sqlAssistSchemaSpinner"
+            >
+                <option value="">Select a datasource…</option>
+                {% for datasource in datasources %}
+                <option value="{{ datasource.uuid }}">
+                    {{ datasource.name }} ({{ datasource.dialect }}){% if not datasource.is_active %} — inactive{% endif %}
+                </option>
+                {% endfor %}
+            </select>
+            <div class="form-text">
+                Relational datasources only. Managed on the
+                <a href="/datasource">Data Sources</a> page.
+            </div>
+        </div>
+
+        {% include "sql_assist/partials/tables_field.htm" %}
+    </div>
+
+    <!-- LANGUAGE MODEL -->
+    <div class="card mb-3">
+        <div class="card-header d-flex align-items-center gap-2">
+            <i class="las la-microchip text-primary"></i>
+            <strong>Language Model</strong>
+        </div>
+        <div class="card-body">
+            {% for mode_value, mode_label in llm_modes %}
+            <div class="form-check">
+                <input
+                    class="form-check-input"
+                    type="radio"
+                    name="llm_mode"
+                    id="sqlAssistMode-{{ mode_value }}"
+                    value="{{ mode_value }}"
+                    {% if loop.first %}checked{% endif %}
+                    onchange="document.getElementById('sqlAssistKeyField').hidden = (this.value !== 'api_key');"
+                >
+                <label class="form-check-label" for="sqlAssistMode-{{ mode_value }}">
+                    {{ mode_label }}
+                </label>
+            </div>
+            {% endfor %}
+
+            <div id="sqlAssistKeyField" class="mt-3">
+                <label for="sqlAssistKey" class="form-label fw-semibold">API Key</label>
+                {% if llm_keys %}
+                <select id="sqlAssistKey" name="llm_api_key_id" class="form-select">
+                    <option value="">Use my first active key (recommended)</option>
+                    {% for llm_key in llm_keys %}
+                    <option value="{{ llm_key.uuid }}">
+                        {{ llm_key.label }} ({{ llm_key.provider }})
+                    </option>
+                    {% endfor %}
+                </select>
+                <div class="form-text">
+                    Pin one saved key, or leave the default to use whichever key is
+                    active in <a href="/ai-settings">AI Settings</a>.
+                </div>
+                {% else %}
+                <p class="text-muted small mb-0">
+                    No AI API keys saved yet — add one in
+                    <a href="/ai-settings">AI Settings</a>, or pick the in-built
+                    model above.
+                </p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- PROMPT -->
+    <div class="mb-3">
+        <label for="sqlAssistPrompt" class="form-label fw-semibold">
+            What do you need? <span class="text-danger">*</span>
+        </label>
+        <textarea
+            id="sqlAssistPrompt"
+            name="prompt"
+            class="form-control"
+            rows="3"
+            maxlength="2000"
+            required
+            placeholder="e.g. Total units sold per product last month, highest first"
+        ></textarea>
+        <div class="form-text">
+            After a result, edit this and generate again to refine the query — the AI
+            re-reads the schema and its previous attempts, never your data.
+        </div>
+    </div>
+
+    <div class="d-flex align-items-center gap-2">
+        <button type="submit" id="sqlAssistSubmit" class="btn btn-primary">
+            <i class="las la-magic"></i> Generate SQL
+        </button>
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="offcanvas">
+            Close
+        </button>
+        <span id="sqlAssistSpinner" class="htmx-indicator text-muted small">
+            <i class="las la-spinner la-spin"></i> Writing the query…
+        </span>
+        <span id="sqlAssistSchemaSpinner" class="htmx-indicator text-muted small">
+            <i class="las la-spinner la-spin"></i> Reading schema…
+        </span>
+    </div>
+</form>
+
+<div id="sqlAssistResult" class="mt-4"></div>
+
+{% endif %}

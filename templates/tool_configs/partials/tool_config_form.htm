@@ -1,0 +1,164 @@
+{# Create/edit form for a tool config, rendered into the body of
+   #toolConfigOffcanvas. Laid out like the Tool Base Config offcanvas on the
+   Configurations page: one card per query section, each with its Add button in the
+   header, the generated SQL underneath and the JSON payload last.
+
+   One partial serves both modes: `tool_config` is None on create, and the caller
+   supplies `form_action` and `submit_label`. The panel heading is retitled by the
+   out-of-band swap at the top — only the body is fetched, so Bootstrap keeps its
+   own header/body structure (see the note in tool_configs/index.htm).
+
+   Two cascades keep the form honest about the user's real schema:
+     Datasource → GET /tool-configs/tables  replaces the Table field, and resets the
+                                            builder with it (a query belongs to one
+                                            datasource)
+     Table      → GET /tool-configs/fields  replaces the query builder
+   Both are plain HTMX; the builder's repeating rows — including the joins offered
+   for a relational datasource — are handled by static/js/tool_configs.js, which
+   serialises them into the `config_json` field. tool_config_service re-validates
+   that payload on submit regardless of what the form displayed. #}
+<h5 class="offcanvas-title" id="toolConfigOffcanvasLabel" hx-swap-oob="true">
+    <i class="las la-tools text-primary"></i>
+    {% if tool_config %}Edit Tool Config{% else %}New Tool Config{% endif %}
+</h5>
+
+<p class="text-muted small mb-4">
+    Define one query a <a href="/data-agents">data agent</a> is allowed to run: pick the
+    datasource and table, then choose the columns, aggregations, grouping and filters.
+    On a relational datasource the query can join further tables in.
+</p>
+
+{# The banner lives inside the panel, not on the page behind it — the offcanvas
+   covers most of the viewport, so an error rendered outside would be invisible. #}
+<div id="toolConfigFormResponse" class="mb-3"></div>
+
+{% if schema_error %}
+<div class="alert alert-warning small">
+    <i class="las la-exclamation-triangle"></i>
+    {{ schema_error }} The saved values below are still editable.
+</div>
+{% endif %}
+
+<form
+    hx-post="{{ form_action }}"
+    hx-target="#toolConfigFormResponse"
+    hx-swap="innerHTML"
+    hx-on::after-request="
+        const el = document.getElementById('toolConfigFormResponse');
+        if (el && el.querySelector('[data-success=true]')) {
+            bootstrap.Offcanvas.getInstance(document.getElementById('toolConfigOffcanvas')).hide();
+        }
+    "
+>
+    {# Keeps the rebuilt table on the same agent filter the user was viewing. #}
+    <input type="hidden" name="agent_filter" value="{{ agent_filter | default('', true) }}">
+
+    <div class="row g-3 mb-4">
+        <div class="col-md-6">
+            <label for="toolAgent" class="form-label fw-semibold">
+                Data Agent <span class="text-danger">*</span>
+            </label>
+            <select id="toolAgent" name="data_agent_id" class="form-select" required>
+                <option value="">Select a data agent…</option>
+                {% for agent in agents %}
+                <option
+                    value="{{ agent.uuid }}"
+                    {% if preselected_agent_id == agent.uuid %}selected{% endif %}
+                >
+                    {{ agent.name }}{% if not agent.is_active %} (disabled){% endif %}
+                </option>
+                {% endfor %}
+            </select>
+            <div class="form-text">Managed in <a href="/data-agents">Data Agents</a>.</div>
+        </div>
+
+        <div class="col-md-6">
+            <label for="toolName" class="form-label fw-semibold">
+                Tool Name <span class="text-danger">*</span>
+            </label>
+            <input
+                type="text"
+                id="toolName"
+                name="tool_name"
+                class="form-control font-monospace"
+                placeholder="e.g. total_units"
+                value="{{ tool_config.tool_name if tool_config else '' }}"
+                maxlength="255"
+                pattern="[a-zA-Z][a-zA-Z0-9_]*"
+                title="Start with a letter; letters, numbers and underscores only"
+                required
+                autocomplete="off"
+            >
+            <div class="form-text">
+                Unique identifier for this agent. Allowed: <code>a-z</code>,
+                <code>0-9</code>, <code>_</code>. Automatically lowercased.
+            </div>
+        </div>
+
+        <div class="col-md-6">
+            <label for="toolDatasource" class="form-label fw-semibold">
+                Datasource <span class="text-danger">*</span>
+            </label>
+            <select
+                id="toolDatasource"
+                name="datasource_id"
+                class="form-select"
+                required
+                hx-get="/tool-configs/tables"
+                hx-target="#toolTableField"
+                hx-swap="outerHTML"
+                hx-trigger="change"
+                hx-indicator="#toolSchemaSpinner"
+            >
+                <option value="">Select a datasource…</option>
+                {% for datasource in datasources %}
+                <option
+                    value="{{ datasource.uuid }}"
+                    {% if tool_config and tool_config.datasource_id == datasource.uuid %}selected{% endif %}
+                >
+                    {{ datasource.name }}{% if not datasource.is_active %} (inactive){% endif %}
+                </option>
+                {% endfor %}
+            </select>
+            <div class="form-text">
+                Managed on the <a href="/datasource">Data Sources</a> page.
+            </div>
+        </div>
+
+        {% with selected_table = (tool_config.table_name if tool_config else '') %}
+        {% include "tool_configs/partials/table_field.htm" %}
+        {% endwith %}
+
+        <div class="col-12">
+            <label for="toolDescription" class="form-label fw-semibold">Description</label>
+            <textarea
+                id="toolDescription"
+                name="description"
+                class="form-control"
+                rows="2"
+                maxlength="2000"
+                placeholder="What this tool answers — the agent uses this to decide when to call it (optional)"
+            >{{ tool_config.description if tool_config and tool_config.description else '' }}</textarea>
+        </div>
+
+        <div class="col-12">
+            <span id="toolSchemaSpinner" class="htmx-indicator text-muted small">
+                <i class="las la-spinner la-spin"></i> Reading schema…
+            </span>
+        </div>
+    </div>
+
+    {# `config`, `columns`, `column_map`, `join_tables` and `join_types` all come from
+       the route — the same context the /fields cascade renders the builder with, so
+       a swap mid-edit produces exactly what the first render did. #}
+    {% include "tool_configs/partials/query_builder.htm" %}
+
+    <div class="d-flex gap-2">
+        <button type="submit" class="btn btn-primary">
+            <i class="las la-save"></i> {{ submit_label }}
+        </button>
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="offcanvas">
+            Cancel
+        </button>
+    </div>
+</form>

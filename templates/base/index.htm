@@ -6,6 +6,7 @@
 <title>GetMyStuff | AI Analytics Simplified</title>
 
 <link rel="icon" type="image/png" href="/static/images/favicon.png">
+<link href="/static/css/brand.css" rel="stylesheet">
 
 <!-- Google Fonts -->
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -21,15 +22,14 @@ body {
     font-family: 'Poppins', sans-serif;
 }
 
-.navbar-brand span {
-    color: #4e73df;
-    font-weight: 700;
-}
-
 .hero {
     background: linear-gradient(135deg, #4e73df, #1cc88a);
     color: #ffffff;
-    padding: 120px 0;
+    padding: 160px 0 55px 0px;
+}
+
+.bg-white{
+    background-color: #111827 !important;
 }
 
 .hero h1 {
@@ -83,8 +83,8 @@ body {
 <!-- NAVBAR -->
 <nav class="navbar navbar-expand-lg navbar-light bg-white shadow-sm fixed-top">
 <div class="container">
-    <a class="navbar-brand fw-bold" href="#">
-        <i class="las la-brain"></i> Get<span>MyStuff</span>
+    <a class="navbar-brand fw-bold" href="/">
+        {% include "base/partials/brand.htm" %}
     </a>
     <div class="ms-auto">
         <a href="/auth/login" class="btn btn-outline-primary me-2">Login</a>

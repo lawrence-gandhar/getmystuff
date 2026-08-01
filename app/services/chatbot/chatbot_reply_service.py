@@ -14,8 +14,10 @@ level up — the Flow Builder engine imports *this* module (via its AI Fallback
 node), so the flow decision cannot live here without a circular import.
 """
 
+import logging
 from dataclasses import dataclass
 
+from litestar.exceptions import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.chatbot import ChatbotAiSettings, ChatbotApiKey
@@ -29,6 +31,9 @@ from app.services.chatbot.chatbot_ai_settings_service import (
     resolve_llm_choice,
     variables_map,
 )
+from app.services.deep_agents import deep_agent_service
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -64,8 +69,22 @@ async def generate_reply(
     """
     Answer a visitor message with the chatbot's configured prompt, model and
     actions. Used for every turn not handled by a Flow Builder node.
+
+    Two ways this can be answered, decided by whether a data agent is attached:
+
+    * **Attached** — the agent's Deep Agent answers. The model chooses among that
+      agent's tools and sees only what they return; no sample of the data reaches
+      the prompt at all.
+    * **Not attached** — the original path: a statistical profile of the target data
+      is computed and put in the prompt.
+
+    Unattached is the default for every existing chatbot, so this branch changes
+    nothing until an operator opts one in.
     """
     context = await load_ai_context(db, chatbot_key)
+
+    if getattr(chatbot_key, "data_agent_id", None):
+        return await _generate_deep_agent_reply(db, chatbot_key, message, context)
 
     outcome = await maybe_run_action(
         db, chatbot_key, message, context.llm_choice, context.variables
@@ -80,3 +99,61 @@ async def generate_reply(
         system_prompt_override=context.system_prompt,
         action_context=outcome.context_text if outcome else "",
     )
+
+
+async def _generate_deep_agent_reply(
+    db: AsyncSession,
+    chatbot_key: ChatbotApiKey,
+    message: str,
+    context: ChatbotAiContext,
+) -> AnalyticsResult:
+    """
+    Answer through the attached data agent, degrading to the profile path if it
+    cannot run.
+
+    The fallback is the important decision here. A visitor is mid-conversation, and a
+    misconfigured agent — no enabled tools, an AI key with no model name, a disabled
+    agent — must not turn into an error bubble in a published widget. So the failure
+    is logged for the operator and the chatbot answers the way it did before the
+    agent was attached.
+
+    That fallback cannot leak data the agent was meant to gate: the profile path is
+    scoped to the chatbot's *own* datasource target, which the operator chose when
+    they created the widget and which is unchanged by attaching an agent.
+
+    Webhook actions are deliberately not run on this path. The action router is a
+    second model call that picks a webhook, and a Deep Agent already decides for
+    itself which tool to call — running both would mean two independent routers
+    disagreeing about one turn. Actions on an agent-backed chatbot are a follow-up;
+    see documentations/DEEP_AGENTS.md.
+    """
+    try:
+        result = await deep_agent_service.answer_for_chatbot(
+            db,
+            chatbot_key,
+            message,
+            forced_key_uuid=context.llm_choice.forced_key_uuid,
+            use_inbuilt_llm=context.llm_choice.use_inbuilt_llm,
+        )
+    except HTTPException as exc:
+        logger.warning(
+            "Data agent reply failed for chatbot %s (%s) — falling back to the data "
+            "profile answer.",
+            chatbot_key.uuid,
+            exc.detail,
+        )
+        return await chatbot_service.answer_message(
+            db,
+            chatbot_key,
+            message,
+            forced_key_uuid=context.llm_choice.forced_key_uuid,
+            use_inbuilt_llm=context.llm_choice.use_inbuilt_llm,
+            system_prompt_override=context.system_prompt,
+        )
+
+    # The Deep Agent writes prose, not the structured summary/insights/table shape
+    # the grounded path returns. Mapping it to `summary` alone is deliberate: an
+    # empty `insights` and no `table` is honest about what was produced, and
+    # inventing bullet points by splitting the text would be putting words in the
+    # model's mouth.
+    return AnalyticsResult(summary=result["answer"])

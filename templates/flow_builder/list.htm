@@ -30,24 +30,7 @@
 
     <div id="flow-builder-response" class="mb-3"></div>
 
-    <div class="card shadow-sm">
-        <div class="table-responsive">
-            <table class="table table-hover align-middle mb-0">
-                <thead class="table-light">
-                    <tr>
-                        <th>Name</th>
-                        <th style="width:100px;">Status</th>
-                        <th style="width:200px;">Attached Agent</th>
-                        <th style="width:180px;">Last Updated</th>
-                        <th style="width:300px;">Actions</th>
-                    </tr>
-                </thead>
-                <tbody id="flowsTableBody">
-                    {% include "flow_builder/flow_row_body.htm" %}
-                </tbody>
-            </table>
-        </div>
-    </div>
+    {% include "flow_builder/flows_table.htm" %}
 
 </div>
 
@@ -65,7 +48,7 @@
             </div>
             <form
                 hx-post="/flow-builder/create"
-                hx-target="#flowsTableBody"
+                hx-target="#flow-builder-response"
                 hx-swap="innerHTML"
                 hx-on::after-request="
                     const el = document.getElementById('flow-builder-response');

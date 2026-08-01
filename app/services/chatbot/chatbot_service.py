@@ -28,6 +28,8 @@ from app.db.db_utils import CRUDQueryBuilder
 from app.models.chatbot import ChatbotApiKey, ChatbotMessage
 from app.models.datasource import DatasourceFile
 from app.services.ai_analytics.ai_analytics_service import datasource_crud, run_grounded_prompt
+from app.services.data_agents import data_agent_service
+from app.services.workspaces import workspace_service
 
 chatbot_key_crud = CRUDQueryBuilder(ChatbotApiKey)
 
@@ -139,7 +141,17 @@ async def create_chatbot_key(
     target_names: List[str],
     file_ids: List[uuid.UUID],
     allowed_origins_raw: str,
+    workspace_id: Optional[uuid.UUID] = None,
+    data_agent_id: Optional[uuid.UUID] = None,
 ) -> ChatbotApiKey:
+    """
+    Create a chatbot widget key.
+
+    ``workspace_id`` / ``data_agent_id`` are the optional Deep Agent attachment,
+    picked as a Workspace -> Data Agent cascade on the form. Both default to None,
+    which is what every chatbot created before this feature has — and NULL means
+    "answer from a data profile", the original behaviour.
+    """
     name = (name or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="Name is required")
@@ -174,6 +186,10 @@ async def create_chatbot_key(
 
     allowed_origins = _parse_allowed_origins(allowed_origins_raw)
 
+    resolved_workspace_id, resolved_agent_id = await _resolved_agent_attachment(
+        db, user_id, workspace_id, data_agent_id,
+    )
+
     chatbot_key = await chatbot_key_crud.create(db, {
         "user_id": user_id,
         "name": name,
@@ -182,6 +198,8 @@ async def create_chatbot_key(
         "target_names": resolved_target_names,
         "file_ids": [str(fid) for fid in resolved_file_ids],
         "allowed_origins": allowed_origins,
+        "workspace_id": resolved_workspace_id,
+        "data_agent_id": resolved_agent_id,
     })
 
     # A chatbot is never left without a persona: this seeds its agent name,
@@ -218,6 +236,70 @@ async def update_chatbot_key(
         return existing
 
     return await chatbot_key_crud.update(db, existing.id, data)
+
+
+async def set_chatbot_data_agent(
+    db: AsyncSession,
+    user_id: int,
+    key_id: uuid.UUID,
+    workspace_id: Optional[uuid.UUID] = None,
+    data_agent_id: Optional[uuid.UUID] = None,
+) -> ChatbotApiKey:
+    """
+    Attach, change or clear this chatbot's data agent.
+
+    Editable after creation, unlike the datasource target: swapping which agent
+    answers is a normal operational change (a new tool set, a replacement agent),
+    whereas repointing a widget at different data would silently change what a
+    published key can reach.
+
+    Passing no agent clears the attachment, and the chatbot goes back to answering
+    from a data profile.
+    """
+    chatbot_key = await get_chatbot_key(db, user_id, key_id)
+
+    resolved_workspace_id, resolved_agent_id = await _resolved_agent_attachment(
+        db, user_id, workspace_id, data_agent_id,
+    )
+
+    return await chatbot_key_crud.update(db, chatbot_key.id, {
+        "workspace_id": resolved_workspace_id,
+        "data_agent_id": resolved_agent_id,
+    })
+
+
+async def _resolved_agent_attachment(
+    db: AsyncSession,
+    user_id: int,
+    workspace_id: Optional[uuid.UUID],
+    data_agent_id: Optional[uuid.UUID],
+) -> tuple[Optional[int], Optional[int]]:
+    """
+    Turn the submitted workspace and agent uuids into internal FK values.
+
+    Both lookups go through their own service, which is what scopes them to this
+    user — otherwise pasting another user's agent uuid into the form would attach
+    their agent, and with it their datasource credentials, to this chatbot. That is
+    the whole reason this is not a straight assignment from the form.
+
+    The workspace is only remembered so the picker can re-open on the right branch;
+    it is deliberately not required to match the agent's own workspace. An agent may
+    have no workspace at all, and one that is moved later must not silently detach
+    itself from every chatbot using it.
+    """
+    if data_agent_id is None:
+        # No agent means no attachment at all — keeping a workspace here would leave
+        # the picker showing a branch with nothing selected in it.
+        return None, None
+
+    agent = await data_agent_service.get_data_agent(db, user_id, data_agent_id)
+
+    resolved_workspace_id = None
+    if workspace_id is not None:
+        workspace = await workspace_service.get_workspace(db, user_id, workspace_id)
+        resolved_workspace_id = workspace.id
+
+    return resolved_workspace_id, agent.id
 
 
 async def toggle_active_status(db: AsyncSession, user_id: int, key_id: uuid.UUID) -> ChatbotApiKey:

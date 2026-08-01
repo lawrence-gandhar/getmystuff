@@ -1,0 +1,26 @@
+{# The whole table of actions attached to this agent, rendered both by the
+   settings page and by every attach/detach response.
+
+   The wrapper <div> — not the <tbody> — carries hx-swap-oob. htmx parses a
+   response fragment with DOMParser, and the HTML parser discards a <tbody> or
+   <tr> that is not already inside a <table>, so an out-of-band swap keyed on the
+   <tbody> is dropped without any error and the table silently keeps its stale
+   rows. Sending the whole <table> inside a <div> is parse-safe. The attribute is
+   inert on the initial page render: htmx only honours it on response fragments. #}
+<div id="chatbotActionsTable" class="table-responsive" hx-swap-oob="true">
+    <table class="table table-sm align-middle mb-0">
+        <thead class="table-light">
+            <tr>
+                <th>Name</th>
+                <th>Method</th>
+                <th>URL</th>
+                <th>Parameters</th>
+                <th>Status</th>
+                <th class="text-end">Actions</th>
+            </tr>
+        </thead>
+        <tbody id="chatbotActionsTableBody">
+            {% include "chatbot_settings/partials/action_rows_body.htm" %}
+        </tbody>
+    </table>
+</div>

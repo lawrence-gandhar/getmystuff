@@ -1,0 +1,14 @@
+{# Panel body for an Ask AI panel that couldn't be loaded at all — the datasource or
+   key lookup failed before there was a form to show. Rendered into the same body
+   target the form would have used, so the user gets a readable reason inside the panel
+   they just opened instead of an empty shell. The heading is retitled out of band,
+   exactly as the form does. #}
+<h5 class="offcanvas-title" id="sqlAssistOffcanvasLabel" hx-swap-oob="true">
+    <i class="las la-exclamation-circle text-danger"></i> Could not open Ask AI
+</h5>
+
+<div class="alert alert-danger">{{ error }}</div>
+
+<button type="button" class="btn btn-outline-secondary" data-bs-dismiss="offcanvas">
+    Close
+</button>

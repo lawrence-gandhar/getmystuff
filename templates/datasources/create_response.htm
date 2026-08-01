@@ -1,0 +1,8 @@
+{# Response for creating a non-file datasource: the message goes into the
+   offcanvas response target, and all three tabs are refreshed out of band. #}
+{% if error %}
+<div class="alert alert-danger" data-success="false">{{ error }}</div>
+{% else %}
+<div class="alert alert-success" data-success="true">Datasource Added Successfully</div>
+{% endif %}
+{% include "datasources/partials/tables_response.htm" %}

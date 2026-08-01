@@ -1,6 +1,9 @@
-<div id="flow-builder-response" hx-swap-oob="true" class="mb-3">
-    {% if error %}
-    <div class="alert alert-danger" data-success="false">{{ error }}</div>
-    {% endif %}
-</div>
-{% include "flow_builder/flow_row_body.htm" %}
+{# HTMX response for every flow mutation: inline error (or success marker) into the
+   page-level response target — the New Flow modal's after-request hook closes the
+   modal on that marker — plus an out-of-band refresh of the flows table. #}
+{% if error %}
+<div class="alert alert-danger" data-success="false">{{ error }}</div>
+{% else %}
+<div data-success="true"></div>
+{% endif %}
+{% include "flow_builder/flows_table.htm" %}

@@ -1,0 +1,7 @@
+{# Out-of-band refresh of all three Data Sources tabs. Included by every response
+   that changes which datasources exist, so the list the user is looking at stops
+   being stale without a manual page reload. Each table swaps itself by id, which
+   leaves the side-nav and the currently selected tab untouched. #}
+{% include "datasources/partials/file_table.htm" %}
+{% include "datasources/partials/rdbms_table.htm" %}
+{% include "datasources/partials/nosql_table.htm" %}

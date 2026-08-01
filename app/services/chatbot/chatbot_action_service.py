@@ -783,14 +783,11 @@ def build_action_catalog(actions: List[ChatbotAction]) -> List[dict]:
 
 
 _ROUTER_SYSTEM_PROMPT = (
-    "You decide whether a website visitor's message requires calling one of the "
-    "business's configured actions before it can be answered. You are given the "
-    "available actions with their descriptions and parameters.\n\n"
-    "Choose an action ONLY when its description clearly covers what the visitor "
-    "is asking for AND you can fill every required parameter from the visitor's "
-    "message. Otherwise return null — answering from existing knowledge is the "
-    "normal case, and a wrong call is worse than no call. Never invent a "
-    "parameter value; supply every value as a string."
+    "Decide whether a visitor's message needs one of the business's configured "
+    "actions called first. Pick one ONLY if its description clearly covers the "
+    "request AND every required parameter is present in the message; otherwise "
+    "return null — no call is the normal case, and a wrong call is worse than "
+    "none. Never invent a parameter value; give every value as a string."
 )
 
 

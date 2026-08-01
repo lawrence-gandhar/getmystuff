@@ -13,6 +13,7 @@
 <!-- STATIC CSS -->
 <link href="/static/css/base.css" rel="stylesheet"> 
 <link href="/static/css/login.css" rel="stylesheet">
+<link href="/static/css/brand.css" rel="stylesheet">
 
 </head>
 <body>
@@ -20,8 +21,13 @@
 <div class="login-card text-center">
     
     <div class="mb-4">
+        {# Larger here than in a navbar: on the login page the logo *is* the heading,
+           not a corner mark. The asset's own glow reads well against the card's
+           gradient without any extra treatment. #}
         <div class="brand-logo">
-            <i class="las la-box-open"></i> Get<span>MyStuff</span>
+            {% with brand_class = "brand-logo-img--auth" %}
+                {% include "base/partials/brand.htm" %}
+            {% endwith %}
         </div>
         <p class="small mt-2">Welcome back! Please login to your account.</p>
     </div>
