@@ -82,3 +82,45 @@ Services must NOT:
 
 * access HTTP requests
 * render HTML
+
+---
+
+# Datasource Table/Column Status Cascade
+
+The datasource preview exposes two switches per table — the table itself and each of
+its columns — both stored in `DataSource.configuration_data`:
+
+```
+configuration_data = {
+    "orders": {
+        "status": "active",                 # the table switch
+        "column_data": {
+            "id": {"column_name": "id", "status": "active"},   # the column switches
+        },
+    },
+}
+```
+
+The table switch **owns** its columns. `toggle_table_status_service()` cascades in
+both directions: every column in `column_data` is written to the table's new status,
+whether that status is `active` or `inactive`.
+
+Why both directions and not just deactivation:
+
+* An **active** table whose columns are all inactive contributes no data to a query,
+  so leaving the columns alone on activation reads as the activation having silently
+  done nothing.
+* An **inactive** table with active columns is the mirror of the same disagreement.
+
+The consequence is deliberate: re-activating a table discards the per-column choices
+the user made before it was switched off. The table switch is the coarse control, and
+it wins.
+
+`toggle_column_status_service()` enforces the same ownership from the other side — it
+refuses to activate a column while its table is inactive, with a 400 and a readable
+message rather than a silent no-op.
+
+A table discovered after the datasource was created has no `column_data` yet. The
+cascade is a no-op there; the view route falls back to a live schema fetch and treats
+every column as active, which matches the table's own default of `"active"` for
+unconfigured tables.

@@ -972,9 +972,8 @@ class TestToggleTableStatus:
     async def test_deactivating_cascades_to_every_column(
         self, db, user, make_datasource  # noqa: ANN001
     ) -> None:
-        """Switching a table off must switch its columns off too, or a later
-        table re-activation would silently bring back columns the user had
-        already disabled."""
+        """Switching a table off must switch its columns off too — a column left
+        active under an inactive table disagrees with what the preview shows."""
         datasource = await make_datasource(
             user,
             "sales_data",
@@ -998,18 +997,25 @@ class TestToggleTableStatus:
             "inactive",
         ]
 
-    async def test_activating_does_not_cascade(
+    async def test_activating_cascades_to_every_column(
         self, db, user, make_datasource  # noqa: ANN001
     ) -> None:
-        """Recorded behaviour: turning a table back on leaves its columns as
-        they were, so individually-disabled columns stay disabled."""
+        """Switching a table on must switch its columns on too.
+
+        The cascade is symmetric with deactivation: an active table whose columns
+        are all inactive exposes no data, so leaving the columns untouched here
+        would read as the activation having silently done nothing.
+        """
         datasource = await make_datasource(
             user,
             "sales_data",
             configuration_data={
                 "orders": {
                     "status": "inactive",
-                    "column_data": {"id": {"column_name": "id", "status": "inactive"}},
+                    "column_data": {
+                        "id": {"column_name": "id", "status": "inactive"},
+                        "total": {"column_name": "total", "status": "inactive"},
+                    },
                 }
             },
         )
@@ -1019,7 +1025,27 @@ class TestToggleTableStatus:
         )
 
         assert result["status"] == "active"
-        assert result["column_data"]["id"]["status"] == "inactive"
+        assert [c["status"] for c in result["column_data"].values()] == [
+            "active",
+            "active",
+        ]
+
+    async def test_cascade_survives_a_table_with_no_stored_columns(
+        self, db, user, make_datasource  # noqa: ANN001
+    ) -> None:
+        """A table discovered after the datasource was created has no
+        ``column_data`` yet — the cascade must be a no-op rather than a KeyError,
+        and must leave the key present so the next toggle has something to walk."""
+        datasource = await make_datasource(
+            user, "sales_data", configuration_data={"orders": {"status": "inactive"}}
+        )
+
+        result = await svc.toggle_table_status_service(
+            db, datasource.uuid, user.id, "orders", "active"
+        )
+
+        assert result["status"] == "active"
+        assert result["column_data"] == {}
 
     async def test_creates_the_entry_for_an_unconfigured_table(
         self, db, user, make_datasource  # noqa: ANN001

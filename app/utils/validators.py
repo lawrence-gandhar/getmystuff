@@ -163,13 +163,22 @@ def parse_optional_uuid(
         ) from exc
 
 
-def parse_json_object(raw: Optional[str], field_label: str) -> dict:
+def parse_json_object(raw, field_label: str) -> dict:
     """
     Parse a hidden JSON form field into a dict.
 
     Blank means "nothing configured yet" and yields ``{}``. Anything that isn't a
     JSON *object* is a user mistake with a fixable message, never a 500.
+
+    An already-parsed dict passes straight through. The request schemas type these
+    fields as ``JsonObjectField``, so by the time a route hands one to a service it
+    is a dict, not text — while the executor re-validating a *stored* config, and
+    the tests, still arrive with JSON. Accepting both is what lets there be one
+    validator instead of one per caller shape.
     """
+    if isinstance(raw, dict):
+        return raw
+
     raw_value = (raw or "").strip()
 
     if not raw_value:

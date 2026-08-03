@@ -7,14 +7,16 @@ by name; the tool arrives here with the *stored* query definition; the rows that
 go back to the model are the result of that definition and nothing else. There is
 no path from model output into a query.
 
-**Why the query is rebuilt through reflection rather than rendered as text.**
-``tool_config_service.build_query_preview`` already turns a config into SQL, but
-it is a string builder for display: it inlines filter values with f-strings, and
-its own docstring says it is never executed. Executing it would make every stored
-filter value a SQL injection vector. Instead each table is reflected
-(``Table(autoload_with=...)``, the same approach as ``db_utils._reflect_one``) and
-the query is assembled from real ``Column`` objects. Three properties follow, and
-they are the point of this module:
+A tool config is written one of two ways, and this module runs both:
+
+**Builder mode — the query is rebuilt through reflection rather than rendered as
+text.** ``tool_config_service.build_query_preview`` already turns a config into
+SQL, but it is a string builder for display: it inlines filter values with
+f-strings, and its own docstring says it is never executed. Executing it would
+make every stored filter value a SQL injection vector. Instead each table is
+reflected (``Table(autoload_with=...)``, the same approach as
+``db_utils._reflect_one``) and the query is assembled from real ``Column``
+objects. Three properties follow:
 
 * identifiers are quoted by the dialect, so a table or column name can never be
   read as syntax;
@@ -22,6 +24,23 @@ they are the point of this module:
   reaches the database as a literal string that matches nothing;
 * a column that does not exist fails here, as a readable message, instead of
   reaching the driver.
+
+**SQL mode — the stored statement is run as written.** There is no config to
+rebuild: the operator approved a specific query, and running an approximation of
+it would defeat the point of the mode existing. The guarantees are different, and
+worth stating plainly:
+
+* nothing the model produces is in the statement. The SQL was written and saved by
+  the operator, in advance, and the tool takes no arguments — the same property
+  that makes builder mode safe, arrived at differently;
+* it is re-checked by :func:`tool_config_service.validated_tool_sql` on every run,
+  not just when it was saved, so a row edited straight in psql is held to the same
+  "one read-only statement" rule as one saved through the form;
+* the row cap is applied by **streaming** the result and stopping (see
+  :func:`_execute_sql_query`) rather than by wrapping the statement in a subquery
+  with a ``LIMIT``. Rewriting the operator's SQL would change what runs — and a
+  derived table breaks on duplicate output column names in MySQL, which is exactly
+  the sort of query (``SELECT a.id, b.id …``) this mode exists to allow.
 
 Only relational datasources are supported (see :data:`query_joins.RDBMS_DB_TYPES`).
 A tool config pointed at Mongo or a file is refused with a message the agent can
@@ -32,14 +51,18 @@ import json
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
-from sqlalchemy import MetaData, Table, func, select
+from litestar.exceptions import HTTPException
+from sqlalchemy import MetaData, Table, func, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.sql import Select
 from sqlalchemy.sql.elements import ColumnElement
 
 from app.db.db_utils import get_engine
 from app.services.datasource.metadata_service import rdbms_url
-from app.services.tool_configs.tool_config_service import validated_query_config
+from app.services.tool_configs.tool_config_service import (
+    validated_query_config,
+    validated_tool_sql,
+)
 from app.utils.query_joins import RDBMS_DB_TYPES, query_tables
 
 logger = logging.getLogger(__name__)
@@ -89,14 +112,21 @@ async def execute_tool_query(
     config: dict,
     table_name: str,
     row_limit: int = MAX_TOOL_ROWS,
+    sql_query: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     Run one tool config's query and return its rows as dictionaries.
 
-    ``config`` is re-validated here even though it was validated when it was
-    saved. That is deliberate: this function's guarantees have to hold for a
-    config however it got into the database, including one edited directly in
-    psql, so it re-derives what it will execute instead of trusting the row.
+    ``sql_query`` picks the mode: present means run that statement, absent means
+    build the query from ``config``. The caller passes the row as it was stored
+    rather than a mode flag, so a tool cannot end up in a mode whose query is
+    missing.
+
+    Whichever mode it is, the stored query is **re-validated here** even though it
+    was validated when it was saved. That is deliberate: this function's guarantees
+    have to hold for a row however it got into the database, including one edited
+    directly in psql, so it re-derives what it will execute instead of trusting the
+    row.
     """
     db_type = (datasource.db_type or "").strip().lower()
 
@@ -107,11 +137,6 @@ async def execute_tool_query(
             "this way. Tell the user this tool is not available."
         )
 
-    # validated_query_config takes the JSON text the form submits, so the stored
-    # dict is re-serialised rather than a second entry point being added to it —
-    # one validator, one set of rules, no drift.
-    validated = validated_query_config(json.dumps(config or {}), table_name, db_type)
-
     url = rdbms_url(datasource)
     limit = max(1, min(int(row_limit or MAX_TOOL_ROWS), MAX_TOOL_ROWS))
 
@@ -119,15 +144,27 @@ async def execute_tool_query(
         engine = await get_engine(url)
 
         async with engine.connect() as connection:
-            tables = await _reflect_tables(
-                connection, table_name, validated.get("joins") or [],
-            )
-            statement = _build_select(validated, table_name, tables, limit)
-            result = await connection.execute(statement)
-            rows = [dict(row) for row in result.mappings().all()]
+            if (sql_query or "").strip():
+                rows = await _execute_sql_query(connection, sql_query, limit)
+            else:
+                rows = await _execute_built_query(
+                    connection, config, table_name, db_type, limit,
+                )
 
     except ToolQueryError:
         raise
+    except HTTPException as exc:
+        # A stored query that no longer passes its own validator — a config hand-
+        # edited into an invalid shape, or a sql_query that is no longer a single
+        # read. The validators speak to an operator filling in a form, so the
+        # detail is logged and the model is told something it can act on instead.
+        logger.warning(
+            "Tool query for table %s failed validation: %s", table_name, exc.detail,
+        )
+        raise ToolQueryError(
+            "This tool's saved query is no longer valid, so it cannot run. Tell the "
+            "user the tool needs reconfiguring."
+        ) from exc
     except SQLAlchemyError as exc:
         # The driver message can name schema objects and even echo values, so it is
         # logged rather than handed to a model that is talking to a visitor.
@@ -145,6 +182,76 @@ async def execute_tool_query(
         ) from exc
 
     return rows
+
+
+async def _execute_built_query(
+    connection,
+    config: dict,
+    table_name: str,
+    db_type: str,
+    limit: int,
+) -> List[Dict[str, Any]]:
+    """
+    Builder mode: reflect the tables, assemble a ``Select``, run it.
+
+    ``validated_query_config`` takes the JSON text the form submits, so the stored
+    dict is re-serialised rather than a second entry point being added to it — one
+    validator, one set of rules, no drift.
+    """
+    validated = validated_query_config(json.dumps(config or {}), table_name, db_type)
+
+    tables = await _reflect_tables(
+        connection, table_name, validated.get("joins") or [],
+    )
+    statement = _build_select(validated, table_name, tables, limit)
+
+    result = await connection.execute(statement)
+
+    return [dict(row) for row in result.mappings().all()]
+
+
+async def _execute_sql_query(
+    connection,
+    sql_query: str,
+    limit: int,
+) -> List[Dict[str, Any]]:
+    """
+    SQL mode: run the operator's statement, as written, and stop at ``limit`` rows.
+
+    Two decisions worth spelling out.
+
+    **The statement is re-validated first.** ``validated_tool_sql`` is the same
+    check the form applied, so a row that has since been edited outside the
+    application — or written by an older version of it — cannot smuggle a second
+    statement or a write past this point.
+
+    **The cap is applied by streaming, not by rewriting the SQL.** ``stream`` opens
+    a server-side cursor where the driver supports one, and ``fetchmany`` stops
+    after the cap, so a query matching a million rows never materialises more than
+    ``limit`` of them here. Wrapping the statement as
+    ``SELECT * FROM (…) LIMIT n`` would have been simpler and is wrong in two ways:
+    it changes the SQL the operator approved, and MySQL rejects a derived table
+    with duplicate output column names — so ``SELECT a.id, b.id FROM a JOIN b``,
+    a query this mode exists to make possible, would fail for a reason having
+    nothing to do with the query.
+
+    The statement still *runs* in full on the database — an unfiltered aggregate
+    scans what it scans. The cap bounds what crosses the wire and what reaches the
+    prompt, which is what it is there for.
+    """
+    statement = text(validated_tool_sql(sql_query))
+
+    result = await connection.stream(statement)
+
+    try:
+        rows = await result.mappings().fetchmany(limit)
+    finally:
+        # Releases the server-side cursor without waiting for the connection to be
+        # returned to the pool. The whole point of streaming is that the rest of
+        # the result set is never read.
+        await result.close()
+
+    return [dict(row) for row in rows]
 
 
 # --------------------------------------------------------------------------

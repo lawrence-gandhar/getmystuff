@@ -29,7 +29,7 @@ respectively), and the reflection this relies on is a relational concept.
 """
 
 import json
-import re
+import logging
 import uuid
 from typing import Any, List, Optional, Tuple
 
@@ -42,6 +42,8 @@ from app.models.datasource import DataSource
 from app.models.tool_configs import (
     AGGREGATION_FUNCTIONS,
     FILTER_OPERATORS,
+    QUERY_MODE_BUILDER,
+    QUERY_MODE_SQL,
     ToolConfig,
 )
 from app.services.ai_analytics.ai_analytics_service import answer_structured
@@ -54,7 +56,10 @@ from app.utils.query_joins import (
     query_tables,
     supports_joins,
 )
+from app.utils.sql_guard import MAX_SQL_LENGTH, normalised_sql, read_only_violation
 from app.utils.validators import require_object_name
+
+logger = logging.getLogger(__name__)
 
 datasource_crud = CRUDQueryBuilder(DataSource)
 
@@ -81,44 +86,6 @@ _MAX_TABLES = MAX_REFLECTED_TABLES
 # session.
 _MAX_HISTORY_TURNS = 6
 _MAX_HISTORY_SQL_LEN = 4000
-
-# A generated statement longer than this is rejected rather than displayed — at that
-# length something has gone wrong with the response, not with the request.
-_MAX_SQL_LEN = 8000
-
-# Verbs that make a statement more than a read *from a position a read could reach*:
-# `WITH … INSERT`, `SELECT … INTO`, and the DDL a model might append. Checked after
-# string literals and comments are stripped out (see _strip_literals), so a WHERE
-# clause comparing against the text 'delete' is not mistaken for a DELETE.
-#
-# Deliberately not a list of every dangerous word. PRAGMA, COPY, CALL, SET, VACUUM
-# and friends are only valid at the start of a statement, which _READ_START_RE
-# already refuses, or after a `;`, which is refused separately — listing them here
-# would add nothing but false rejections of valid queries (a column named `call`, a
-# table named `copy`).
-_WRITE_KEYWORDS = (
-    "insert", "update", "delete", "into", "drop", "alter", "create", "truncate",
-    "replace", "merge", "grant", "revoke",
-)
-_WRITE_KEYWORD_RE = re.compile(
-    r"\b(" + "|".join(_WRITE_KEYWORDS) + r")\b", re.IGNORECASE,
-)
-
-# A read starts here. WITH is allowed because a CTE is the natural shape for the
-# kind of query this feature produces; a WITH that goes on to write is caught by
-# the keyword check above.
-_READ_START_RE = re.compile(r"^\s*(select|with)\b", re.IGNORECASE)
-
-# Quoted spans and comments, removed before the checks above look for `;` and write
-# verbs. Ordered longest-first so `--` inside a string is not treated as a comment.
-_LITERAL_RE = re.compile(
-    r"'(?:[^']|'')*'"       # single-quoted string, '' being an escaped quote
-    r"|\"(?:[^\"]|\"\")*\""  # double-quoted identifier
-    r"|`[^`]*`"              # MySQL backtick identifier
-    r"|/\*.*?\*/"            # block comment
-    r"|--[^\n]*",            # line comment
-    re.DOTALL,
-)
 
 # What the SQL is written for, by datasource type. Only used to tell the model which
 # dialect to target.
@@ -167,6 +134,12 @@ class ToolDraft(BaseModel):
     a real answer the model is expected to give, with ``reason`` naming what is in
     the way. Guessing an approximation of a query the user already read would be far
     worse than declining.
+
+    ``fits`` false is **not** a refusal to create the tool. A tool config can also
+    store the statement as written (``query_mode="sql"``), which is what
+    :func:`draft_tool_config` falls back to — the answer decides how the query is
+    stored, not whether it can be. That is why ``tool_name`` and ``description`` are
+    asked for either way: they are needed in both modes.
     """
 
     fits: bool = Field(
@@ -181,12 +154,13 @@ class ToolDraft(BaseModel):
     tool_name: str = Field(
         default="",
         description="A suggested lowercase identifier for the tool, from the "
-        "question it answers — e.g. units_sold_per_product.",
+        "question it answers — e.g. units_sold_per_product. Always fill this in, "
+        "whether or not the query fits the builder.",
     )
     description: str = Field(
         default="",
         description="One sentence on what this tool answers, for the agent to decide "
-        "when to call it.",
+        "when to call it. Always fill this in, whether or not the query fits.",
     )
     table: str = Field(
         default="",
@@ -342,6 +316,10 @@ async def generate_sql(
 
 # --------------------------------------------------------------------------
 # Auto Create Tool — express the generated query as a Tool Config
+#
+# Any read-only query the panel generated can be saved. Which of the two tool
+# config query modes it lands in is a matter of how well the builder can hold it,
+# never of whether it is allowed — see draft_tool_config.
 # --------------------------------------------------------------------------
 
 async def draft_tool_config(
@@ -354,24 +332,37 @@ async def draft_tool_config(
     llm_api_key_id: Optional[uuid.UUID] = None,
 ) -> dict:
     """
-    Express a generated query in the shape a Tool Config stores, ready to create.
+    Express a generated query as a Tool Config, ready to create.
 
-    A second, deliberately narrow AI call rather than one more field on
-    :class:`SqlDraft`. Two reasons: it only costs anything when the user actually
-    asks for a tool, and converting one known query into one known schema is a far
-    smaller task than writing SQL — which matters most for the in-built local model
-    (a 1.7B parameter model, see AI_INBUILT.md), where a single request producing
-    prose, SQL, assumptions *and* a nested builder config is exactly the kind of
-    prompt that comes back malformed.
+    **Every valid read-only query can be saved.** The conversion tries the query
+    builder's shape first, because a builder tool is the stronger artefact — its
+    identifiers are checked against the schema, its filter values are bound
+    parameters, and it reopens in the builder for editing. When the query needs SQL
+    the builder cannot hold (``DISTINCT``, ``ORDER BY``, a subquery, a window
+    function), the tool is created anyway, storing the statement as written
+    (``query_mode="sql"``). The user read that SQL and asked for it; declining to
+    save it would mean the assistant can write a query it will not let you use.
 
-    The model's answer is then held to the same validator the query builder's own
-    output is held to (:func:`tool_config_service.validated_query_config`), so a
-    config from here is exactly as trustworthy as a hand-built one — and reopening it
-    in the builder shows what was created, not an approximation of it.
+    The conversion is a second, deliberately narrow AI call rather than one more
+    field on :class:`SqlDraft`. Two reasons: it only costs anything when the user
+    actually asks for a tool, and converting one known query into one known schema
+    is a far smaller task than writing SQL — which matters most for the in-built
+    local model (a 1.7B parameter model, see AI_INBUILT.md), where a single request
+    producing prose, SQL, assumptions *and* a nested builder config is exactly the
+    kind of prompt that comes back malformed.
 
-    Returns ``{"fits", "reason", "tool_name", "description", "table", "config",
-    "config_json", "preview"}``. ``fits`` false means the query cannot be represented
-    and ``reason`` says what is in the way; the caller shows that instead of a form.
+    In builder mode the model's answer is held to the same validator the query
+    builder's own output is held to
+    (:func:`tool_config_service.validated_query_config`), so a config from here is
+    exactly as trustworthy as a hand-built one. A conversion that fails *that* check
+    — an invented column, an ambiguous reference — also falls back to SQL mode
+    rather than erroring: the SQL itself was never in doubt, only the model's
+    reading of it.
+
+    Returns ``{"mode", "reason", "tool_name", "description", "table", "config",
+    "config_json", "sql_query", "preview"}``. ``mode`` is ``"builder"`` or
+    ``"sql"``; ``reason`` is filled in for SQL mode and names why the builder could
+    not hold the query, for the panel to show alongside the form.
     """
     tables = _validated_tables(table_names)
     sql = _validated_sql(sql)
@@ -401,14 +392,51 @@ async def draft_tool_config(
     )
 
     if not draft.fits:
-        return {
-            "fits": False,
-            "reason": draft.reason.strip() or (
-                "This query uses SQL the tool builder cannot represent."
-            ),
-        }
+        return _sql_tool_draft(draft, tables, sql, draft.reason.strip())
 
-    return _validated_tool_draft(draft, datasource, tables, metadata)
+    try:
+        return _validated_tool_draft(draft, datasource, tables, metadata)
+    except HTTPException as exc:
+        # The model claimed the query fits and then described it wrongly — a column
+        # that is not in the schema, a base table the user did not pick. The SQL is
+        # still exactly what the user approved, so it is saved as SQL rather than
+        # thrown away, with the conversion's own message as the reason so the user
+        # can see why they are not getting a builder tool.
+        logger.info("Tool conversion fell back to SQL mode: %s", exc.detail)
+        return _sql_tool_draft(draft, tables, sql, str(exc.detail))
+
+
+def _sql_tool_draft(
+    draft: ToolDraft,
+    tables: List[str],
+    sql: str,
+    reason: str,
+) -> dict:
+    """
+    The same draft, to be stored as a SQL-mode tool config.
+
+    ``table`` is the primary table the tool is labelled with. The model's answer is
+    used when it named one of the tables the user actually selected, and the first
+    selected table otherwise — it is a label here, not something the query is built
+    against, so a wrong guess is worth correcting quietly rather than refusing over.
+
+    The statement is not re-validated: it arrived through :func:`_validated_sql`,
+    and ``tool_config_service.validated_tool_sql`` checks it again on save.
+    """
+    named_table = (draft.table or "").strip()
+    table = named_table if named_table in tables else tables[0]
+
+    return {
+        "mode": QUERY_MODE_SQL,
+        "reason": reason or "This query uses SQL the tool builder cannot represent.",
+        "tool_name": draft.tool_name.strip().lower(),
+        "description": draft.description.strip(),
+        "table": table,
+        "config": {},
+        "config_json": "{}",
+        "sql_query": sql,
+        "preview": sql,
+    }
 
 
 def _validated_tool_draft(
@@ -478,13 +506,14 @@ def _validated_tool_draft(
     )
 
     return {
-        "fits": True,
+        "mode": QUERY_MODE_BUILDER,
         "reason": "",
         "tool_name": draft.tool_name.strip().lower(),
         "description": draft.description.strip(),
         "table": base_table,
         "config": config,
         "config_json": json.dumps(config, indent=2),
+        "sql_query": "",
         # Built from the validated config, not from the SQL the model was given, so
         # the panel previews what the tool will actually hold.
         "preview": tool_config_service.build_query_preview(config, base_table),
@@ -606,7 +635,12 @@ def _build_tool_prompts(
         "window function, CASE, UNION, an expression or function in the SELECT list, "
         "OR between filters, a non-equality join condition, or a filter compared "
         "against another column instead of a literal. Do not approximate — a tool "
-        "that quietly differs from the query is worse than no tool.\n\n"
+        "that quietly differs from the query is worse than no tool. fits=false is a "
+        "normal answer and does not stop the tool being created: the query is then "
+        "saved as SQL exactly as written, so say plainly what did not fit rather "
+        "than bending the query to make it fit.\n\n"
+        "Fill in tool_name and description either way — they are needed whichever "
+        "way the query ends up stored.\n\n"
         "When it does fit:\n"
         "- Use column names exactly as the schema spells them.\n"
         "- table is the table in the FROM clause, never a joined one.\n"
@@ -636,15 +670,18 @@ async def create_tool_from_draft(
     table_name: str,
     description: Optional[str],
     config_json: Optional[str],
+    query_mode: Optional[str] = None,
+    sql_query: Optional[str] = None,
 ) -> ToolConfig:
     """
-    Create the Tool Config the panel just drafted.
+    Create the Tool Config the panel just drafted, in whichever mode it drafted.
 
     Goes through ``tool_config_service.create_tool_config`` rather than writing the
     row here, so an AI-created tool is subject to every rule a hand-made one is:
-    agent and datasource ownership, the per-agent unique name, and the full query
-    config validation. Nothing about this row records that an AI drafted it — there is
-    no second kind of tool config to maintain.
+    agent and datasource ownership, the per-agent unique name, and the same
+    validation of whichever query it holds — the builder config, or the statement.
+    Nothing about this row records that an AI drafted it — there is no second kind
+    of tool config to maintain.
     """
     return await tool_config_service.create_tool_config(
         db,
@@ -655,6 +692,8 @@ async def create_tool_from_draft(
         table_name=table_name,
         description=description,
         config_json=config_json,
+        query_mode=query_mode,
+        sql_query=sql_query,
     )
 
 
@@ -842,16 +881,22 @@ def _validated_sql(sql: str) -> str:
     Check what the model produced is a single read-only statement before it is shown.
 
     An empty query is allowed — that is how the model reports that the schema cannot
-    answer the request. Anything else is held to being one SELECT: the person
-    reading this panel is likely to run it, and a tool config's query is a read by
-    definition, so a generated write is a bug to surface rather than display.
-    """
-    sql = _strip_fences((sql or "").strip()).rstrip(";").strip()
+    answer the request. Anything else is held to being one read, by the same rule
+    Tool Configs applies to a hand-written statement and the Deep Agents executor
+    applies before running one (:mod:`app.utils.sql_guard`). Shared, because a query
+    shown here is likely to be run and may well be saved as a tool: three different
+    ideas of "read-only" would mean the loosest one wins.
 
-    if not sql:
+    The status is 502, not 400: the user asked a perfectly reasonable question and
+    the model returned something unusable. That is the upstream's mistake, and the
+    wording says so rather than blaming the prompt.
+    """
+    statement = normalised_sql(sql)
+
+    if not statement:
         return ""
 
-    if len(sql) > _MAX_SQL_LEN:
+    if len(statement) > MAX_SQL_LENGTH:
         raise HTTPException(
             status_code=502,
             detail=(
@@ -860,62 +905,17 @@ def _validated_sql(sql: str) -> str:
             ),
         )
 
-    bare = _strip_literals(sql)
-
-    if not _READ_START_RE.match(bare):
+    violation = read_only_violation(statement)
+    if violation:
         raise HTTPException(
             status_code=502,
             detail=(
-                "The AI returned something that is not a read-only query, so it "
-                "was not shown. Rephrase your request as a question about the data."
+                f"The AI returned a query that {violation}, so it was not shown. "
+                "Rephrase your request as a question about the data."
             ),
         )
 
-    if ";" in bare:
-        raise HTTPException(
-            status_code=502,
-            detail=(
-                "The AI returned more than one statement, so it was not shown. "
-                "Ask for a single query."
-            ),
-        )
-
-    keyword = _WRITE_KEYWORD_RE.search(bare)
-    if keyword:
-        raise HTTPException(
-            status_code=502,
-            detail=(
-                f"The AI returned a query containing '{keyword.group(1).upper()}', "
-                "which would change data, so it was not shown. Rephrase your "
-                "request as a question about the data."
-            ),
-        )
-
-    return sql
-
-
-def _strip_fences(sql: str) -> str:
-    """
-    Drop a markdown code fence the model added anyway.
-
-    Asked for in the system prompt, but some models fence regardless, and a fence is
-    formatting rather than a reason to reject an otherwise good query.
-    """
-    if not sql.startswith("```"):
-        return sql
-
-    without_open = sql.split("\n", 1)[1] if "\n" in sql else ""
-    return without_open.rsplit("```", 1)[0].strip()
-
-
-def _strip_literals(sql: str) -> str:
-    """
-    Blank out quoted spans and comments so the structural checks read only code.
-
-    Without this, ``WHERE action = 'delete'`` would be rejected as a DELETE and
-    ``WHERE note = 'a;b'`` as two statements.
-    """
-    return _LITERAL_RE.sub(" ", sql)
+    return statement
 
 
 # --------------------------------------------------------------------------

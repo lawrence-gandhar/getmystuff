@@ -3,5 +3,9 @@ from app.models.tool_configs.tool_configs import (  # noqa: F401
     AGGREGATION_FUNCTIONS,
     FILTER_OPERATOR_VALUES,
     FILTER_OPERATORS,
+    QUERY_MODE_BUILDER,
+    QUERY_MODE_SQL,
+    QUERY_MODE_VALUES,
+    QUERY_MODES,
     ToolConfig,
 )

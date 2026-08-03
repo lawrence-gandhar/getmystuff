@@ -279,16 +279,24 @@ deliberate — this schema guarantees a JSON object of bounded size, and
 because only it has just reflected the tables. A query naming an unknown column
 therefore *passes* this layer.
 
+`sql_query` is the same split drawn once more for the other query mode (see
+[TOOL_QUERY_MODES.md](TOOL_QUERY_MODES.md)). The schema bounds its length and
+validates `query_mode` against a closed set it owns; whether the statement is a
+single read-only one is `tool_config_service.validated_tool_sql`, which shares that
+rule with the Deep Agents executor and with Ask AI via `app/utils/sql_guard.py`. A
+`DELETE` therefore *passes* this layer too — a second copy of that guard here would
+be the one nobody checks against the copy that runs at query time.
+
 | Schema | Fields |
 |---|---|
 | `ToolConfigFilterMixin` | `agent_filter` |
-| `ToolConfigCreateRequest` | + `data_agent_id`, `datasource_id`, `tool_name` (identifier), `table_name` (object name), `description`, `config_json` |
+| `ToolConfigCreateRequest` | + `data_agent_id`, `datasource_id`, `tool_name` (identifier), `table_name` (object name), `description`, `query_mode` (`builder`/`sql`, blank means builder), `config_json`, `sql_query` (≤20000) |
 | `ToolConfigUpdateRequest` | same as create |
 | `ToolConfigSetEnabledRequest` | + `is_enabled` |
 | `ToolConfigDeleteRequest` | filter only |
 | `ToolConfigListQuery` | `agent` |
 | `SchemaCascadeQuery` | `datasource_id`, `table_name`; `.table` exposes a string so `None` never reaches a service as `"None"` |
-| `ToolConfigView` | `uuid`, `tool_name`, `table_name`, `description`, `is_enabled`, `agent_id`/`agent_name`, `datasource_id`/`datasource_name`, `config`, `preview` |
+| `ToolConfigView` | `uuid`, `tool_name`, `table_name`, `description`, `query_mode`, `is_enabled`, `agent_id`/`agent_name`, `datasource_id`/`datasource_name`, `config`, `sql_query`, `preview` |
 | `TableColumnsResponse` | `table_name`, `columns`, `error`; `.failure()` reports a connection error in the payload so the join builder shows it beside the row instead of the offcanvas being replaced mid-edit |
 
 `data_agent_id` and `datasource_id` are optional *here* and required by the
@@ -321,7 +329,7 @@ The largest package, and the only one covering an **unauthenticated** payload.
 
 | Schema | Fields | Rules |
 |---|---|---|
-| `ChatbotCreateRequest` | `name`, `datasource_id`, `target_type`, `target_selection[]`, `allowed_origins`, `workspace_id`, `data_agent_id` | cross-field: a `file` selection must be a uuid, a `table`/`collection` selection an object name, and a `datasource` target needs no selection at all |
+| `ChatbotCreateRequest` | `name`, `datasource_id` (optional — see below), `target_type`, `target_selection[]`, `allowed_origins`, `workspace_id`, `data_agent_id` | cross-field: a `file` selection must be a uuid, a `table`/`collection` selection an object name, a `datasource` target needs no selection at all, and an `agent` target needs a **data agent and no datasource** |
 | `ChatbotUpdateRequest` | `name`, `allowed_origins` | plain `Optional[str]` (rule 5). The datasource target is absent by design — repointing a published widget changes what every embedded copy answers about |
 | `ChatbotSettingsTabQuery` | `tab` | unknown falls back to `appearance` so a stale bookmark still opens |
 | `ChatbotAiSettingsRequest` | `agent_name`, `system_prompt`, `variables_json`, `llm_mode`, `llm_api_key_id` | mode ∈ `LLM_MODE_VALUES`; the key id stays a string so `""` keeps its "any active key" meaning |
@@ -335,6 +343,16 @@ The largest package, and the only one covering an **unauthenticated** payload.
 | `ChatbotTurnResponse` | `status`, `type`, `summary`, `text`, `insights`, `table`, `options`, `message`, `response_time_ms` | `.from_turn(TurnResult)`; `text` duplicates `summary` for the flow node types; an error payload carries only message + timing |
 | `WidgetConfigResponse` | `status`, `title`, `extra="allow"` | `build_widget_public_config` owns the key set; narrowing it here would drop a key the widget script needs |
 | `ChatbotKeyView` | `uuid`, `name`, `api_key`, `target_type`, `allowed_origins`, `is_active` | `api_key` is *publishable* — it goes in the embed snippet, and its protection is the per-key origin allow-list, not secrecy |
+
+`datasource_id` on `ChatbotCreateRequest` is the clearest case in the codebase of a
+**conditionally** required field, and of why that belongs in a model validator rather
+than on the field. A widget reads either a datasource target it nominates, or an
+attached data agent's tool configs (`target_type == "agent"`) — never both, because
+two answers to "what can this reach?" would be resolved differently depending on
+whether the agent happened to run. The rule spans three fields, so no single one can
+express it; `check_target` owns all of it, including rejecting an `agent` target that
+*also* carries a datasource rather than quietly dropping one of the two. See
+[DEEP_AGENTS.md](DEEP_AGENTS.md).
 | `ChatbotActionView` | `uuid`, `name`, `description`, `http_method`, `url`, `is_active`, `parameter_count`, `attached_count` | |
 
 The key and origin checks are **not** here: they need the database and the request's
@@ -379,7 +397,7 @@ tampered value is just another value the services validate.
 | `SqlAssistTablesQuery` | `datasource_id` |
 | `SqlAssistGenerateRequest` | + `prompt` (≤2000), `history_json` |
 | `SqlAssistToolFormRequest` | + `sql` (≤20000), `history_json` |
-| `SqlAssistCreateToolRequest` | + `data_agent_id`, `tool_name`, `table_name`, `description`, `config_json`, `preview` |
+| `SqlAssistCreateToolRequest` | + `data_agent_id`, `tool_name`, `table_name`, `description`, `query_mode`, `config_json`, `sql_query`, `preview` |
 
 `.echo()` returns strings deliberately: the partials put these into hidden inputs,
 and a `None` would render as the text "None" and be posted back as a selection on
@@ -393,7 +411,7 @@ false reassurance.
 
 | Schema | Fields | Rules |
 |---|---|---|
-| `AgentOptionsQuery` | `workspace_id`, `selected`, `field_name` | a blank `workspace_id` lists **every** agent, not none — `data_agents.workspace_id` is nullable, so an unassigned agent has to stay pickable. `.select_name` falls back to `data_agent_id` |
+| `AgentOptionsQuery` | `workspace_id`, `selected`, `field_name`, `required` | a blank `workspace_id` lists **every** agent, not none — `data_agents.workspace_id` is nullable, so an unassigned agent has to stay pickable. `.select_name` falls back to `data_agent_id`. `required` drops the "no agent" option for a host that cannot accept one, and must ride through the cascade URL or it would come back on the first workspace change |
 | `DeepAgentAskRequest` | `question` | required, ≤2000 — the same cap Ask AI and AI Analytics use, so a person typing into a console and a person typing into a prompt box don't hit two different limits |
 
 ---

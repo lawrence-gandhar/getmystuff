@@ -2,11 +2,31 @@
 Tool Configs — one query a data agent is allowed to run, managed from its own
 module.
 
-A tool config is defined here in full: which datasource and table it reads, which
-columns, aggregations, group-bys and filters make up the query, and the name the
-agent calls it by. It is deliberately independent of the Configurations section
-(``DatasourceToolBaseConfig``) — nothing is shared or referenced between the two,
-so editing one never changes the other.
+A tool config is defined here in full: which datasource and table it reads, what
+the query is, and the name the agent calls it by. It is deliberately independent
+of the Configurations section (``DatasourceToolBaseConfig``) — nothing is shared
+or referenced between the two, so editing one never changes the other.
+
+**Two ways to write the query, one row.** ``query_mode`` says which:
+
+``builder``
+    ``config`` holds the structured query — columns, aggregations, grouping,
+    filters, joins — and ``sql_query`` is NULL. Every identifier in it is checked
+    against the tables the query reads, and the executor rebuilds it from
+    reflected ``Column`` objects, so no part of it is ever string-interpolated
+    into SQL.
+
+``sql``
+    ``sql_query`` holds one read-only statement written by the operator (or by Ask
+    AI, when the query needs SQL the builder cannot express — a window function, a
+    subquery, ``DISTINCT``, ``ORDER BY``), and ``config`` is ``{}``. It is held to
+    :func:`app.utils.sql_guard.read_only_violation` on save *and* again on every
+    run; whether it is otherwise valid is the database's answer to give.
+
+The second mode exists because the first one is a deliberate subset of SQL, and a
+query the operator has read and approved should not be unusable just because that
+subset cannot hold it. The trade is explicit: builder mode is parameterised and
+identifier-checked, SQL mode is exactly the text that was approved.
 
 The ``config`` payload uses the same shape the Configurations builder produces, so
 the two describe a query identically::
@@ -66,6 +86,16 @@ AGGREGATION_FUNCTION_VALUES = frozenset(value for value, _ in AGGREGATION_FUNCTI
 FILTER_OPERATORS = ("=", "!=", ">", "<", "LIKE")
 FILTER_OPERATOR_VALUES = frozenset(FILTER_OPERATORS)
 
+# (value, display label) — how the query is written. See this module's docstring
+# for what each mode stores and what it guarantees.
+QUERY_MODE_BUILDER = "builder"
+QUERY_MODE_SQL = "sql"
+QUERY_MODES = (
+    (QUERY_MODE_BUILDER, "Query builder"),
+    (QUERY_MODE_SQL, "SQL query"),
+)
+QUERY_MODE_VALUES = frozenset(value for value, _ in QUERY_MODES)
+
 
 class ToolConfig(Base):
     """
@@ -117,17 +147,36 @@ class ToolConfig(Base):
 
     # Table, collection or file the query reads. A plain name, not a FK: the
     # object lives in the *user's own* database, not in ours.
+    #
+    # Required in both query modes. In SQL mode the statement may read several
+    # tables, and this is the primary one — what the list page, the routing prompt
+    # and the edit form name as the tool's source.
     table_name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
 
+    # "builder" or "sql" — see QUERY_MODES and this module's docstring. Not an
+    # Enum type: adding a third mode would then need a migration on the type
+    # itself, and the value is validated by tool_config_service on every write.
+    query_mode: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default=QUERY_MODE_BUILDER,
+        server_default=QUERY_MODE_BUILDER,
+    )
+
     # {"columns": [...], "aggregations": [...], "group_by": [...], "filters": [...]}
-    # — see this module's docstring. MutableDict-wrapped like the datasource
-    # configs so an in-place key change is picked up by the session rather than
-    # silently lost.
+    # — see this module's docstring. Empty in SQL mode. MutableDict-wrapped like
+    # the datasource configs so an in-place key change is picked up by the session
+    # rather than silently lost.
     config: Mapped[dict] = mapped_column(
         MutableDict.as_mutable(JSONB),
         nullable=False,
         default=dict,
     )
+
+    # The statement itself, in SQL mode only; NULL in builder mode. Nullable
+    # rather than defaulted to "" so "this tool has no SQL of its own" is a state
+    # the column states, not one inferred from an empty string.
+    sql_query: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     is_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 

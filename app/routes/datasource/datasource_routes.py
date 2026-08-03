@@ -42,6 +42,7 @@ from app.utils.file_utils import (
     FILE_BASED_TYPES,
     read_upload_payloads,
 )
+from app.utils.http_responses import html_error_response, html_success_response
 from app.db.auth import require_auth
 from app.db.db_utils import fetch_file_schema
 
@@ -314,11 +315,10 @@ class DataSourceController(Controller):
                         # with the same name rather than hitting 409.
                         await db.delete(datasource)
                         await db.commit()
-                        return Response(
-                            f"<div class='alert alert-danger'>File upload failed: {exc}. "
-                            f"The datasource was not saved. Please try again.</div>",
-                            status_code=500,
-                            media_type="text/html",
+                        return html_error_response(
+                            f"File upload failed: {exc}. "
+                            "The datasource was not saved. Please try again.",
+                            500,
                         )
 
                 return Template(
@@ -347,11 +347,7 @@ class DataSourceController(Controller):
         except HTTPException as e:
             # Preserve the original HTTP status code (400 / 409 / 422) so
             # HTMX / the browser can distinguish conflict from bad input.
-            return Response(
-                f"<div class='alert alert-danger'>{e.detail}</div>",
-                status_code=e.status_code,
-                media_type="text/html",
-            )
+            return html_error_response(e.detail, e.status_code)
 
     # --------------------------
     # UPDATE DATASOURCE NAME
@@ -374,16 +370,9 @@ class DataSourceController(Controller):
                 user_id=user.id,
                 datasource_name=payload.datasource_name,
             )
-            return Response(
-                "<div class='alert alert-success'>Datasource renamed successfully</div>",
-                media_type="text/html",
-            )
+            return html_success_response("Datasource renamed successfully")
         except HTTPException as e:
-            return Response(
-                f"<div class='alert alert-danger'>{e.detail}</div>",
-                status_code=e.status_code,
-                media_type="text/html",
-            )
+            return html_error_response(e.detail, e.status_code)
 
     # --------------------------
     # VALIDATE DATASOURCE NAME
@@ -684,11 +673,7 @@ class DataSourceController(Controller):
             await delete_datasource(db=db, datasource_id=datasource_id, user_id=user.id)
             return Response("", media_type="text/html")
         except HTTPException as e:
-            return Response(
-                f"<div class='alert alert-danger'>{e.detail}</div>",
-                status_code=e.status_code,
-                media_type="text/html",
-            )
+            return html_error_response(e.detail, e.status_code)
 
     # --------------------------
     # TOGGLE DATASOURCE ACTIVE / INACTIVE
@@ -713,11 +698,7 @@ class DataSourceController(Controller):
                 },
             )
         except HTTPException as e:
-            return Response(
-                f"<div class='alert alert-danger'>{e.detail}</div>",
-                status_code=e.status_code,
-                media_type="text/html",
-            )
+            return html_error_response(e.detail, e.status_code)
 
     # --------------------------
     # CHECK FILE EXISTS
@@ -791,11 +772,7 @@ class DataSourceController(Controller):
         try:
             override = (await FileUploadRequest.from_form(request)).override
         except HTTPException as exc:
-            return Response(
-                f"<div class='alert alert-danger'>{exc.detail}</div>",
-                status_code=exc.status_code,
-                media_type=_HTML,
-            )
+            return html_error_response(exc.detail, exc.status_code)
 
         # The file parts are read separately: bytes are not something a schema can
         # validate, and their rules (extension, size) belong to file_service.
@@ -816,11 +793,7 @@ class DataSourceController(Controller):
                 override=override,
             )
         except ValueError as exc:
-            return Response(
-                f"<div class='alert alert-danger'>{exc}</div>",
-                status_code=403,
-                media_type=_HTML,
-            )
+            return html_error_response(exc, 403)
 
         # Build an HTML summary of all per-file outcomes.
         rows = []

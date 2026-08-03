@@ -6,8 +6,12 @@
    newly chosen datasource would offer columns that are no longer there. Resetting it
    puts the form back to "pick a table", which is where the datasource change left
    it anyway. #}
+{# The mode selector goes with them: whether SQL mode is even available depends on
+   the datasource type, and a statement written against the previous datasource is
+   no more reusable than a builder query was. #}
 {% include "tool_configs/partials/table_field.htm" %}
 
 {% with oob_swap = True %}
+{% include "tool_configs/partials/query_mode_field.htm" %}
 {% include "tool_configs/partials/query_builder.htm" %}
 {% endwith %}

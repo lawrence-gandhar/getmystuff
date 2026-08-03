@@ -35,6 +35,18 @@ from app.services.deep_agents import deep_agent_service
 
 logger = logging.getLogger(__name__)
 
+# What a visitor is told when the attached agent could not run and the chatbot has
+# no datasource target to profile instead (see _generate_deep_agent_reply).
+#
+# Written to be true regardless of the cause, and to close nothing off: it does not
+# blame the visitor, does not name the agent or any part of the configuration, and
+# does not promise a specific recovery time. The operator gets the actual reason
+# from the log — the visitor gets no detail about a system they cannot see.
+_NO_FALLBACK_REPLY = (
+    "I can't reach that data at the moment, so I'd rather not guess. Please try "
+    "again shortly, or ask me something else in the meantime."
+)
+
 
 @dataclass
 class ChatbotAiContext:
@@ -121,6 +133,12 @@ async def _generate_deep_agent_reply(
     scoped to the chatbot's *own* datasource target, which the operator chose when
     they created the widget and which is unchanged by attaching an agent.
 
+    **An agent-backed widget has no such target** (``target_type == "agent"``), and
+    so nothing to degrade to. It says it cannot answer instead — see
+    :data:`_NO_FALLBACK_REPLY`. That is a worse visitor experience than a profile
+    answer and a better one than a wrong answer or an error bubble, and it is the
+    trade the operator accepted by not nominating a datasource.
+
     Webhook actions are deliberately not run on this path. The action router is a
     second model call that picks a webhook, and a Deep Agent already decides for
     itself which tool to call — running both would mean two independent routers
@@ -136,6 +154,18 @@ async def _generate_deep_agent_reply(
             use_inbuilt_llm=context.llm_choice.use_inbuilt_llm,
         )
     except HTTPException as exc:
+        if chatbot_key.datasource_id is None:
+            # Nothing to fall back to. Logged at warning because it is the operator's
+            # to fix — a visitor just failed to get an answer — and the agent's own
+            # reason is included, since that is the actionable part.
+            logger.warning(
+                "Data agent reply failed for chatbot %s (%s) and it has no datasource "
+                "target to fall back to. The visitor was told it cannot answer.",
+                chatbot_key.uuid,
+                exc.detail,
+            )
+            return AnalyticsResult(summary=_NO_FALLBACK_REPLY)
+
         logger.warning(
             "Data agent reply failed for chatbot %s (%s) — falling back to the data "
             "profile answer.",

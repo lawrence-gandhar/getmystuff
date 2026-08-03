@@ -41,6 +41,17 @@
                 host it at the referenced path. Editing settings below updates the live widget
                 immediately &mdash; no re-download needed.
             </p>
+            <div class="alert alert-secondary py-2 small">
+                <i class="las la-info-circle"></i>
+                <strong><code>apiBase</code> must match the scheme of the page you embed on.</strong>
+                A page served over <code>https://</code> cannot call an <code>http://</code> address
+                &mdash; the browser blocks it before the request is sent and reports it as a CORS
+                error, and the widget quietly falls back to its default appearance. If the API answers
+                on the same origin as your page, drop the <code>apiBase</code> line entirely and every
+                request becomes relative. Either way, add the page's own origin to
+                <strong>Allowed Domains</strong>, and check the browser console &mdash; the widget names
+                the exact request and reason whenever it cannot reach the API.
+            </div>
             <div class="position-relative">
                 <button type="button" class="btn btn-sm btn-outline-secondary position-absolute top-0 end-0 m-2" onclick="wsCopyEmbedSnippet(this)">
                     <i class="las la-copy"></i> Copy

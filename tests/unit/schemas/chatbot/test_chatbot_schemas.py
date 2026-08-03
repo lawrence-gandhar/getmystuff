@@ -40,6 +40,7 @@ from app.schemas.chatbot import (
 
 VALID_UUID = "3f4b2c1e-0000-4000-8000-000000000001"
 OTHER_UUID = "3f4b2c1e-0000-4000-8000-000000000002"
+AGENT_UUID = "3f4b2c1e-0000-4000-8000-000000000003"
 
 
 def _detail(schema, data: dict) -> str:
@@ -118,9 +119,10 @@ class TestChatbotCreate:
         )
 
     def test_the_datasource_is_required(self) -> None:
+        """Required for every target type but ``agent`` — see TestAgentTarget."""
         assert _detail(
             ChatbotCreateRequest, {"name": "b", "target_type": "datasource"}
-        ) == "Data source is required"
+        ) == "Please select a data source"
 
     def test_a_malformed_datasource_is_refused(self) -> None:
         assert _detail(
@@ -136,12 +138,101 @@ class TestChatbotCreate:
 
     @pytest.mark.parametrize("target_type", sorted(TARGET_TYPES))
     def test_every_declared_target_type_is_accepted(self, target_type: str) -> None:
-        data = _create(target_type=target_type)
-        if target_type != "datasource":
-            data["target_selection"] = (
-                [VALID_UUID] if target_type == "file" else ["sales_data"]
-            )
+        """
+        ``agent`` is built differently on purpose: it is the one target that
+        carries a data agent *instead of* a datasource, so feeding it the shared
+        ``_create`` payload would be asserting the opposite of the rule.
+        """
+        if target_type == "agent":
+            data = {"name": "Support bot", "target_type": "agent",
+                    "data_agent_id": AGENT_UUID}
+        else:
+            data = _create(target_type=target_type)
+            if target_type != "datasource":
+                data["target_selection"] = (
+                    [VALID_UUID] if target_type == "file" else ["sales_data"]
+                )
         assert ChatbotCreateRequest.parse(data).target_type == target_type
+
+
+class TestAgentTarget:
+    """
+    ``target_type == "agent"`` — a widget with no datasource of its own, whose
+    attached agent's tool configs are the scope.
+
+    The rule is a pairing across three fields, which is why it lives in a model
+    validator rather than on any one of them: an agent target needs an agent, and
+    must *not* carry a datasource. Both halves matter. Accepting a datasource
+    alongside would leave two answers to "what can this widget read?", and which one
+    applied would depend on whether the agent happened to run.
+    """
+
+    def test_an_agent_target_needs_no_datasource(self) -> None:
+        payload = ChatbotCreateRequest.parse(
+            {"name": "b", "target_type": "agent", "data_agent_id": AGENT_UUID}
+        )
+
+        assert payload.datasource_id is None
+        assert str(payload.data_agent_id) == AGENT_UUID
+        assert payload.target_names == []
+        assert payload.file_ids == []
+
+    def test_a_workspace_may_ride_along(self) -> None:
+        """The picker is a workspace -> agent cascade; the workspace is remembered
+        so the form reopens on the right branch."""
+        payload = ChatbotCreateRequest.parse({
+            "name": "b",
+            "target_type": "agent",
+            "data_agent_id": AGENT_UUID,
+            "workspace_id": OTHER_UUID,
+        })
+
+        assert str(payload.workspace_id) == OTHER_UUID
+
+    def test_an_agent_target_without_an_agent_is_refused(self) -> None:
+        """Selecting only a workspace lands here — a workspace groups agents and
+        points at no data itself, so the widget would answer nothing."""
+        assert _detail(
+            ChatbotCreateRequest,
+            {"name": "b", "target_type": "agent", "workspace_id": OTHER_UUID},
+        ) == (
+            "Please choose a data agent, or pick a data source for this widget to "
+            "answer from"
+        )
+
+    def test_an_agent_target_carrying_a_datasource_is_refused(self) -> None:
+        """Not ignored. A submission with both is a form that got out of step with
+        itself, and dropping one answer silently is how a widget ends up scoped to
+        something nobody chose."""
+        assert "no data source of its own" in _detail(
+            ChatbotCreateRequest,
+            {
+                "name": "b",
+                "target_type": "agent",
+                "data_agent_id": AGENT_UUID,
+                "datasource_id": VALID_UUID,
+            },
+        )
+
+    def test_a_datasource_target_still_requires_a_datasource(self) -> None:
+        """The other half of the rule: attaching an agent does not excuse a widget
+        that says it is scoped to a datasource from naming one."""
+        assert _detail(
+            ChatbotCreateRequest,
+            {"name": "b", "target_type": "datasource", "data_agent_id": AGENT_UUID},
+        ) == "Please select a data source"
+
+    def test_a_table_target_with_an_agent_still_needs_its_tables(self) -> None:
+        assert "at least one table" in _detail(
+            ChatbotCreateRequest,
+            {
+                "name": "b",
+                "target_type": "table",
+                "datasource_id": VALID_UUID,
+                "data_agent_id": AGENT_UUID,
+            },
+        )
+
 
     def test_an_untouched_agent_picker_means_no_agent(self) -> None:
         """The pre-Deep-Agents behaviour, preserved."""

@@ -35,7 +35,9 @@ models/      per-feature subfolders (user/, datasource/, ai_settings/, chatbot/,
 schemas/     shared infra (base.py, common.py) + per-feature subfolders (auth/, datasource/,
              workspaces/, data_agents/, tool_configs/, ai_settings/, ai_analytics/, chatbot/,
              chatbot_analytics/, flow_builder/, sql_assist/, deep_agents/)
-utils/
+utils/       flat helper modules (crypto.py, file_utils.py, validators.py, query_joins.py,
+             sql_guard.py, http_responses.py, csv_to_db.py, csv_to_parquet.py,
+             turn_recorder.py)
 templates/
 static/
 ```
@@ -50,9 +52,13 @@ language-model choice, webhook actions and flow attachment),
 [CHATBOT_ANALYTICS.md](CHATBOT_ANALYTICS.md) (per-turn performance logging and the
 dashboard over it), [AI_INBUILT.md](AI_INBUILT.md),
 [QUERY_JOINS.md](QUERY_JOINS.md) (joining several tables into one authored query, in both
-places a query is built), [SQL_ASSIST.md](SQL_ASSIST.md) (Ask AI — plain English to SQL from
+places a query is built),
+[TOOL_QUERY_MODES.md](TOOL_QUERY_MODES.md) (the two ways a tool config holds its query — the
+builder and raw SQL — and `utils/sql_guard.py`, the one definition of a statement this
+application will run, shared by Ask AI, Tool Configs and the Deep Agents executor),
+[SQL_ASSIST.md](SQL_ASSIST.md) (Ask AI — plain English to SQL from
 reflected schema, never from the data; and Auto Create Tool, which saves the result as a tool
-config that reopens fully editable in the query builder),
+config — in the query builder when it fits, as the statement itself when it does not),
 [DEEP_AGENTS.md](DEEP_AGENTS.md) (running a data agent's tool configs as real queries so a
 chatbot answers from tool results and the language model never reads the database),
 [DOCKER_AND_LOCAL_LLM.md](DOCKER_AND_LOCAL_LLM.md) (why the app runs in a container on
@@ -65,6 +71,15 @@ is split between a schema and a service),
 container against an SQLite database, the four type shims that makes possible, how an
 authenticated route is reached, and the timestamped run history).
 
+Cross-cutting conventions, which apply to every feature above rather than to one:
+[ERROR_HANDLING.md](ERROR_HANDLING.md) (custom exception types, the escaped HTML-alert
+helpers in `utils/http_responses.py`, what is allowed to reach a user versus what stays
+in the log, and the embedded widget — the one component whose failures the server cannot
+see, so its console is where the operator's half of the message goes), [HTMX_PATTERNS.md](HTMX_PATTERNS.md) (the swap patterns, panel-local error
+banners, the global `htmx:beforeSwap` handler that lets a non-2xx response display at all,
+and the global offcanvas lock that keeps a panel open until its own close button is
+clicked), [SERVICE_PATTERNS.md](SERVICE_PATTERNS.md).
+
 Four objects the sidebar exposes separately, because their ownership differs:
 
 | Sidebar entry | Path | Owned by | Attached to |
@@ -76,6 +91,11 @@ Four objects the sidebar exposes separately, because their ownership differs:
 
 "Agents" is the user-facing name for `ChatbotApiKey`; its routes and templates still live under
 `chatbot_settings` / `chatbot/`.
+
+An agent gets what it may read one of two ways, fixed at creation: a **datasource
+target** (the whole datasource, or named tables/collections/files), or an attached
+**data agent**, whose tool configs are the scope and whose widget stores no datasource
+at all. The two are exclusive — see [DEEP_AGENTS.md](DEEP_AGENTS.md).
 
 `db/`, `models/`, `routes/`, and `services/` group related files by feature — a feature's
 subfolder is named the same across all four layers it appears in (e.g. `datasource/` exists

@@ -10,6 +10,30 @@ from sqlalchemy.sql import func
 from app.db.base import Base
 
 
+# How a chatbot's data is scoped. The first four are a *datasource* target: the
+# widget answers from a statistical profile of exactly that much of one datasource.
+#
+# TARGET_TYPE_AGENT is the fifth and is different in kind — it means the widget has
+# no datasource target of its own, and an attached data agent decides what can be
+# read via its tool configs. It exists so "which data?" has one answer per chatbot
+# rather than two half-answers, and so a chatbot backed by an agent that reads three
+# datasources does not have to nominate one of them arbitrarily.
+TARGET_TYPE_DATASOURCE = "datasource"
+TARGET_TYPE_AGENT = "agent"
+
+#: Every value ``target_type`` may hold.
+TARGET_TYPES = (
+    TARGET_TYPE_DATASOURCE,
+    "file",
+    "table",
+    "collection",
+    TARGET_TYPE_AGENT,
+)
+
+#: The subset that scopes a datasource — i.e. everything but agent-backed.
+DATASOURCE_TARGET_TYPES = frozenset(TARGET_TYPES) - {TARGET_TYPE_AGENT}
+
+
 def generate_chatbot_key() -> str:
     """
     A publishable widget key — unlike AI Settings provider keys, this is
@@ -21,12 +45,23 @@ def generate_chatbot_key() -> str:
 
 class ChatbotApiKey(Base):
     """
-    A publishable key that powers one embeddable chatbot widget, scoped to
-    one or more datasource targets (the whole datasource, one or more
-    tables/collections, or one or more files) chosen at creation time, and
-    locked to an allow-list of embedding origins — since the key itself is
-    visible to anyone who views the embedding page's source, scope + origin
-    restriction (not secrecy) is the real security boundary here.
+    A publishable key that powers one embeddable chatbot widget, locked to an
+    allow-list of embedding origins — since the key itself is visible to anyone
+    who views the embedding page's source, scope + origin restriction (not
+    secrecy) is the real security boundary here.
+
+    **What the widget may read** is fixed at creation time, one of two ways:
+
+    * a **datasource target** — the whole datasource, one or more tables or
+      collections, or one or more files (``target_type`` is one of
+      :data:`DATASOURCE_TARGET_TYPES`, and ``datasource_id`` is set);
+    * an **attached data agent** — ``target_type == "agent"``, ``datasource_id``
+      is NULL, and the agent's tool configs are the scope.
+
+    The two are exclusive by construction, which is the point. An agent-backed
+    widget nominating a datasource as well would have two answers to "what can
+    this reach?", and the one that applied would depend on whether the agent
+    happened to run — see ``chatbot_reply_service``.
     """
     __tablename__ = "chatbot_api_keys"
 
@@ -61,13 +96,22 @@ class ChatbotApiKey(Base):
         default=generate_chatbot_key,
     )
 
-    datasource_id: Mapped[int] = mapped_column(
+    # NULL only when target_type == "agent": the widget has no datasource target
+    # of its own and reads through the attached agent's tool configs instead.
+    #
+    # Still ON DELETE CASCADE, not SET NULL. For a chatbot that *does* have a
+    # datasource target, deleting the datasource has always deleted the widget, and
+    # turning that into a NULL would leave a live key pointed at nothing while
+    # looking configured. A NULL here means "never had one", which is a different
+    # state and has to stay distinguishable from it.
+    datasource_id: Mapped[Optional[int]] = mapped_column(
         BigInteger,
         ForeignKey("datasources.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
     )
 
-    # "datasource" (whole datasource) | "table" | "collection" | "file"
+    # One of TARGET_TYPES: "datasource" (all of it) | "table" | "collection" |
+    # "file" | "agent" (no datasource target — the attached agent decides).
     target_type: Mapped[str] = mapped_column(String(20), nullable=False)
 
     # Table/collection names, or (for "file") the resolved display names of
@@ -99,6 +143,11 @@ class ChatbotApiKey(Base):
     #
     # Both are ON DELETE SET NULL: deleting a workspace or an agent must degrade
     # a live widget back to the default behaviour, never break it mid-conversation.
+    # For a ``target_type == "agent"`` chatbot there is no default behaviour to
+    # degrade to — no datasource target was ever chosen — so it answers "I can't
+    # reach that data right now" instead. That is the trade the operator accepted
+    # by not nominating a datasource, and it is still better than a broken widget:
+    # re-attaching an agent restores it without touching the published key.
     # ----------------------------------------------------------------------
     workspace_id: Mapped[Optional[int]] = mapped_column(
         BigInteger,

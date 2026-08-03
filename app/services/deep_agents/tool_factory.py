@@ -68,11 +68,17 @@ def _build_tool(entry: dict) -> StructuredTool:
     config: Dict[str, Any] = entry.get("config") or {}
     table_name: str = entry["table_name"]
     tool_name: str = entry["tool_name"]
+    # Non-empty for a SQL-mode tool, which the executor runs as written instead of
+    # rebuilding from `config`. Passed as the stored value rather than as a mode
+    # flag so the two can never disagree.
+    sql_query: Optional[str] = entry.get("sql_query")
 
     async def run_tool() -> str:
         """Execute this tool's stored query and describe the rows."""
         try:
-            rows = await execute_tool_query(datasource, config, table_name)
+            rows = await execute_tool_query(
+                datasource, config, table_name, sql_query=sql_query,
+            )
         except ToolQueryError as exc:
             # Returned as tool output, not raised: the agent has to be told the
             # tool failed so it can say so. Raising would abort the whole turn and
@@ -124,6 +130,10 @@ def find_unsupported_tools(tools: List[dict]) -> List[str]:
     datasource, and a RIGHT JOIN (which ``query_executor._apply_joins`` refuses rather
     than approximating). Surfaced on the agent's console up front, so neither is
     discovered only when a visitor happens to ask a question that routes to one.
+
+    The RIGHT JOIN check is a *builder-mode* limitation — it comes from assembling
+    the query out of SQLAlchemy join operands — so it is not applied to a SQL-mode
+    tool, whose statement is run exactly as written and may right-join freely.
     """
     unsupported = []
 
@@ -132,6 +142,9 @@ def find_unsupported_tools(tools: List[dict]) -> List[str]:
 
         if (entry.get("db_type") or "").strip().lower() not in RDBMS_DB_TYPES:
             unsupported.append(f"{name} (not a relational datasource)")
+            continue
+
+        if (entry.get("sql_query") or "").strip():
             continue
 
         joins = (entry.get("config") or {}).get("joins") or []

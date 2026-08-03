@@ -214,3 +214,54 @@ class TestToolConfigView:
             {"id": 9, "uuid": "u", "tool_name": "t", "table_name": "tbl"}
         )
         assert "id" not in payload
+
+
+@pytest.mark.parametrize("schema", WRITE_FORMS)
+class TestQueryMode:
+    """
+    Which of the two query fields the form means.
+
+    The same split as ``config_json``: the mode is checked here because it is a
+    closed set the schema owns, while whether the *statement* it names is a single
+    read-only one belongs to ``tool_config_service.validated_tool_sql``, which
+    shares that rule with the executor. So a write statement is asserted to pass
+    here — failing it would mean two guards, and the looser one would win.
+    """
+
+    def test_a_missing_mode_means_the_builder(self, schema) -> None:
+        """Every form rendered before SQL mode existed submits no mode at all."""
+        assert schema.parse(_valid()).query_mode == "builder"
+
+    def test_a_blank_mode_means_the_builder(self, schema) -> None:
+        assert schema.parse({**_valid(), "query_mode": "  "}).query_mode == "builder"
+
+    def test_the_mode_is_normalised(self, schema) -> None:
+        assert schema.parse({**_valid(), "query_mode": " SQL "}).query_mode == "sql"
+
+    def test_an_unknown_mode_is_refused(self, schema) -> None:
+        detail = _detail(schema, {**_valid(), "query_mode": "freehand"})
+        assert "not one of the available options" in detail
+
+    def test_the_statement_is_carried_verbatim(self, schema) -> None:
+        sql = "SELECT DISTINCT name\nFROM inventory_items"
+        parsed = schema.parse({**_valid(), "query_mode": "sql", "sql_query": sql})
+        assert parsed.sql_query == sql
+
+    def test_a_missing_statement_is_an_empty_string_not_none(self, schema) -> None:
+        """The service decides whether an empty one is an error, and it can only
+        do that if the field always arrives as text."""
+        assert schema.parse(_valid()).sql_query == ""
+
+    def test_a_write_statement_passes_this_layer(self, schema) -> None:
+        """Refused by the service, with the same wording the executor uses. A
+        second copy of that rule here is the duplication to avoid."""
+        parsed = schema.parse(
+            {**_valid(), "query_mode": "sql", "sql_query": "DELETE FROM t"}
+        )
+        assert parsed.sql_query == "DELETE FROM t"
+
+    def test_an_absurdly_long_statement_is_refused(self, schema) -> None:
+        detail = _detail(
+            schema, {**_valid(), "query_mode": "sql", "sql_query": "x" * 20_001}
+        )
+        assert "SQL query" in detail

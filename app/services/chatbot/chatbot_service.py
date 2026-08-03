@@ -25,7 +25,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.chatbot.queries import get_or_create_ai_settings
 from app.db.db_utils import CRUDQueryBuilder
-from app.models.chatbot import ChatbotApiKey, ChatbotMessage
+from app.models.chatbot import (
+    TARGET_TYPE_AGENT,
+    TARGET_TYPES,
+    ChatbotApiKey,
+    ChatbotMessage,
+)
 from app.models.datasource import DatasourceFile
 from app.services.ai_analytics.ai_analytics_service import datasource_crud, run_grounded_prompt
 from app.services.data_agents import data_agent_service
@@ -34,7 +39,7 @@ from app.services.workspaces import workspace_service
 chatbot_key_crud = CRUDQueryBuilder(ChatbotApiKey)
 
 _MAX_MESSAGE_LEN = 2000
-_VALID_TARGET_TYPES = {"datasource", "file", "table", "collection"}
+_VALID_TARGET_TYPES = frozenset(TARGET_TYPES)
 _HISTORY_PAGE_SIZE = 50
 
 # Full origin only — scheme + host + optional port, no path/trailing slash.
@@ -136,7 +141,7 @@ async def create_chatbot_key(
     db: AsyncSession,
     user_id: int,
     name: str,
-    datasource_id: uuid.UUID,
+    datasource_id: Optional[uuid.UUID],
     target_type: str,
     target_names: List[str],
     file_ids: List[uuid.UUID],
@@ -151,6 +156,12 @@ async def create_chatbot_key(
     picked as a Workspace -> Data Agent cascade on the form. Both default to None,
     which is what every chatbot created before this feature has — and NULL means
     "answer from a data profile", the original behaviour.
+
+    ``target_type == "agent"`` is the one case where ``datasource_id`` may be None:
+    the attached agent's tool configs are the scope, so there is no datasource to
+    nominate and no tables to tick. It requires an agent — that is the whole
+    definition of the mode — and it is checked here rather than only in the form,
+    because a chatbot in that mode with no agent could not answer anything.
     """
     name = (name or "").strip()
     if not name:
@@ -158,6 +169,36 @@ async def create_chatbot_key(
 
     if target_type not in _VALID_TARGET_TYPES:
         raise HTTPException(status_code=400, detail=f"Invalid target_type: {target_type!r}")
+
+    resolved_workspace_id, resolved_agent_id = await _resolved_agent_attachment(
+        db, user_id, workspace_id, data_agent_id,
+    )
+
+    if target_type == TARGET_TYPE_AGENT:
+        if resolved_agent_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Pick a data agent, or choose a data source for this widget to "
+                    "answer from."
+                ),
+            )
+
+        return await _create_key(db, {
+            "user_id": user_id,
+            "name": name,
+            # No datasource target of its own: the agent's tools are the scope.
+            "datasource_id": None,
+            "target_type": target_type,
+            "target_names": [],
+            "file_ids": [],
+            "allowed_origins": _parse_allowed_origins(allowed_origins_raw),
+            "workspace_id": resolved_workspace_id,
+            "data_agent_id": resolved_agent_id,
+        })
+
+    if datasource_id is None:
+        raise HTTPException(status_code=400, detail="Please select a data source")
 
     datasource = await datasource_crud.get_by_uuid(db, datasource_id, extra_filters={"user_id": user_id})
     if not datasource:
@@ -186,11 +227,7 @@ async def create_chatbot_key(
 
     allowed_origins = _parse_allowed_origins(allowed_origins_raw)
 
-    resolved_workspace_id, resolved_agent_id = await _resolved_agent_attachment(
-        db, user_id, workspace_id, data_agent_id,
-    )
-
-    chatbot_key = await chatbot_key_crud.create(db, {
+    return await _create_key(db, {
         "user_id": user_id,
         "name": name,
         "datasource_id": datasource.id,
@@ -202,10 +239,19 @@ async def create_chatbot_key(
         "data_agent_id": resolved_agent_id,
     })
 
-    # A chatbot is never left without a persona: this seeds its agent name,
-    # default system prompt and prompt variables straight away, so the very
-    # first visitor message is answered with a real prompt rather than a
-    # placeholder created later on first settings-page visit.
+
+async def _create_key(db: AsyncSession, fields: dict) -> ChatbotApiKey:
+    """
+    Write the row and seed its persona.
+
+    Shared by both creation paths so neither can forget the second half: a chatbot
+    is never left without AI settings. This seeds its agent name, default system
+    prompt and prompt variables straight away, so the very first visitor message is
+    answered with a real prompt rather than a placeholder created later on first
+    settings-page visit.
+    """
+    chatbot_key = await chatbot_key_crud.create(db, fields)
+
     await get_or_create_ai_settings(db, chatbot_key.id)
 
     return chatbot_key
@@ -254,13 +300,28 @@ async def set_chatbot_data_agent(
     published key can reach.
 
     Passing no agent clears the attachment, and the chatbot goes back to answering
-    from a data profile.
+    from a data profile — *if* it has a datasource target to profile. An
+    agent-backed widget (``target_type == "agent"``) has none, so clearing its agent
+    is refused rather than performed: it would leave a published key that answers
+    nothing, with no way back through the form, since the datasource target is
+    immutable after creation. Swapping one agent for another is still allowed, which
+    is the operation that case actually needs.
     """
     chatbot_key = await get_chatbot_key(db, user_id, key_id)
 
     resolved_workspace_id, resolved_agent_id = await _resolved_agent_attachment(
         db, user_id, workspace_id, data_agent_id,
     )
+
+    if resolved_agent_id is None and chatbot_key.target_type == TARGET_TYPE_AGENT:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "This widget has no data source of its own — its agent is what it "
+                "reads. Choose a different agent instead of removing this one, or "
+                "delete the widget."
+            ),
+        )
 
     return await chatbot_key_crud.update(db, chatbot_key.id, {
         "workspace_id": resolved_workspace_id,
@@ -351,6 +412,21 @@ async def answer_message(
     if len(message) > _MAX_MESSAGE_LEN:
         raise HTTPException(status_code=400, detail=f"Message must not exceed {_MAX_MESSAGE_LEN} characters")
 
+    if chatbot_key.datasource_id is None:
+        # An agent-backed widget has no datasource target to profile. Reaching here
+        # means its agent could not run and chatbot_reply_service tried to fall back
+        # — there is nothing to fall back *to*, and saying so is the honest answer.
+        # Guarded before the lookup because filtering on id=None would otherwise
+        # produce the "no longer available" message, which is wrong: it never had
+        # one.
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This chatbot answers through its data agent and has no data source "
+                "of its own to fall back on."
+            ),
+        )
+
     datasource = await datasource_crud.get_one(
         db, filters={"id": chatbot_key.datasource_id, "user_id": chatbot_key.user_id}
     )
@@ -384,27 +460,93 @@ async def answer_message(
 # ``window.GMSChatbotConfig = { apiBase, apiKey }`` in an inline <script>
 # BEFORE this file's <script> tag (see the embed snippet on the Widget
 # Settings page); that's the only thing the embedder needs to configure by
-# hand. Every appearance setting (colors, fonts, logo/icon URLs,
-# welcome/idle/closing text) and every API-key/origin validity check is
-# resolved server-side, fetched at runtime from GET
-# /public/chatbot/widget-config — so changing settings in the dashboard
-# takes effect on the next page load, and this downloaded file never goes
-# stale or needs replacing after a settings change.
+# hand. ``apiBase`` may be omitted when the API answers on the embedding
+# page's own origin, which makes every request same-origin and immune to the
+# scheme mismatch described in ``blockedRequestHint`` below. Every appearance
+# setting (colors, fonts, logo/icon URLs, welcome/idle/closing text) and every
+# API-key/origin validity check is resolved server-side, fetched at runtime
+# from GET /public/chatbot/widget-config — so changing settings in the
+# dashboard takes effect on the next page load, and this downloaded file never
+# goes stale or needs replacing after a settings change.
+#
+# **Every network failure in here is reported to the console.** The widget is
+# built to degrade rather than break — a failed config fetch still renders, a
+# failed message still answers the visitor politely — and that is right for a
+# visitor and actively misleading for the operator, because a widget showing
+# default branding is indistinguishable from a working one. So each fallback
+# path calls ``warnFailure`` with the URL it tried and what came back. Three
+# separate causes (an origin not on the allow-list, an HTTPS page pointed at an
+# http:// apiBase, an unreachable API) otherwise present as the identical
+# symptom: a healthy-looking widget titled "Chat with us".
 _WIDGET_SCRIPT_TEMPLATE = r"""
 (function () {
   "use strict";
 
   var CFG = window.GMSChatbotConfig || {};
-  var API_BASE = CFG.apiBase;
   var API_KEY = CFG.apiKey;
   var IDLE_TIMEOUT_MS = 45000;
 
-  if (!API_BASE || !API_KEY) {
+  // apiBase is OPTIONAL. Omit it when the API answers on the same origin as the
+  // embedding page (a shared domain, or a reverse proxy in front of both) and every
+  // request becomes a same-origin relative one — which cannot be blocked by a
+  // scheme mismatch, and needs no CORS at all.
+  //
+  // A trailing slash is stripped rather than rejected: every request appends a path
+  // beginning with "/", so "https://api.example.com/" would otherwise produce a
+  // double slash and a 404 that looks nothing like a configuration mistake.
+  var API_BASE = String(CFG.apiBase == null ? "" : CFG.apiBase).trim().replace(/\/+$/, "");
+
+  if (!API_KEY) {
     console.error(
-      "GetMyStuff chatbot widget: set window.GMSChatbotConfig = { apiBase, apiKey } " +
-      "before loading this script."
+      "GetMyStuff chatbot widget: set window.GMSChatbotConfig = { apiKey } before " +
+      "loading this script (apiBase too, unless the API is on this same origin)."
     );
     return;
+  }
+
+  /**
+   * The reason a request to API_BASE is likely to be blocked by the browser before
+   * it is ever sent, or "" when there is no such reason.
+   *
+   * This one case is worth naming explicitly because it is invisible everywhere
+   * else: an HTTPS page requesting a plain-HTTP address is stopped client-side, so
+   * the server logs nothing at all, and the browser's own Network panel reports it
+   * as a "CORS error" with no status and no response body — which points at a
+   * server misconfiguration that does not exist.
+   */
+  function blockedRequestHint() {
+    if (!API_BASE) return "";
+    if (window.location.protocol !== "https:") return "";
+    if (API_BASE.indexOf("http://") !== 0) return "";
+
+    return (
+      "This page is served over HTTPS but apiBase is \"" + API_BASE + "\", which is " +
+      "plain HTTP. Browsers block that combination before the request leaves the " +
+      "page and report it as a CORS error even though the server never saw it. Use " +
+      "an HTTPS apiBase, or omit apiBase entirely if the API answers on this origin."
+    );
+  }
+
+  /**
+   * Tell the operator, in their console, exactly which request failed and why.
+   *
+   * Every failure below is otherwise silent by design — the widget falls back to
+   * its default look, or shows the visitor a neutral message — and silence is what
+   * makes a misconfigured widget look like a working one. The visitor still sees
+   * nothing technical; this is for whoever installed the snippet.
+   */
+  function warnFailure(what, url, detail) {
+    var hint = blockedRequestHint();
+
+    console.warn(
+      "GetMyStuff chatbot widget: " + what +
+      "\n  request: " + url +
+      (detail ? "\n  reason:  " + detail : "") +
+      // Its own labelled line, not appended to the reason — "Failed to fetch This
+      // page is served over HTTPS" reads as one broken sentence and buries the
+      // part that actually tells the operator what to change.
+      (hint ? "\n  likely cause: " + hint : "")
+    );
   }
 
   var DEFAULT_CONFIG = {
@@ -435,14 +577,44 @@ _WIDGET_SCRIPT_TEMPLATE = r"""
     widget_height: 460
   };
 
+  // Falling back to DEFAULT_CONFIG is right — a widget that renders with default
+  // branding still works, and refusing to render at all would be worse for a
+  // visitor. But the fallback is indistinguishable from a correctly configured
+  // widget whose settings happen to be the defaults, so every path out of here
+  // that is *not* the settings the dashboard holds says so in the console.
   function fetchConfig() {
-    return fetch(API_BASE + "/public/chatbot/widget-config?api_key=" + encodeURIComponent(API_KEY))
-      .then(function (r) { return r.json(); })
-      .then(function (data) {
-        if (data && data.status === "success") return data;
+    var url = API_BASE + "/public/chatbot/widget-config?api_key=" + encodeURIComponent(API_KEY);
+
+    return fetch(url)
+      .then(function (r) {
+        // A rejection body is JSON too ({"status","message"}), but an error page
+        // from a proxy in front of the API is not — so a parse failure is handled
+        // rather than becoming an unexplained throw.
+        return r.json().then(
+          function (data) { return { status: r.status, data: data }; },
+          function () { return { status: r.status, data: null }; }
+        );
+      })
+      .then(function (res) {
+        if (res.data && res.data.status === "success") return res.data;
+
+        warnFailure(
+          "could not load its settings, so it is showing the default appearance " +
+          "and welcome message rather than the ones configured in the dashboard.",
+          url,
+          "HTTP " + res.status + ((res.data && res.data.message) ? " — " + res.data.message : "")
+        );
         return DEFAULT_CONFIG;
       })
-      .catch(function () { return DEFAULT_CONFIG; });
+      .catch(function (err) {
+        warnFailure(
+          "could not reach the API at all, so it is showing the default appearance " +
+          "and welcome message. Sending a message will fail for the same reason.",
+          url,
+          (err && err.message) || "the request did not complete"
+        );
+        return DEFAULT_CONFIG;
+      });
   }
 
   function buildStyle(cfg) {
@@ -874,7 +1046,9 @@ _WIDGET_SCRIPT_TEMPLATE = r"""
       typingEl.style.display = "block";
       messagesEl.scrollTop = messagesEl.scrollHeight;
 
-      fetch(API_BASE + "/public/chatbot/message", {
+      var messageUrl = API_BASE + "/public/chatbot/message";
+
+      fetch(messageUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -885,17 +1059,39 @@ _WIDGET_SCRIPT_TEMPLATE = r"""
         })
       })
         .then(function (r) {
-          return r.json().then(function (data) { return { ok: r.ok, data: data }; });
+          return r.json().then(
+            function (data) { return { ok: r.ok, status: r.status, data: data }; },
+            function () { return { ok: r.ok, status: r.status, data: null }; }
+          );
         })
         .then(function (res) {
           if (res.ok && res.data && res.data.status === "success") {
             renderResponse(res.data);
-          } else {
-            renderErrorMessage(messagesEl, (res.data && res.data.message) || "Something went wrong. Please try again.", cfg);
-            renderResponseTime(messagesEl, res.data && res.data.response_time_ms, cfg);
+            return;
           }
+
+          // The server's own message is shown to the visitor — it is written for
+          // one ("I cannot retrieve that figure right now"). The operator gets the
+          // status code alongside it, because a rejected key or a domain that is
+          // not allow-listed reads identically to a failed answer from in here.
+          var reason = (res.data && res.data.message) || "";
+          warnFailure(
+            "the API rejected a visitor's message.",
+            messageUrl,
+            "HTTP " + res.status + (reason ? " — " + reason : "")
+          );
+          renderErrorMessage(messagesEl, reason || "Something went wrong. Please try again.", cfg);
+          renderResponseTime(messagesEl, res.data && res.data.response_time_ms, cfg);
         })
-        .catch(function () {
+        .catch(function (err) {
+          // No response at all — the request was blocked, the API is unreachable, or
+          // the network dropped. The visitor is told the truth without being shown
+          // infrastructure; the reason and the likely cause go to the console.
+          warnFailure(
+            "could not reach the API to send a visitor's message.",
+            messageUrl,
+            (err && err.message) || "the request did not complete"
+          );
           renderErrorMessage(messagesEl, "Could not reach the chatbot service. Please try again.", cfg);
         })
         .then(function () {
@@ -955,7 +1151,8 @@ def build_widget_script() -> str:
     """
     Return the static, generic widget shell — byte-identical for every
     chatbot key, since nothing key-specific is templated into it. The
-    embedding page supplies ``apiBase``/``apiKey`` via
+    embedding page supplies ``apiKey`` (and optionally ``apiBase``, which can be
+    left out when the API shares the page's origin) via
     ``window.GMSChatbotConfig`` (see the embed snippet on the Widget
     Settings page), and every appearance/behavior setting is fetched by the
     script itself at runtime from GET /public/chatbot/widget-config.

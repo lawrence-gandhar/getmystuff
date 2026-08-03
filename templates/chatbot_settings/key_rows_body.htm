@@ -1,13 +1,23 @@
+{# `target_summary` is what the Target column shows and what the Edit panel repeats
+   back as the immutable dataset. An "agent" widget has no datasource target at all —
+   its attached agent's tool configs are the scope — so it says so rather than
+   rendering an empty cell. #}
 {% for key in keys %}
-{% set target_summary = "Full Datasource" if key.target_type == "datasource" else key.target_names | join(", ") %}
+{% if key.target_type == "agent" %}
+{% set target_summary = "Its data agent's tools" %}
+{% elif key.target_type == "datasource" %}
+{% set target_summary = "Full Datasource" %}
+{% else %}
+{% set target_summary = key.target_names | join(", ") %}
+{% endif %}
 <tr id="chatbot-key-row-{{ key.uuid }}">
     <td class="fw-semibold">{{ key.name }}</td>
     <td>
         <span class="badge bg-primary-subtle text-primary-emphasis border border-primary-subtle">
             {{ key.target_type | upper }}
         </span>
-        {% if key.target_type == "datasource" %}
-            <span class="small text-muted">Full Datasource</span>
+        {% if key.target_type in ("datasource", "agent") %}
+            <span class="small text-muted">{{ target_summary }}</span>
         {% else %}
             <span class="small text-muted" title="{{ target_summary }}">
                 {{ key.target_names[:3] | join(", ") }}{% if key.target_names | length > 3 %} +{{ key.target_names | length - 3 }} more{% endif %}

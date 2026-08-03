@@ -227,6 +227,61 @@ body {
 
 <script>
     /**
+     * Offcanvas panels close only when their own close / cancel / save button is
+     * clicked. A stray click on the page behind the panel, or an accidental Esc,
+     * must never throw away a half-filled form.
+     *
+     * Bootstrap resolves these options per instance, so both sources are locked:
+     *   • the shared defaults — used by panels created from JS
+     *     (`new bootstrap.Offcanvas(el)` / `getOrCreateInstance(el)`);
+     *   • the data attributes — used by panels opened via `data-bs-toggle`,
+     *     which take precedence over the defaults.
+     *
+     * Panels that deliberately opt out of the backdrop (`data-bs-backdrop="false"`,
+     * so the page behind stays usable) keep that choice — with no backdrop element
+     * there is nothing to click through — and only need the Esc key locked.
+     */
+    (function () {
+        if (!window.bootstrap || !bootstrap.Offcanvas) return;
+
+        bootstrap.Offcanvas.Default.backdrop = 'static';
+        bootstrap.Offcanvas.Default.keyboard = false;
+
+        function lockPanel(panel) {
+            if (panel.dataset.bsBackdrop !== 'false') {
+                panel.dataset.bsBackdrop = 'static';
+            }
+            panel.dataset.bsKeyboard = 'false';
+
+            // A panel already instantiated (e.g. by a partial's own script) has
+            // read its config, so correct that instance too.
+            var instance = bootstrap.Offcanvas.getInstance(panel);
+            if (instance && instance._config) {
+                instance._config.keyboard = false;
+                if (instance._config.backdrop !== false) {
+                    instance._config.backdrop = 'static';
+                }
+            }
+        }
+
+        function lockOffcanvases(root) {
+            var scope = root && root.querySelectorAll ? root : document;
+            if (scope.matches && scope.matches('.offcanvas')) lockPanel(scope);
+            scope.querySelectorAll('.offcanvas').forEach(lockPanel);
+        }
+
+        lockOffcanvases(document);
+
+        // Panels delivered by HTMX are locked as soon as they land in the DOM.
+        document.addEventListener('htmx:load', function (event) {
+            lockOffcanvases(event.detail && event.detail.elt);
+        });
+        document.addEventListener('htmx:afterSwap', function (event) {
+            lockOffcanvases(event.detail && event.detail.target);
+        });
+    })();
+
+    /**
      * Session-aware fetch wrapper.
      * When the server redirects to /auth/login (expired session), performs a full
      * window navigation instead of silently loading the login page into a partial.
@@ -247,6 +302,44 @@ body {
         if (event.detail.xhr.status === 401) {
             window.location.href = '/auth/login';
         }
+    });
+
+    /**
+     * Show server-side error messages in the page instead of swallowing them.
+     *
+     * HTMX only swaps 2xx responses by default, so the human-readable HTML our
+     * routes return with 400 / 409 / 422 / 5xx (e.g. "Could not connect to the
+     * database...") was being discarded and the user saw nothing happen.
+     *
+     * This opts every error response that is actually HTML back into the normal
+     * swap, so the alert lands in the request's hx-target. Non-HTML bodies (raw
+     * JSON from an unhandled exception) are replaced with a generic message so
+     * we never dump a payload or stack trace in front of the user.
+     */
+    document.addEventListener('htmx:beforeSwap', function (event) {
+        var xhr = event.detail.xhr;
+
+        if (xhr.status < 400) return;
+
+        // 401 is handled by the redirect above — never swap the login page
+        // into a partial.
+        if (xhr.status === 401) return;
+
+        var contentType = xhr.getResponseHeader('Content-Type') || '';
+        var isHtml = contentType.includes('text/html');
+
+        if (!isHtml || !xhr.responseText.trim()) {
+            event.detail.serverResponse =
+                '<div class="alert alert-danger">' +
+                'Something went wrong while processing your request. ' +
+                'Please try again, and contact support if the problem continues.' +
+                '</div>';
+        }
+
+        event.detail.shouldSwap = true;
+        // Keep the swap on the element's own hx-target rather than falling
+        // back to the error-handling default.
+        event.detail.isError = false;
     });
 </script>
 

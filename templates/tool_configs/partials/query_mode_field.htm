@@ -1,0 +1,94 @@
+{# How the query is written: the builder, or a SQL statement typed in full.
+
+   Both panels are always in the DOM and static/js/tool_configs.js shows one of
+   them, so switching modes keeps whatever was in the other — a switch made by
+   mistake costs nothing. The `required` attribute on the textarea moves with the
+   visible panel: an unfilled hidden `required` field blocks submit with a
+   validation bubble pointing at something the user cannot see.
+
+   SQL mode is offered only for a relational datasource (`supports_sql`, set by
+   tool_config_service). A CSV or a Mongo collection has no statement to run, so
+   the radio is disabled with the reason rather than accepted and refused on save.
+
+   This block is re-rendered out of band when the datasource changes — the same
+   swap that resets the query builder, and for the same reason: a query, written or
+   built, belongs to the datasource it was written against. The SQL panel is nested
+   inside the same wrapper rather than sitting beside it because htmx honours
+   hx-swap-oob on top-level response elements only: a sibling would be swapped into
+   the Table field instead. #}
+<div
+    id="toolQueryModeField"
+    class="mb-4"
+    data-query-mode-field
+    {% if oob_swap %}hx-swap-oob="true"{% endif %}
+>
+    <p class="form-label fw-semibold d-block mb-2">Query</p>
+
+    <div class="btn-group" aria-label="How the query is written">
+        <input
+            type="radio"
+            class="btn-check"
+            name="query_mode"
+            id="toolQueryModeBuilder"
+            value="builder"
+            autocomplete="off"
+            data-query-mode-option="builder"
+            {% if query_mode != 'sql' %}checked{% endif %}
+        >
+        <label class="btn btn-outline-primary btn-sm" for="toolQueryModeBuilder">
+            <i class="las la-th-list"></i> Query builder
+        </label>
+
+        <input
+            type="radio"
+            class="btn-check"
+            name="query_mode"
+            id="toolQueryModeSql"
+            value="sql"
+            autocomplete="off"
+            data-query-mode-option="sql"
+            {% if not supports_sql %}disabled{% endif %}
+            {% if query_mode == 'sql' %}checked{% endif %}
+        >
+        <label class="btn btn-outline-primary btn-sm" for="toolQueryModeSql">
+            <i class="las la-code"></i> SQL query
+        </label>
+    </div>
+
+    <div class="form-text">
+        {% if supports_sql %}
+        The builder covers columns, aggregations, grouping, filters and joins.
+        Choose <strong>SQL query</strong> for anything else — <code>DISTINCT</code>,
+        <code>ORDER BY</code>, subqueries, window functions, unions.
+        {% else %}
+        This datasource is not relational, so it has no SQL to run — build the query
+        with the fields below.
+        {% endif %}
+    </div>
+
+    <!-- SQL QUERY — shown in SQL mode only -->
+    <div class="mt-3 d-none" data-query-mode-panel="sql">
+        <div class="card">
+            <div class="card-header">
+                <label for="toolSqlQuery" class="fw-semibold mb-0">SQL Query</label>
+            </div>
+            <div class="card-body">
+                <textarea
+                    id="toolSqlQuery"
+                    name="sql_query"
+                    class="form-control font-monospace"
+                    rows="10"
+                    maxlength="20000"
+                    spellcheck="false"
+                    placeholder="SELECT DISTINCT name FROM inventory_items ORDER BY name"
+                >{{ tool_config.sql_query if tool_config and tool_config.sql_query else '' }}</textarea>
+                <div class="form-text">
+                    One read-only statement — a <code>SELECT</code>, or a
+                    <code>WITH</code> that ends in one. No semicolon needed, and only
+                    one statement: the agent may read this data, never change it. The
+                    query runs exactly as written, capped at 200 rows.
+                </div>
+            </div>
+        </div>
+    </div>
+</div>

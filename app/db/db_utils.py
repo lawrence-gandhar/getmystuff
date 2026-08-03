@@ -230,7 +230,11 @@ async def test_rdbms_connection(url: str) -> bool:
         return True
 
     except Exception as e:
-        print(f"[test_rdbms_connection] Connection failed: {type(e).__name__}: {e}")
+        # Logged internally only — the caller turns this into a generic,
+        # human-readable message so driver internals never reach the browser.
+        logging.getLogger(__name__).warning(
+            "RDBMS connection test failed: %s: %s", type(e).__name__, e,
+        )
         await _register_failure(wrapper)
         return False
 
@@ -244,7 +248,10 @@ async def test_mongo_connection(uri: str, database: str) -> bool:
         await _register_success(wrapper)
         return True
 
-    except Exception:
+    except Exception as e:
+        logging.getLogger(__name__).warning(
+            "MongoDB connection test failed: %s: %s", type(e).__name__, e,
+        )
         await _register_failure(wrapper)
         return False
 

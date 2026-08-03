@@ -157,7 +157,13 @@ Bounds, because it all becomes prompt:
 | `_MAX_TABLES` | 25 (= `MAX_REFLECTED_TABLES`) | Over the cap is **refused, not trimmed** — silently reflecting the first 25 would generate a query against a schema the user believed was larger. |
 | `_MAX_HISTORY_TURNS` | 6 | The model needs the last few attempts to improve on them, not the whole session. |
 | `_MAX_HISTORY_SQL_LEN` | 4000 | Per stored turn. |
-| `_MAX_SQL_LEN` | 8000 | Beyond this something has gone wrong with the response, not the request. |
+| `sql_guard.MAX_SQL_LENGTH` | 8000 | Beyond this something has gone wrong with the response, not the request. Shared with Tool Configs and the executor — see [TOOL_QUERY_MODES.md](TOOL_QUERY_MODES.md). |
+
+`_validated_sql` — the check that a generated query is a single read-only statement before it
+is displayed — is `app/utils/sql_guard.read_only_violation` with a 502 wrapped round it. The
+same rule decides what a tool config may store and what the executor may run, because a query
+shown here is likely to be run and may well be saved: three different ideas of "read-only"
+would mean the loosest one wins.
 
 ---
 
@@ -179,18 +185,25 @@ malformed.
 
 ### `ToolDraft`, and `fits`
 
-A Tool Config stores a **builder**, not SQL: columns, aggregations, group_by, filters, joins
-(see [QUERY_JOINS.md](QUERY_JOINS.md)). Plenty of valid SQL needs more than that — ORDER BY,
-LIMIT, HAVING, DISTINCT, subqueries, CTEs, window functions, CASE, UNION, expressions in the
-SELECT list, OR between filters, a non-equality join condition, a filter compared against
-another column.
+A Tool Config can store its query two ways: the **builder** — columns, aggregations,
+group_by, filters, joins (see [QUERY_JOINS.md](QUERY_JOINS.md)) — or the **statement itself**.
+`fits` decides which of the two this query lands in. It does **not** decide whether the tool
+can be created: every valid read-only query can. See
+[TOOL_QUERY_MODES.md](TOOL_QUERY_MODES.md).
 
-So `fits` is a real answer the model is expected to give, with `reason` naming what is in the
-way, and the panel shows that reason instead of a form. **A tool that quietly differs from the
-query the user just read would be worse than no tool.**
+Plenty of valid SQL needs more than the builder — ORDER BY, LIMIT, HAVING, DISTINCT,
+subqueries, CTEs, window functions, CASE, UNION, expressions in the SELECT list, OR between
+filters, a non-equality join condition, a filter compared against another column. So `fits`
+false is a real answer the model is expected to give, with `reason` naming what is in the way,
+and the panel says so above the create form. **A tool that quietly differs from the query the
+user just read would be worse than no tool** — but refusing to save a query the user has read
+and approved is worse than either, which is what SQL mode is for.
 
-When it does fit, the model also suggests a `tool_name` (a lowercase identifier) and a
-`description`, so the "ask for the name" step arrives prefilled rather than blank.
+The builder is tried first because it is the stronger artefact: identifier-checked, filter
+values bound as parameters, and reopening fully editable in the builder afterwards.
+
+The model suggests a `tool_name` (a lowercase identifier) and a `description` either way, so
+the "ask for the name" step arrives prefilled in both modes.
 
 ### What the server fixes, and what it refuses
 
@@ -212,6 +225,11 @@ The model's answer is not trusted as a config. `_validated_tool_draft`:
 | `id`, and both tables have it | **Rejected as ambiguous**, naming both tables. |
 | `profit_margin`, in no table | **Rejected** — the model invented it. |
 | `recent_orders.total`, not joined | **Rejected** — the query does not read that table. |
+
+"Rejected" above means *rejected as a builder config*, not rejected as a tool. Each of those
+outcomes raises, `draft_tool_config` catches it, and the tool is drafted in SQL mode instead
+with the rejection message as the reason shown to the user. The model's reading of the query
+was wrong; the query itself never was.
 
 Qualifying a bare name with the base table would be a guess, and a wrong guess is the worst
 outcome available here: the tool would be created, would validate, would open in the builder,
@@ -355,14 +373,19 @@ app runs in development.
 
 # Not covered
 
-* **A query that needs more than the builder cannot become a tool.** ORDER BY, LIMIT, HAVING,
-  subqueries, window functions and the rest are refused with a reason rather than approximated
-  — see [Auto Create Tool](#auto-create-tool). The SQL is still there to copy.
+* **A query that needs more than the builder is not approximated into it.** ORDER BY, LIMIT,
+  HAVING, subqueries, window functions and the rest are saved as the statement itself instead
+  — see [Auto Create Tool](#auto-create-tool) and
+  [TOOL_QUERY_MODES.md](TOOL_QUERY_MODES.md). What is still refused is anything that is not a
+  single read.
 * **The conversation is not persisted.** No history table; it lives in the panel for as long as
   it is open. Contrast `PromptHistory`, which AI analytics writes for every run. A *created tool*
   is of course persisted — as an ordinary tool config.
 * **Auto Create Tool only creates.** There is no "update this existing tool config from a new
   query"; editing an existing tool is the query builder's job.
-* **The SQL the model writes is never executed.** By design — see
-  [The contract](#the-contract). A tool config *created* from a draft is executable by the Deep
-  Agents runtime, but what runs is the validated builder config, never the model's SQL string.
+* **The SQL the model writes is never executed *by this feature*.** By design — see
+  [The contract](#the-contract). A tool config *created* from a draft is executable by the
+  Deep Agents runtime, and there the mode matters: a builder tool runs the validated config
+  rebuilt from reflected columns, a SQL tool runs the statement the user read and approved
+  before saving it. In neither case does anything run without a person having chosen to
+  create the tool.

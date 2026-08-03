@@ -92,12 +92,13 @@ async def create_datasource(
         )
 
         if not is_valid:
+            target = f"{host}:{port}" if host and port else (host or "the database server")
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    "Could not connect to the database. "
+                    f"Could not connect to '{database_name}' at {target}. "
                     "Please double-check the host, port, database name, username, and password, "
-                    "and make sure the database server is running and reachable."
+                    "and make sure the database server is running and reachable from this application."
                 ),
             )
 
@@ -494,12 +495,16 @@ async def toggle_table_status_service(
 
     configuration[table_name]["status"] = new_status
 
-    # Cascade: deactivate all columns when the table is deactivated
-    if new_status == "inactive":
-        column_data = configuration[table_name].get("column_data", {})
-        for col_name in column_data:
-            column_data[col_name]["status"] = "inactive"
-        configuration[table_name]["column_data"] = column_data
+    # Cascade in BOTH directions: the table switch owns its columns.
+    #
+    # Deactivating a table must switch its columns off, and activating it must
+    # switch them all back on — a table reported as active whose columns are all
+    # inactive contributes no data to a query, which reads as the activation
+    # having silently failed.
+    column_data = configuration[table_name].get("column_data", {})
+    for col_name in column_data:
+        column_data[col_name]["status"] = new_status
+    configuration[table_name]["column_data"] = column_data
 
     datasource.configuration_data = configuration
     flag_modified(datasource, "configuration_data")

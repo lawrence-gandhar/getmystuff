@@ -1,8 +1,10 @@
 {# <tr> per tool config. Identifiers are always public uuids.
 
    `query_preview` is built server-side by tool_config_service.build_query_preview
-   so the list, the form and any future runtime agree on what a config means. It is
-   shown for reading only and is never executed.
+   so the list, the form and any future runtime agree on what a config means. For a
+   builder tool it is a rendering of the config, shown for reading only and never
+   executed; for a SQL tool it is the stored statement itself, which is exactly what
+   runs — the badge next to it says which of the two is being read.
 
    `agent_filter` travels with every mutation as a hidden hx-val so the rebuilt
    table keeps showing the same subset the user was looking at. #}
@@ -34,7 +36,12 @@
         {% endif %}
     </td>
     <td>
-        <code class="small text-break">{{ tool.query_preview }}</code>
+        {% if tool.query_mode == 'sql' %}
+        <span class="badge bg-info-subtle text-info-emphasis border border-info-subtle mb-1">
+            <i class="las la-code"></i> SQL
+        </span>
+        {% endif %}
+        <code class="small text-break d-block">{{ tool.query_preview }}</code>
     </td>
     <td>
         {% if tool.is_enabled %}

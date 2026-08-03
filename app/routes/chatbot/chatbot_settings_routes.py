@@ -7,7 +7,7 @@ from litestar.response import Response, Template
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.auth import require_auth
-from app.models.chatbot import DEFAULT_SYSTEM_PROMPT, LLM_MODES
+from app.models.chatbot import DEFAULT_SYSTEM_PROMPT, LLM_MODES, TARGET_TYPE_AGENT
 from app.models.user import User
 from app.routes.chatbot.action_routes import action_form_context, read_action_form
 from app.schemas.chatbot import (
@@ -117,12 +117,14 @@ class ChatbotSettingsController(Controller):
         """
         Create one agent.
 
-        The target selection — which files, tables or collections this agent may
-        answer from — is a cross-field rule, and ``ChatbotCreateRequest`` owns it:
-        which kind of value each selection has to be, and whether any selection is
-        needed at all (a ``datasource`` target means "all of it"). That replaces two
-        hand-rolled ``uuid.UUID()`` conversions whose ``except`` branches were the
-        only thing standing between a mistyped selection and a database error.
+        The target selection — what this agent may answer from — is a cross-field
+        rule, and ``ChatbotCreateRequest`` owns it: which kind of value each
+        selection has to be, whether any selection is needed at all (a
+        ``datasource`` target means "all of it"), and whether a datasource is needed
+        at all (an ``agent`` target reads through the agent's tool configs instead).
+        That replaces two hand-rolled ``uuid.UUID()`` conversions whose ``except``
+        branches were the only thing standing between a mistyped selection and a
+        database error.
         """
         try:
             payload = await ChatbotCreateRequest.from_form(request)
@@ -290,13 +292,18 @@ class ChatbotSettingsController(Controller):
             "attachable_actions": build_action_views(attachable_actions),
             "attached_flow": attached_flow,
             "attachable_flows": attachable_flows,
-            # Deep Agent attachment picker (AI & Prompt tab). `field_name` and
-            # `agents` feed the shared deep_agents/partials/agent_options.htm include.
+            # Deep Agent attachment picker (AI & Prompt tab). `field_name`,
+            # `agent_required` and `agents` feed the shared
+            # deep_agents/partials/agent_options.htm include.
             "workspaces": await workspace_service.get_workspace_choices(db, user.id),
             "agents": await data_agent_service.get_agent_views(db, user.id),
             "selected_agent_id": selected_agent_uuid,
             "selected_workspace_id": selected_workspace_uuid,
             "field_name": "data_agent_id",
+            # This widget has no datasource target of its own, so its agent is not
+            # detachable — the picker offers a swap, not a "none". The service
+            # refuses it regardless; this keeps the form from offering it.
+            "agent_required": key.target_type == TARGET_TYPE_AGENT,
             **action_form_context(),
             **extra,
         }

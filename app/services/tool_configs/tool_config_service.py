@@ -7,6 +7,22 @@ app.models.tool_configs). The query is described in the same shape the
 Configurations builder produces, so the two mean the same thing without being
 coupled.
 
+A tool config is written one of two ways, and ``query_mode`` says which (see the
+model docstring for what each stores):
+
+* ``builder`` — the structured query. :func:`validated_query_config` checks every
+  identifier in it against the tables the query actually reads.
+* ``sql`` — one read-only statement the operator wrote or approved.
+  :func:`validated_tool_sql` holds it to
+  :func:`app.utils.sql_guard.read_only_violation`: a single statement, a read, of
+  bounded length. It does not, and cannot honestly, promise the SQL is *correct* —
+  the database decides that when it runs. What it promises is that nothing but a
+  read will be attempted.
+
+Both modes go through :func:`_validated_fields`, which returns all three columns
+together, so a mode switch can never leave the previous mode's query behind for
+the executor to pick up.
+
 Ownership: ``tool_configs`` has no ``user_id`` of its own — it comes from the
 agent, so every function resolves the agent first (via data_agent_service, scoped
 to the logged-in user) and only then touches the tool config. The datasource being
@@ -42,11 +58,15 @@ from app.models.datasource import DataSource
 from app.models.tool_configs import (
     AGGREGATION_FUNCTION_VALUES,
     FILTER_OPERATOR_VALUES,
+    QUERY_MODE_BUILDER,
+    QUERY_MODE_SQL,
+    QUERY_MODE_VALUES,
     ToolConfig,
 )
 from app.services.data_agents import data_agent_service
 from app.services.datasource import datasource_service
 from app.utils.query_joins import (
+    RDBMS_DB_TYPES,
     build_join_sql,
     join_types_for,
     query_tables,
@@ -54,6 +74,7 @@ from app.utils.query_joins import (
     validated_column_reference,
     validated_joins,
 )
+from app.utils.sql_guard import normalised_sql, read_only_violation
 from app.utils.validators import (
     optional_text,
     parse_json_object,
@@ -112,6 +133,7 @@ async def get_tool_config_views(
             "tool_name": tool_config.tool_name,
             "description": tool_config.description,
             "table_name": tool_config.table_name,
+            "query_mode": tool_config.query_mode or QUERY_MODE_BUILDER,
             "is_enabled": tool_config.is_enabled,
             "agent_uuid": str(agent.uuid),
             "agent_name": agent.name,
@@ -119,7 +141,9 @@ async def get_tool_config_views(
             "datasource_name": datasource.datasource_name,
             "datasource_is_active": datasource.is_active,
             "query_preview": build_query_preview(
-                tool_config.config or {}, tool_config.table_name,
+                tool_config.config or {},
+                tool_config.table_name,
+                tool_config.sql_query,
             ),
             "created_at": tool_config.created_at,
             "updated_at": tool_config.updated_at,
@@ -162,6 +186,11 @@ async def get_tool_config_view(
     One tool config shaped for its edit form — the agent and datasource are exposed
     as *their* public uuids so the dropdowns can preselect them, and ``config`` is
     handed over as-is for the query builder to reload.
+
+    Both queries travel, whichever mode the tool is in: the form renders the
+    builder and the SQL editor together and shows one of them, so switching mode
+    mid-edit does not need a round trip — and a switch made by mistake can be
+    switched back without having lost anything.
     """
     tool_config = await get_tool_config(db, user_id, tool_config_id)
 
@@ -175,6 +204,8 @@ async def get_tool_config_view(
         "tool_name": tool_config.tool_name,
         "description": tool_config.description,
         "table_name": tool_config.table_name,
+        "query_mode": tool_config.query_mode or QUERY_MODE_BUILDER,
+        "sql_query": tool_config.sql_query or "",
         "is_enabled": tool_config.is_enabled,
         "agent_id": str(agent.uuid) if agent else "",
         "datasource_id": str(datasource.uuid) if datasource else "",
@@ -190,6 +221,10 @@ async def get_datasource_choices(db: AsyncSession, user_id: int) -> List[dict]:
     is switched on — but flagged, so the choice is informed. ``supports_joins`` rides
     along because the Joins section only makes sense for a relational datasource, and
     the form needs to know that before anything is fetched from it.
+
+    ``supports_sql`` is the same idea for the SQL-query mode: a CSV file or a Mongo
+    collection has no SQL to run, so the form offers the mode only where it means
+    something rather than letting it be chosen and then refused on save.
     """
     datasources = await datasource_crud.get_many(
         db, filters={"user_id": user_id}, order_by="datasource_name",
@@ -201,9 +236,21 @@ async def get_datasource_choices(db: AsyncSession, user_id: int) -> List[dict]:
             "is_active": datasource.is_active,
             "db_type": datasource.db_type,
             "supports_joins": supports_joins(datasource.db_type),
+            "supports_sql": supports_sql(datasource.db_type),
         }
         for datasource in datasources
     ]
+
+
+def supports_sql(db_type: Optional[str]) -> bool:
+    """
+    Whether a raw SQL tool config can be written against this datasource type.
+
+    Relational only, and for the same reason ``query_executor`` accepts only those:
+    a file datasource is read through pandas and a Mongo collection through an
+    aggregation pipeline, so there is no statement to run against either.
+    """
+    return (db_type or "").strip().lower() in RDBMS_DB_TYPES
 
 
 async def get_join_options(
@@ -220,13 +267,14 @@ async def get_join_options(
     which is also true when nothing is selected yet.
     """
     if datasource_id is None:
-        return {"supports_joins": False, "join_types": ()}
+        return {"supports_joins": False, "join_types": (), "supports_sql": False}
 
     datasource = await _resolve_datasource(db, user_id, datasource_id)
 
     return {
         "supports_joins": supports_joins(datasource.db_type),
         "join_types": join_types_for(datasource.db_type),
+        "supports_sql": supports_sql(datasource.db_type),
     }
 
 
@@ -312,14 +360,26 @@ async def get_column_map(
     return column_map
 
 
-def build_query_preview(config: dict, table_name: str) -> str:
+def build_query_preview(
+    config: dict,
+    table_name: str,
+    sql_query: Optional[str] = None,
+) -> str:
     """
     Render a tool config's query as readable SQL for the list page.
 
     Display only — it is never executed. Building it here rather than in the
     template keeps the list, the form and any future runtime from disagreeing about
     what a config means.
+
+    A SQL-mode tool has nothing to render: its stored statement *is* the query, so
+    it is returned as-is. That is what makes the list page's Query column honest
+    across both modes without the caller having to know which mode it is looking
+    at — passing ``sql_query`` is enough.
     """
+    if (sql_query or "").strip():
+        return sql_query.strip()
+
     sql = f"SELECT {_preview_selection(config)} FROM {table_name}"
 
     for clause in build_join_sql(config.get("joins")):
@@ -381,13 +441,23 @@ async def create_tool_config(
     table_name: str,
     description: Optional[str] = None,
     config_json: Optional[str] = None,
+    query_mode: Optional[str] = None,
+    sql_query: Optional[str] = None,
 ) -> ToolConfig:
     """Create a tool config and give it to one agent. Enabled on creation."""
     agent = await _resolve_agent(db, user_id, agent_id)
     datasource = await _resolve_datasource(db, user_id, datasource_id)
 
     fields = await _validated_fields(
-        db, agent, datasource, tool_name, table_name, description, config_json,
+        db,
+        agent,
+        datasource,
+        tool_name,
+        table_name,
+        description,
+        config_json,
+        query_mode,
+        sql_query,
     )
 
     try:
@@ -411,6 +481,8 @@ async def update_tool_config(
     table_name: str,
     description: Optional[str] = None,
     config_json: Optional[str] = None,
+    query_mode: Optional[str] = None,
+    sql_query: Optional[str] = None,
 ) -> Set[int]:
     """
     Update a tool config, including moving it to a different agent or datasource —
@@ -435,6 +507,8 @@ async def update_tool_config(
         table_name,
         description,
         config_json,
+        query_mode,
+        sql_query,
         # Exclude itself from the duplicate check only while it stays on the same
         # agent; moved to another agent it has to clear that agent's names.
         exclude_id=tool_config.id if agent.id == tool_config.data_agent_id else None,
@@ -536,6 +610,8 @@ async def _validated_fields(
     table_name: str,
     description: Optional[str],
     config_json: Optional[str],
+    query_mode: Optional[str] = None,
+    sql_query: Optional[str] = None,
     exclude_id: Optional[int] = None,
 ) -> dict:
     """
@@ -543,8 +619,13 @@ async def _validated_fields(
     the column dict to persist.
 
     The datasource is needed for more than ownership: its type decides whether the
-    query may join at all, and its table is the one every unqualified column
-    reference belongs to.
+    query may join at all, whether raw SQL can be run against it, and its table is
+    the one every unqualified column reference belongs to.
+
+    All three query columns are always in the returned dict, so whichever mode is
+    saved clears the other mode's leftovers. Without that, switching a tool to SQL
+    and back would leave a stale statement in ``sql_query`` for the executor to
+    prefer over the config the operator is now looking at.
     """
     tool_name = require_identifier(tool_name, "Tool name")
 
@@ -555,13 +636,97 @@ async def _validated_fields(
         )
 
     base_table = require_object_name(table_name, "Table")
+    mode = _validated_query_mode(query_mode, datasource)
 
-    return {
+    fields = {
         "tool_name": tool_name,
         "table_name": base_table,
         "description": optional_text(description, "Description", _DESCRIPTION_MAX),
-        "config": validated_query_config(config_json, base_table, datasource.db_type),
+        "query_mode": mode,
     }
+
+    if mode == QUERY_MODE_SQL:
+        return {**fields, "config": {}, "sql_query": validated_tool_sql(sql_query)}
+
+    return {
+        **fields,
+        "config": validated_query_config(config_json, base_table, datasource.db_type),
+        "sql_query": None,
+    }
+
+
+def _validated_query_mode(query_mode: Optional[str], datasource: DataSource) -> str:
+    """
+    Which of the two ways this query is written, defaulting to the builder.
+
+    Blank means builder rather than being an error: every tool config written
+    before SQL mode existed posts no mode at all, and so does any caller that only
+    knows about the builder.
+
+    SQL mode is refused for a non-relational datasource here, at save time, rather
+    than being stored and failing on the agent's first call — a tool that can never
+    run is a configuration mistake, and the operator is standing right in front of
+    the form.
+    """
+    mode = (query_mode or QUERY_MODE_BUILDER).strip().lower()
+
+    if mode not in QUERY_MODE_VALUES:
+        raise HTTPException(
+            status_code=400,
+            detail="Choose whether the query is built or written as SQL",
+        )
+
+    if mode == QUERY_MODE_SQL and not supports_sql(datasource.db_type):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"'{datasource.datasource_name}' is not a relational datasource, so "
+                "it cannot run a SQL query. Use the query builder instead, or pick a "
+                "PostgreSQL, MySQL or SQLite datasource."
+            ),
+        )
+
+    return mode
+
+
+def validated_tool_sql(sql_query: Optional[str]) -> str:
+    """
+    Validate a raw SQL tool query and return it normalised, ready to store.
+
+    Public for the same reason :func:`validated_query_config` is: Ask AI saves
+    tools through this module, and the Deep Agents executor re-checks a stored
+    statement before running it. One definition of an acceptable query, checked on
+    the way in and again on the way out.
+
+    **Any read-only statement is accepted.** ``DISTINCT``, ``ORDER BY``, ``LIMIT``,
+    ``HAVING``, subqueries, CTEs, window functions, ``UNION``, ``CASE`` — all of it,
+    because the point of this mode is that the query builder's subset is not the
+    limit of what a tool may run. What is refused is anything that is not a single
+    read: see :func:`app.utils.sql_guard.read_only_violation`.
+
+    Syntax is not checked, and cannot honestly be: dialects differ, and a parser
+    strict enough to be worth trusting would reject valid queries. A syntax error
+    surfaces when the tool is run, named by the database.
+    """
+    statement = normalised_sql(sql_query)
+
+    if not statement:
+        raise HTTPException(
+            status_code=400,
+            detail="Write the SQL query this tool should run",
+        )
+
+    violation = read_only_violation(statement)
+    if violation:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"The SQL query {violation}. A tool config runs one read-only "
+                "statement — the agent can read data, never change it."
+            ),
+        )
+
+    return statement
 
 
 def validated_query_config(

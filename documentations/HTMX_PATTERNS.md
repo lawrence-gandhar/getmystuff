@@ -137,6 +137,71 @@ with an alert into the same target, leaving everything the user typed untouched.
 <div id="toolConfigFormResponse"></div>   {# banner lives inside the offcanvas #}
 ```
 
+## Error responses must be opted back into the swap
+
+HTMX only swaps `2xx` responses. A route that answers `400` / `409` / `422` / `500` with a
+human-readable alert would have that alert **silently discarded** — the user clicks the button
+and nothing at all happens. `templates/base/layout.htm` installs one global `htmx:beforeSwap`
+handler that re-enables the swap for error responses, so every route gets this for free:
+
+```
+document.addEventListener('htmx:beforeSwap', function (event) {
+    var xhr = event.detail.xhr;
+    if (xhr.status < 400) return;
+    if (xhr.status === 401) return;          // handled by the login redirect instead
+
+    var isHtml = (xhr.getResponseHeader('Content-Type') || '').includes('text/html');
+    if (!isHtml || !xhr.responseText.trim()) {
+        event.detail.serverResponse = '<div class="alert alert-danger">...</div>';
+    }
+    event.detail.shouldSwap = true;
+    event.detail.isError = false;            // swap into the element's own hx-target
+});
+```
+
+Two guards matter. `401` is left alone so the session-expiry redirect still wins and the login
+page is never swapped into a partial. A non-HTML body (raw JSON from an unhandled exception) is
+replaced with a generic sentence, so a payload or stack trace never reaches the user.
+
+The consequence for route authors: **return the real status code**, not `200`, and return HTML.
+The message will display.
+
+---
+
+# Offcanvas Panels Close Only on the Close Button
+
+Every offcanvas in the app stays open until the user clicks its own close / cancel / save
+button. A backdrop click and the `Esc` key are both inert — these panels hold configuration
+forms, and losing a half-filled form to a stray click is not an acceptable failure mode.
+
+Nothing is required of a new panel. `templates/base/layout.htm` locks this globally, right
+after the Bootstrap bundle loads, because Bootstrap resolves the options per instance and a
+panel can be created either way:
+
+```
+bootstrap.Offcanvas.Default.backdrop = 'static';   // panels created from JS
+bootstrap.Offcanvas.Default.keyboard = false;
+// …plus data-bs-backdrop="static" / data-bs-keyboard="false" stamped onto every
+// .offcanvas element, since data attributes outrank the defaults for data-bs-toggle panels.
+```
+
+`backdrop: 'static'` makes a backdrop click fire `hidePrevented.bs.offcanvas` instead of
+hiding; `keyboard: false` does the same for `Esc`. Panels swapped in by HTMX are stamped on
+`htmx:load` / `htmx:afterSwap`, so a partial-delivered panel behaves identically.
+
+Two rules for new panels:
+
+* **Always give the panel a close control** — `data-bs-dismiss="offcanvas"` or an explicit
+  `bootstrap.Offcanvas.getInstance(el).hide()`. With dismissal locked, a panel without one
+  is a trap.
+* **`data-bs-backdrop="false"` is still allowed** and is left alone by the lock. It means
+  "no backdrop at all, keep the page behind usable" (the datasource configuration canvases
+  dim the page with their own overlay instead). With no backdrop element there is nothing to
+  click through, so the panel is already safe; only the keyboard lock is applied.
+
+Programmatic closes are unaffected — a form that saves successfully and calls `.hide()` in
+`hx-on::after-request` still closes itself.
+
 ---
 
 # Best Practices

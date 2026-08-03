@@ -27,7 +27,11 @@ from litestar.response import Template
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.auth import require_auth
-from app.models.tool_configs import AGGREGATION_FUNCTIONS, FILTER_OPERATORS
+from app.models.tool_configs import (
+    AGGREGATION_FUNCTIONS,
+    FILTER_OPERATORS,
+    QUERY_MODE_BUILDER,
+)
 from app.models.user import User
 from app.schemas.tool_configs import (
     SchemaCascadeQuery,
@@ -177,6 +181,7 @@ class ToolConfigController(Controller):
             datasource_id,
             tool_config["table_name"],
             tool_config["config"],
+            tool_config["query_mode"],
         )
 
         return Template(
@@ -203,14 +208,21 @@ class ToolConfigController(Controller):
     ) -> Template:
         """
         Re-render the Table field for the datasource just picked, and reset the query
-        builder along with it — see the partial for why the two move together.
+        builder and the mode selector along with it — see the partial for why the
+        three move together.
         """
         selection = SchemaCascadeQuery.from_query(request).datasource_id
 
         table_names: list = []
+        options: dict = {}
         schema_error = None
         if selection is not None:
             try:
+                # Whether this datasource can run SQL at all decides whether the mode
+                # selector offers it, and is known without reading any schema.
+                options = await tool_config_service.get_join_options(
+                    db, user.id, selection,
+                )
                 table_names = await tool_config_service.get_table_choices(
                     db, user.id, selection,
                 )
@@ -221,6 +233,7 @@ class ToolConfigController(Controller):
             template_name=_TABLES_TEMPLATE,
             context={
                 **self._builder_defaults(),
+                **options,
                 "datasource_id": str(selection) if selection else "",
                 "tables": table_names,
                 "selected_table": "",
@@ -306,6 +319,8 @@ class ToolConfigController(Controller):
                 table_name=payload.table_name,
                 description=payload.description,
                 config_json=payload.config_json,
+                query_mode=payload.query_mode,
+                sql_query=payload.sql_query,
             )
             resync = {tool_config.data_agent_id}
         except HTTPException as exc:
@@ -338,11 +353,13 @@ class ToolConfigController(Controller):
                 table_name=payload.table_name,
                 description=payload.description,
                 config_json=payload.config_json,
+                query_mode=payload.query_mode,
+                sql_query=payload.sql_query,
             )
         except HTTPException as exc:
             error = str(exc.detail)
 
-        return await self._rows(db, user, payload.agent_filter, error)
+        return await self._rows(db, user, payload.agent_filter, error, resync)
 
     # --------------------------
     # ENABLE / DISABLE
@@ -410,7 +427,8 @@ class ToolConfigController(Controller):
         """
         The builder context for a form with nothing selected yet. Empty
         ``join_types`` is what keeps the Joins section out of the way until a
-        relational datasource is chosen.
+        relational datasource is chosen, and ``supports_sql`` false does the same
+        for the SQL-query mode.
         """
         return {
             "base_table": "",
@@ -420,6 +438,8 @@ class ToolConfigController(Controller):
             "join_tables": [],
             "join_types": [],
             "supports_joins": False,
+            "supports_sql": False,
+            "query_mode": QUERY_MODE_BUILDER,
             "datasource_id": "",
             "config": {},
             "schema_error": None,
@@ -435,11 +455,16 @@ class ToolConfigController(Controller):
         datasource_id: Optional[uuid.UUID],
         table_name: str,
         config: dict,
+        query_mode: str = QUERY_MODE_BUILDER,
     ) -> dict:
         """
         Everything the query builder renders from: the base table's columns, the
         other tables available to join, the columns of the tables already joined, and
         the join types this datasource's dialect supports.
+
+        ``query_mode`` rides along because the mode selector is rendered from the
+        same context — a tool saved as SQL has to reopen showing its statement, not
+        an empty builder.
 
         The connection error is returned rather than raised — a datasource that is
         temporarily down must not make an existing tool config uneditable — so the
@@ -448,6 +473,7 @@ class ToolConfigController(Controller):
         context = cls._builder_defaults()
         context["base_table"] = (table_name or "").strip()
         context["config"] = config or {}
+        context["query_mode"] = query_mode or QUERY_MODE_BUILDER
 
         if datasource_id is None:
             return context

@@ -45,6 +45,7 @@ from app.schemas.base import (
 )
 from app.db.db_utils import MAX_REFLECTED_TABLES
 from app.models.chatbot import LLM_MODES
+from app.models.tool_configs import QUERY_MODE_BUILDER, QUERY_MODE_VALUES
 
 #: The two ways a model is chosen: the user's own key, or the in-built local model.
 LLM_MODE_VALUES: frozenset[str] = frozenset(value for value, _ in LLM_MODES)
@@ -152,12 +153,13 @@ class SqlAssistToolFormRequest(SqlAssistEchoMixin):
 
 class SqlAssistCreateToolRequest(SqlAssistEchoMixin):
     """
-    Save the drafted Tool Config.
+    Save the drafted Tool Config, in whichever mode it was drafted.
 
-    ``config_json`` is the drafted query travelling back in a hidden field. It goes
-    through ``tool_config_service``'s own validation on the way in — the same gate
-    the query builder's output passes — so nothing here trusts what the browser
-    posted.
+    ``query_mode`` says which of the two query fields is meant: ``config_json``
+    (the builder's shape) or ``sql_query`` (the statement as generated). Both
+    travel back in hidden fields and both go through ``tool_config_service``'s own
+    validation on the way in — the same gates the Tool Configs form passes — so
+    nothing here trusts what the browser posted, including the mode.
     """
 
     data_agent_id: OptionalUUID = Field(default=None, title="Data agent")
@@ -166,7 +168,20 @@ class SqlAssistCreateToolRequest(SqlAssistEchoMixin):
     description: OptionalText = Field(
         default=None, title="Description", max_length=MAX_DESCRIPTION_LENGTH
     )
+    query_mode: str = Field(default=QUERY_MODE_BUILDER, title="Query mode")
     config_json: JsonObjectField = Field(default_factory=dict, title="Query")
+    sql_query: str = Field(default="", title="SQL query", max_length=MAX_SQL_LENGTH)
     preview: Optional[str] = Field(
         default=None, title="Preview", max_length=MAX_SQL_LENGTH
     )
+
+    @field_validator("query_mode")
+    @classmethod
+    def validate_query_mode(cls, v: str) -> str:
+        """Blank means the builder, matching the Tool Configs form's own default."""
+        mode = (v or "").strip().lower() or QUERY_MODE_BUILDER
+
+        if mode not in QUERY_MODE_VALUES:
+            raise ValueError("Query mode is not one of the available options")
+
+        return mode

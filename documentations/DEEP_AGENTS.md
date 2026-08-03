@@ -42,8 +42,13 @@ an empty tool list is a bug you can see.
 
 ### Why the query is safe by construction
 
-`app/services/deep_agents/query_executor.py` never emits SQL text. It reflects the
-real tables (`Table(autoload_with=...)`, the pattern already in
+A tool config holds its query one of two ways — the query builder's structured config,
+or one read-only SQL statement the operator wrote or approved. The full account is in
+[TOOL_QUERY_MODES.md](TOOL_QUERY_MODES.md); what matters here is that **neither mode
+puts model output into a query**, and both are re-validated on every run.
+
+**Builder mode.** `app/services/deep_agents/query_executor.py` never emits SQL text.
+It reflects the real tables (`Table(autoload_with=...)`, the pattern already in
 `db_utils._reflect_one`) and assembles a SQLAlchemy Core `Select` from actual
 `Column` objects. Three properties follow:
 
@@ -63,23 +68,35 @@ that runs describe the same thing without the preview becoming a code path.
 Verified: a stored filter value of `x' OR 1=1 --` comes back as zero rows, and
 `%'; DROP TABLE customers; --` through a `LIKE` filter leaves the table intact.
 
+**SQL mode.** The stored statement runs as written — running an approximation of a
+query the operator approved would defeat the point of the mode. The safety comes from
+elsewhere, and it is the same place: nothing the model produces is in the statement.
+It was written and saved in advance, the tool takes no arguments, and it is re-checked
+against `app/utils/sql_guard.py` on every run — one statement, a read, bounded length.
+The 200-row cap is applied by *streaming* rather than by wrapping the SQL, so the
+operator's query is never rewritten. Details, including why the wrap would be wrong,
+in [TOOL_QUERY_MODES.md](TOOL_QUERY_MODES.md).
+
 ### Other bounds
 
-* Every tool query is `.limit(200)` (`MAX_TOOL_ROWS`), with no way for a config to
-  raise it. `describe_result()` states the row count and says explicitly when the cap
-  was hit, so a capped sample cannot be reported as a total.
-* The config is **re-validated at execution time** through
-  `tool_config_service.validated_query_config()`, not trusted from the row. A config
-  edited directly in psql gets the same treatment as one from the form.
+* Every tool query is capped at 200 rows (`MAX_TOOL_ROWS`), in either mode, with no
+  way for a config to raise it. `describe_result()` states the row count and says
+  explicitly when the cap was hit, so a capped sample cannot be reported as a total.
+* The stored query is **re-validated at execution time** — through
+  `tool_config_service.validated_query_config()` in builder mode and
+  `validated_tool_sql()` in SQL mode — not trusted from the row. A row edited directly
+  in psql gets the same treatment as one from the form, and a row that no longer
+  passes becomes a `ToolQueryError` the agent can relay, never a 500.
 * Relational datasources only (`query_joins.RDBMS_DB_TYPES`). A tool config pointed
   at Mongo or a file is refused with a message the agent relays.
-* **`RIGHT JOIN` is refused, not approximated.** SQLAlchemy has no right-join flag, and
-  a right join is only expressible by swapping the operands — which this accumulating
-  builder cannot do once the base table is fixed. Substituting a left or full outer
-  join would quietly change which rows come back, in the direction of a plausible wrong
-  figure. Given the point of the feature, an explicit failure the operator can fix is
-  the only honest option. Right joins stay authorable and previewable; they are just
-  not runnable.
+* **`RIGHT JOIN` is refused in builder mode, not approximated.** SQLAlchemy has no
+  right-join flag, and a right join is only expressible by swapping the operands —
+  which this accumulating builder cannot do once the base table is fixed. Substituting
+  a left or full outer join would quietly change which rows come back, in the direction
+  of a plausible wrong figure. Given the point of the feature, an explicit failure the
+  operator can fix is the only honest option. Right joins stay authorable and
+  previewable; they are just not runnable *that way* — a SQL-mode tool may right-join
+  freely, because its statement is not reassembled.
 
 `tool_factory.find_unsupported_tools()` reports both cases with their reason, and the
 console shows them before a visitor can hit one.
@@ -88,9 +105,9 @@ console shows them before a visitor can hit one.
 
 ## Tools take no arguments
 
-A tool config already declares its columns, aggregations, grouping and filters. The
-tool built from it exposes an empty argument schema, so the model's only decision is
-*which* tool to call.
+A tool config already declares its whole query — the columns, aggregations, grouping
+and filters in builder mode, or the statement in SQL mode. The tool built from it
+exposes an empty argument schema, so the model's only decision is *which* tool to call.
 
 Two reasons, and the first is the important one:
 
@@ -176,12 +193,41 @@ Picked as a **Workspace → Data Agent** cascade, in two places, both served by 
 fragment (`/deep-agents/agent-options` → `templates/deep_agents/partials/agent_options.htm`)
 so they cannot offer different sets:
 
-* the create form on Chatbot Settings, alongside the datasource picker;
+* the create form on Chatbot Settings, **above** the datasource picker — it decides
+  whether that picker is asked for at all;
 * a form on the chatbot's **AI & Prompt** tab, so it can be changed later.
 
 Editable after creation, unlike the datasource target: swapping which agent answers is
 a normal operational change, whereas repointing a published widget at different data
 is not.
+
+### Two kinds of chatbot, one column apart
+
+`chatbot_api_keys.target_type` says which:
+
+| `target_type` | `datasource_id` | What the widget may read | If the agent can't run |
+|---|---|---|---|
+| `datasource` / `table` / `collection` / `file` | set | that datasource target | falls back to a profile answer |
+| `agent` | **NULL** | its agent's tool configs | says it can't reach the data |
+
+The `agent` row is the newer one, and it exists because an attached agent already
+carries its datasources — one per tool config. Requiring a datasource *as well* asked
+the operator the same question twice, and for an agent reading three of them the second
+answer could only be arbitrary. Worse, the two answers could disagree: which one applied
+would depend on whether the agent happened to run that turn.
+
+So the two are exclusive by construction, enforced in three places that all have to
+agree: `ChatbotCreateRequest.check_target` (an `agent` target needs an agent and must
+*not* carry a datasource — a submission with both is rejected, not silently trimmed),
+`chatbot_service.create_chatbot_key`, and the form, which hides the datasource block
+and de-requires the field the moment an agent is picked.
+
+**An agent-backed widget's agent cannot be detached.** `set_chatbot_data_agent` refuses
+it, and the picker does not render the "No data agent" option (`agent_required`, which
+rides through the cascade URL so it survives a workspace change). Clearing it would
+leave a published key answering nothing, with no way back — the datasource target is
+immutable after creation. Swapping one agent for another is still allowed, which is the
+operation that case actually needs.
 
 Stored on `chatbot_api_keys` as `data_agent_id` plus the `workspace_id` it was picked
 through (remembered only so the picker re-opens on the right branch; it is not used at
@@ -211,6 +257,16 @@ enabled tools, a key with no model name, a disabled agent — must not become an
 bubble in a published widget. It cannot leak anything the agent was gating: the profile
 path is scoped to the chatbot's own datasource target, chosen by the operator at
 creation and unchanged by attaching an agent.
+
+**An `agent` widget has no such target, so there is nothing to fall back to.** It
+answers with `_NO_FALLBACK_REPLY` instead — "I can't reach that data at the moment, so
+I'd rather not guess" — and the agent's actual reason goes to the log for the operator.
+That is a worse visitor experience than a profile answer and a better one than a wrong
+answer or an error bubble, and it is the trade the operator accepted by not nominating a
+datasource. `chatbot_service.answer_message` guards on `datasource_id IS NULL` before it
+looks anything up, so the case cannot reach a query filtering on `id = None` and report
+"your data source is no longer available" — it never had one, which is a different
+thing.
 
 The Deep Agent's prose answer maps onto `AnalyticsResult.summary` alone. `insights` stays
 empty and `table` stays `None` rather than being manufactured by splitting the text —

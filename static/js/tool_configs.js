@@ -873,3 +873,115 @@
         return value === null || value === undefined ? "" : String(value);
     }
 })();
+
+/**
+ * Tool Configs — the query mode switch inside the New/Edit Tool Config offcanvas.
+ *
+ * A tool config holds its query one of two ways (app.models.tool_configs): the
+ * structured builder above, or one read-only SQL statement. Both panels are always
+ * in the DOM and this shows one of them, so switching back and forth never costs
+ * the operator what they had typed in the other — only the mode they submit
+ * decides which one is stored, and the server discards the other.
+ *
+ * The `required` attribute moves with the visible panel. A hidden `required`
+ * textarea makes the browser refuse to submit while pointing its validation bubble
+ * at something that is not on screen, which reads as the form being broken.
+ *
+ * Re-initialised on every htmx swap for the same reason the builder is: the form
+ * arrives as swapped content when the offcanvas opens, and the mode field arrives
+ * on its own — out of band — when the datasource changes. `data-mode-ready` keeps
+ * that idempotent.
+ *
+ * Nothing here is enforcement. tool_config_service validates the mode and the
+ * statement it names, whatever this file happened to show.
+ */
+(function () {
+    "use strict";
+
+    var FIELD_SELECTOR = "[data-query-mode-field]";
+
+    scan(document);
+    document.addEventListener("DOMContentLoaded", function () {
+        scan(document);
+    });
+    document.addEventListener("htmx:load", function (event) {
+        scan(event.target);
+    });
+
+    /**
+     * Initialise every not-yet-initialised mode field inside a swapped node.
+     * @param {Element|Document} root
+     */
+    function scan(root) {
+        if (!root || !root.querySelectorAll) return;
+
+        if (root.matches && root.matches(FIELD_SELECTOR)) init(root);
+        Array.prototype.forEach.call(root.querySelectorAll(FIELD_SELECTOR), init);
+    }
+
+    /** @param {Element} field */
+    function init(field) {
+        if (field.dataset.modeReady === "1") return;
+        field.dataset.modeReady = "1";
+
+        var options = field.querySelectorAll("[data-query-mode-option]");
+
+        Array.prototype.forEach.call(options, function (option) {
+            option.addEventListener("change", function () {
+                if (option.checked) apply(field, option.value);
+            });
+        });
+
+        apply(field, selectedMode(options));
+    }
+
+    /**
+     * The checked mode, defaulting to the builder — which is also what a form
+     * rendered before a datasource was picked submits.
+     * @param {NodeList} options
+     * @returns {string}
+     */
+    function selectedMode(options) {
+        for (var i = 0; i < options.length; i += 1) {
+            if (options[i].checked) return options[i].value;
+        }
+        return "builder";
+    }
+
+    /**
+     * Show the panel for `mode` and hide the other.
+     *
+     * The builder panel is a sibling of the mode field rather than a child of it
+     * (the field is swapped out of band on its own), so panels are looked up
+     * against the whole form.
+     *
+     * @param {Element} field
+     * @param {string} mode
+     */
+    function apply(field, mode) {
+        var scope = field.closest("form") || document;
+        var panels = scope.querySelectorAll("[data-query-mode-panel]");
+
+        Array.prototype.forEach.call(panels, function (panel) {
+            var active = panel.dataset.queryModePanel === mode;
+            panel.classList.toggle("d-none", !active);
+            setRequired(panel, active);
+        });
+    }
+
+    /**
+     * Mark the SQL textarea required only while it is the visible panel.
+     * @param {Element} panel
+     * @param {boolean} active
+     */
+    function setRequired(panel, active) {
+        var textarea = panel.querySelector("#toolSqlQuery");
+        if (!textarea) return;
+
+        if (active) {
+            textarea.setAttribute("required", "required");
+        } else {
+            textarea.removeAttribute("required");
+        }
+    }
+})();

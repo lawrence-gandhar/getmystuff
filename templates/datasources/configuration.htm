@@ -1161,16 +1161,9 @@ const _backdrop = document.getElementById("canvasBackdrop");
 function _showBackdrop() { _backdrop.classList.add("show"); }
 function _hideBackdrop() { _backdrop.classList.remove("show"); }
 
-_backdrop.addEventListener("click", function () {
-    // Close the top-most visible canvas when backdrop is clicked
-    const uploadEl = document.getElementById("fileUploadCanvas");
-    if (uploadEl.classList.contains("show")) {
-        bootstrap.Offcanvas.getInstance(uploadEl)?.hide();
-        return;
-    }
-    closeAllAndThen(function () {});
-    _hideBackdrop();
-});
+// The backdrop is dimming only — it deliberately has no click-to-close handler.
+// These canvases hold long configuration forms, so they close only through their
+// own close / cancel / save buttons, never through a stray click behind them.
 
 // =========================================================
 document.addEventListener("DOMContentLoaded", function () {

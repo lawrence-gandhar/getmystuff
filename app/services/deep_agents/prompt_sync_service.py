@@ -57,7 +57,11 @@ async def collect_agent_tools(db: AsyncSession, data_agent_id: int) -> List[dict
             "tool_name": tool_config.tool_name,
             "description": tool_config.description,
             "table_name": tool_config.table_name,
+            "query_mode": tool_config.query_mode,
             "config": dict(tool_config.config or {}),
+            # Non-empty only for a SQL-mode tool. Both consumers need it: the
+            # factory runs it, and the prompt quotes it as the query the tool runs.
+            "sql_query": tool_config.sql_query,
             "updated_at": tool_config.updated_at,
             "datasource": datasource,
             "datasource_name": datasource.datasource_name,

@@ -95,55 +95,16 @@
             </div>
 
             <div id="cbTargetPicker">
-                <div class="mb-3">
-                    <label for="cbDatasourceSelect" class="form-label fw-semibold">
-                        Data Source <span class="text-danger">*</span>
-                    </label>
-                    <select id="cbDatasourceSelect" name="datasource_id" class="form-select" required>
-                        <option value="">Select a data source&hellip;</option>
-                        {% for ds in datasources %}
-                        <option value="{{ ds.uuid }}" data-db-type="{{ ds.db_type }}">
-                            {{ ds.datasource_name }} ({{ ds.db_type | upper }})
-                        </option>
-                        {% endfor %}
-                    </select>
-                </div>
-
-                <fieldset class="mb-3" id="cbScopeGroup" style="display:none;">
-                    <legend class="form-label fw-semibold h6">Scope <span class="text-danger">*</span></legend>
-                    <div class="form-check">
-                        <input class="form-check-input" type="radio" name="cbScope" id="cbScopeFull" value="full">
-                        <label class="form-check-label" for="cbScopeFull">Full Datasource</label>
-                    </div>
-                    <div class="form-check">
-                        <input class="form-check-input" type="radio" name="cbScope" id="cbScopeSpecific" value="specific" checked>
-                        <label class="form-check-label" for="cbScopeSpecific">
-                            Specific <span id="cbScopeSpecificLabel">Tables</span>
-                        </label>
-                    </div>
-                </fieldset>
-
-                <fieldset class="mb-3" id="cbTargetListWrap" style="display:none;">
-                    <legend class="form-label fw-semibold h6">
-                        <span id="cbTargetListLabel">Tables</span> <span class="text-danger">*</span>
-                    </legend>
-                    <div id="cbTargetCheckboxList" class="border rounded p-2" style="max-height:200px; overflow-y:auto;">
-                        <div class="text-muted small">Select a data source first&hellip;</div>
-                    </div>
-                    <div class="form-text">Select one or more. The widget can only answer questions about the selected data.</div>
-                </fieldset>
-
-                <div class="mb-3 alert alert-secondary py-2 small" id="cbFullDatasourceNote" style="display:none;">
-                    The widget will be able to answer questions about every table, collection, or file
-                    currently in this datasource.
-                </div>
-
                 {# ---- Optional Deep Agent attachment: Workspace -> Data Agent ----
 
-                   Both optional. Left blank, the widget answers from a statistical
-                   profile of the target chosen above — exactly as every chatbot did
-                   before data agents existed. With an agent picked, the assistant
-                   instead runs that agent's tools and only ever sees their results.
+                   First, because it decides whether the rest of this section is asked
+                   at all. Left blank, the widget answers from a statistical profile of
+                   the datasource target chosen below — exactly as every chatbot did
+                   before data agents existed. With an agent picked, the assistant runs
+                   that agent's tools and only ever sees their results, and the
+                   datasource block below is hidden: the agent's tool configs already
+                   say what it can read, and nominating a datasource as well would be a
+                   second, conflicting answer to the same question.
 
                    The agent list is a cascade off the workspace, and the fragment is
                    served by /deep-agents/agent-options so this form and the AI tab's
@@ -188,6 +149,60 @@
                         </div>
                     </div>
                 </fieldset>
+
+                {# Shown in place of the datasource block once an agent is picked. #}
+                <div class="mb-3 alert alert-info py-2 small" id="cbAgentScopeNote" style="display:none;">
+                    <i class="las la-info-circle"></i>
+                    <strong>No data source needed.</strong>
+                    This widget reads through its data agent &mdash; that agent's tool
+                    configs decide which datasources and tables it can reach. Manage them
+                    in <a href="/tool-configs" target="_blank">Tool Configs</a>.
+                </div>
+
+                <div id="cbDatasourceBlock">
+                <div class="mb-3">
+                    <label for="cbDatasourceSelect" class="form-label fw-semibold">
+                        Data Source <span class="text-danger">*</span>
+                    </label>
+                    <select id="cbDatasourceSelect" name="datasource_id" class="form-select" required>
+                        <option value="">Select a data source&hellip;</option>
+                        {% for ds in datasources %}
+                        <option value="{{ ds.uuid }}" data-db-type="{{ ds.db_type }}">
+                            {{ ds.datasource_name }} ({{ ds.db_type | upper }})
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <fieldset class="mb-3" id="cbScopeGroup" style="display:none;">
+                    <legend class="form-label fw-semibold h6">Scope <span class="text-danger">*</span></legend>
+                    <div class="form-check">
+                        <input class="form-check-input" type="radio" name="cbScope" id="cbScopeFull" value="full">
+                        <label class="form-check-label" for="cbScopeFull">Full Datasource</label>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="radio" name="cbScope" id="cbScopeSpecific" value="specific" checked>
+                        <label class="form-check-label" for="cbScopeSpecific">
+                            Specific <span id="cbScopeSpecificLabel">Tables</span>
+                        </label>
+                    </div>
+                </fieldset>
+
+                <fieldset class="mb-3" id="cbTargetListWrap" style="display:none;">
+                    <legend class="form-label fw-semibold h6">
+                        <span id="cbTargetListLabel">Tables</span> <span class="text-danger">*</span>
+                    </legend>
+                    <div id="cbTargetCheckboxList" class="border rounded p-2" style="max-height:200px; overflow-y:auto;">
+                        <div class="text-muted small">Select a data source first&hellip;</div>
+                    </div>
+                    <div class="form-text">Select one or more. The widget can only answer questions about the selected data.</div>
+                </fieldset>
+
+                <div class="mb-3 alert alert-secondary py-2 small" id="cbFullDatasourceNote" style="display:none;">
+                    The widget will be able to answer questions about every table, collection, or file
+                    currently in this datasource.
+                </div>
+                </div><!-- /#cbDatasourceBlock -->
             </div>
 
             <div id="cbTargetReadonly" class="mb-3 alert alert-secondary py-2 small" style="display:none;">
@@ -263,6 +278,54 @@ const cbTargetCheckboxList = document.getElementById("cbTargetCheckboxList");
 const cbFullDatasourceNote = document.getElementById("cbFullDatasourceNote");
 const cbTargetType         = document.getElementById("cbTargetType");
 const cbSubmitBtn          = document.getElementById("cbSubmitBtn");
+const cbDatasourceBlock    = document.getElementById("cbDatasourceBlock");
+const cbAgentScopeNote     = document.getElementById("cbAgentScopeNote");
+
+/**
+ * The attached agent's uuid, or "" when none is picked.
+ *
+ * Looked up each time rather than cached: #cbDataAgentField is replaced by htmx
+ * whenever the workspace changes, so any reference held to the <select> would
+ * point at a detached node from the first cascade onwards.
+ */
+function cbSelectedAgentId() {
+    const select = document.getElementById("deepAgentSelect");
+    return select ? select.value : "";
+}
+
+/**
+ * Show either the datasource target picker or the "no data source needed" note,
+ * according to whether an agent is attached.
+ *
+ * With an agent, the widget reads through that agent's tool configs and has no
+ * datasource target of its own (target_type "agent", and the server stores a NULL
+ * datasource) — so the picker is hidden *and* de-required. Leaving `required` on a
+ * hidden <select> makes the browser block submit while pointing its validation
+ * bubble at a field that is not on screen.
+ *
+ * The datasource selection is cleared as well, not merely hidden: the schema
+ * rejects an agent target that also carries a datasource, because a submission
+ * with both is a form that got out of step with itself and silently dropping one
+ * of the two answers is how a widget ends up scoped to something nobody chose.
+ */
+function cbApplyAgentMode() {
+    const hasAgent = cbSelectedAgentId() !== "";
+
+    cbDatasourceBlock.style.display = hasAgent ? "none" : "";
+    cbAgentScopeNote.style.display  = hasAgent ? "" : "none";
+    cbDatasourceSelect.required     = !hasAgent;
+
+    if (hasAgent) {
+        cbDatasourceSelect.value = "";
+        cbTargetType.value = "agent";
+        cbSubmitBtn.disabled = false;
+        return;
+    }
+
+    // Back to picking a datasource — rebuild the target state from whatever the
+    // datasource select is now showing, which after the clear above is nothing.
+    cbResetTarget();
+}
 
 function cbScopeLabelFor(dbType) {
     if (CB_FILE_TYPES.includes(dbType)) return "Files";
@@ -381,6 +444,23 @@ cbTargetCheckboxList.addEventListener("change", function (e) {
     }
 });
 
+// Delegated, because #deepAgentSelect is replaced wholesale by the workspace
+// cascade — a listener bound to the element itself would die with the first swap.
+document.addEventListener("change", function (event) {
+    if (event.target && event.target.id === "deepAgentSelect") {
+        cbApplyAgentMode();
+    }
+});
+
+// The cascade re-renders the agent list with nothing selected, which silently
+// detaches the agent. Without this the form would stay in agent mode showing a
+// picker that no longer has one chosen, and submit a target type with no agent.
+document.body.addEventListener("htmx:afterSwap", function (event) {
+    if (event.target && event.target.id === "cbDataAgentField") {
+        cbApplyAgentMode();
+    }
+});
+
 function openAddKeyForm() {
     const form = document.getElementById("chatbotKeyForm");
     form.reset();
@@ -390,8 +470,10 @@ function openAddKeyForm() {
     document.getElementById("cbTargetPicker").style.display = "";
     document.getElementById("cbTargetReadonly").style.display = "none";
     cbDatasourceSelect.disabled = false;
-    cbDatasourceSelect.required = true;
     cbResetTarget();
+    // form.reset() puts the agent select back to "no agent", but only for the
+    // options currently rendered — so the mode is recomputed rather than assumed.
+    cbApplyAgentMode();
     document.getElementById("chatbotKeyFormResponse").innerHTML = "";
 
     htmx.process(form);
@@ -403,6 +485,9 @@ function openEditKeyForm(keyId, name, allowedOrigins, targetSummary) {
     form.setAttribute("hx-post", `/chatbot-settings/${keyId}/update`);
 
     document.getElementById("chatbotKeyOffcanvasTitleText").textContent = "Edit Chatbot";
+    // The whole target picker is hidden on edit — the dataset a published key can
+    // reach is immutable — so the datasource select is both disabled and
+    // de-required, or the browser would block submit on a field nobody can see.
     document.getElementById("cbTargetPicker").style.display = "none";
     document.getElementById("cbTargetReadonly").style.display = "";
     document.getElementById("cbTargetReadonlySummary").textContent = targetSummary || "";

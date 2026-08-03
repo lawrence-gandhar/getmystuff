@@ -40,7 +40,9 @@ from app.models.chatbot import (
     ACTION_HTTP_METHODS,
     ACTION_PARAMETER_TYPES,
     LLM_MODES,
+    TARGET_TYPE_AGENT,
 )
+from app.models.chatbot import TARGET_TYPES as MODEL_TARGET_TYPES
 from app.schemas.base import (
     MAX_DESCRIPTION_LENGTH,
     MAX_NAME_LENGTH,
@@ -58,9 +60,11 @@ from app.schemas.base import (
 )
 from app.utils.validators import require_object_name
 
-#: The four scopes a chatbot's data can be. Mirrors
-#: ``chatbot_service._VALID_TARGET_TYPES``, which still enforces it.
-TARGET_TYPES: frozenset[str] = frozenset({"datasource", "file", "table", "collection"})
+#: The scopes a chatbot's data can be, taken from the model so the schema, the
+#: service and the column cannot drift. ``chatbot_service`` still enforces it.
+#: ``agent`` is the one that carries no datasource — see
+#: :meth:`ChatbotCreateRequest.check_target`.
+TARGET_TYPES: frozenset[str] = frozenset(MODEL_TARGET_TYPES)
 
 #: Target types identified by object name rather than by file uuid.
 NAMED_TARGET_TYPES: frozenset[str] = frozenset({"table", "collection"})
@@ -116,20 +120,23 @@ class ChatbotCreateRequest(FormRequest):
     """
     The create-agent form.
 
-    ``datasource_id`` is required and typed: an agent with no datasource has
-    nothing to answer from, and the route previously reported a missing or
-    malformed one as "Please select a data source." after a bare ``uuid.UUID()``
-    call — the same outcome this reaches declaratively.
+    ``datasource_id`` is typed but **conditionally** required, which is the one
+    subtlety in this schema. A widget answers either from a datasource target it
+    nominates, or from an attached data agent's tool configs — and in the second
+    case there is no datasource to name, and asking for one anyway would mean the
+    operator picking a table the widget never reads. ``target_type == "agent"`` is
+    that case; :meth:`check_target` is where the pairing is enforced, because it
+    spans three fields and no single one of them can express it.
 
-    ``workspace_id`` and ``data_agent_id`` are optional, and blank means "no
-    agent" — which is the behaviour that existed before Deep Agents, so an
+    ``workspace_id`` and ``data_agent_id`` are otherwise optional, and blank means
+    "no agent" — which is the behaviour that existed before Deep Agents, so an
     untouched form still creates the chatbot it always did.
     """
 
     multi_fields = ("target_selection",)
 
     name: RequiredText = Field(title="Agent name", max_length=MAX_NAME_LENGTH)
-    datasource_id: RequiredUUID = Field(title="Data source")
+    datasource_id: OptionalUUID = Field(default=None, title="Data source")
     target_type: RequiredText = Field(title="Target type")
     target_selection: List[str] = Field(
         default_factory=list, title="Target selection", max_length=MAX_TARGET_SELECTIONS
@@ -145,18 +152,47 @@ class ChatbotCreateRequest(FormRequest):
     def validate_target_type(cls, v: str) -> str:
         if v not in TARGET_TYPES:
             raise ValueError(
-                "Target type must be one of datasource, file, table or collection"
+                "Target type must be one of datasource, file, table, collection "
+                "or agent"
             )
         return v
 
     @model_validator(mode="after")
     def check_target(self) -> "ChatbotCreateRequest":
         """
-        A scoped target must name what it is scoped to.
+        A target must name what it is scoped to, and which kind of thing that is
+        depends on ``target_type``:
 
-        ``datasource`` needs nothing — it means the whole datasource — which is why
-        the check is conditional rather than a plain ``min_length`` on the list.
+        ============  ==========================================================
+        ``agent``     A data agent, and **no** datasource. The agent's tool
+                      configs are the scope, so a datasource here would be a
+                      second, conflicting answer to "what can this widget read?".
+        ``datasource``  A datasource, and nothing further — it means all of it.
+        anything else   A datasource, plus at least one table, collection or file.
+        ============  ==========================================================
+
+        Rejecting a datasource sent *with* an agent target, rather than ignoring
+        it, is deliberate: the form hides those fields when an agent is picked, so
+        a submission carrying both is a form that got out of step with itself, and
+        silently dropping one of the two answers is how a widget ends up scoped to
+        something nobody chose.
         """
+        if self.target_type == TARGET_TYPE_AGENT:
+            if self.data_agent_id is None:
+                raise ValueError(
+                    "Please choose a data agent, or pick a data source for this "
+                    "widget to answer from"
+                )
+            if self.datasource_id is not None:
+                raise ValueError(
+                    "A widget answered by a data agent has no data source of its "
+                    "own — the agent's tools decide what it can read"
+                )
+            return self
+
+        if self.datasource_id is None:
+            raise ValueError("Please select a data source")
+
         if self.target_type == "datasource":
             return self
 

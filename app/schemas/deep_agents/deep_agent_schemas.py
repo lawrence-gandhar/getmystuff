@@ -17,7 +17,13 @@ that service and is documented in DEEP_AGENTS.md.
 
 from pydantic import Field
 
-from app.schemas.base import MAX_NAME_LENGTH, FormRequest, OptionalUUID, QueryRequest
+from app.schemas.base import (
+    MAX_NAME_LENGTH,
+    CheckboxBool,
+    FormRequest,
+    OptionalUUID,
+    QueryRequest,
+)
 
 #: The console's question cap. Ask AI bounds its prompt at the same number
 #: (`sql_assist_service._MAX_PROMPT_LEN`); a person typing into a console and a
@@ -35,6 +41,13 @@ class AgentOptionsQuery(QueryRequest):
 
     ``field_name`` lets each host form name the ``<select>`` it is rendering, so
     neither form dictates the other's markup.
+
+    ``required`` drops the "No data agent" option. One host needs it: a chatbot
+    whose ``target_type`` is ``agent`` has no datasource of its own, so detaching
+    its agent would leave a published widget that can answer nothing —
+    ``chatbot_service.set_chatbot_data_agent`` refuses that, and this stops the
+    picker offering it in the first place. It has to survive the cascade, or the
+    option would reappear the moment a workspace was chosen.
     """
 
     workspace_id: OptionalUUID = Field(default=None, title="Workspace")
@@ -42,6 +55,7 @@ class AgentOptionsQuery(QueryRequest):
     field_name: str = Field(
         default="data_agent_id", title="Field name", max_length=MAX_NAME_LENGTH
     )
+    required: CheckboxBool = Field(default=False, title="Agent required")
 
     @property
     def select_name(self) -> str:

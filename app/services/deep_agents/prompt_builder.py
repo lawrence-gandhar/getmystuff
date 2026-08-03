@@ -117,12 +117,19 @@ def _describe_tool(tool: dict) -> str:
     """
     One tool's entry: what it is for, where it reads from, and what it returns.
 
-    "What it returns" is spelled out per field rather than left to the SQL preview
-    because the field names in the result are what the model has to quote back —
-    and an aliased aggregation's name is not guessable from the config.
+    For a builder-mode tool, "what it returns" is spelled out per field rather than
+    left to the SQL preview, because the field names in the result are what the
+    model has to quote back — and an aliased aggregation's name is not guessable
+    from the config.
+
+    A SQL-mode tool has no config to read that from, so the statement itself is
+    what the model is shown (see :func:`_sql_tool_lines`). Claiming a field list
+    for it would mean parsing the SELECT list, and a wrong guess would have the
+    model quoting a column name that is not in the result.
     """
     config = tool.get("config") or {}
     table_name = tool.get("table_name") or ""
+    sql_query = (tool.get("sql_query") or "").strip()
 
     lines = [f"## {tool.get('tool_name')}"]
 
@@ -135,10 +142,13 @@ def _describe_tool(tool: dict) -> str:
 
     source = tool.get("datasource_name") or "the configured datasource"
     db_type = (tool.get("db_type") or "").strip()
-    lines.append(
-        f"Reads: {_source_description(config, table_name)} "
-        f"in {source}{f' ({db_type})' if db_type else ''}."
-    )
+    where = f"{source}{f' ({db_type})' if db_type else ''}"
+
+    if sql_query:
+        lines.extend(_sql_tool_lines(sql_query, table_name, where))
+        return "\n".join(lines)
+
+    lines.append(f"Reads: {_source_description(config, table_name)} in {where}.")
 
     returned = _returned_fields(config)
     lines.append(
@@ -164,6 +174,28 @@ def _describe_tool(tool: dict) -> str:
     lines.append(f"Query it runs: {build_query_preview(config, table_name)}")
 
     return "\n".join(lines)
+
+
+def _sql_tool_lines(sql_query: str, table_name: str, where: str) -> List[str]:
+    """
+    The entry for a tool whose query is a stored SQL statement.
+
+    The statement is quoted in full and the model is told to read the returned
+    field names off the result rather than off this description — which is the
+    truthful instruction, because nothing here has parsed the SELECT list.
+
+    It is put on its own lines rather than inline: these statements are the ones
+    the builder could not express, so they are the long ones — window functions,
+    CTEs, unions — and a wrapped single line is where a model starts misreading
+    which clause belongs to which query.
+    """
+    return [
+        f"Reads: {table_name} (and any tables its query joins) in {where}.",
+        "Returns: whatever columns the query below selects. Use the field names "
+        "exactly as they come back in the result — they are not listed here.",
+        "Query it runs, exactly as written:",
+        sql_query,
+    ]
 
 
 def _source_description(config: dict, table_name: str) -> str:

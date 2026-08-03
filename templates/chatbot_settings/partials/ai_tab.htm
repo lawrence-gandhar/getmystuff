@@ -61,13 +61,26 @@
                 </a>
             </div>
             <div class="card-body">
+                {% if agent_required %}
+                <p class="text-muted small mb-3">
+                    This widget was created with no data source of its own, so its data
+                    agent is what it reads &mdash; that agent's tools decide what it can
+                    answer. You can swap it for another agent, but it can't be removed:
+                    there would be nothing left for the widget to answer from, and the
+                    data scope is fixed after creation.
+                </p>
+                {% else %}
                 <p class="text-muted small mb-3">
                     Attach a data agent and this chatbot answers data questions by running
                     that agent's tools &mdash; the model sees only what a tool returns, never
                     your tables. Leave it unset and the chatbot answers from a statistical
                     profile of its data scope, which is what it does today.
                 </p>
+                {% endif %}
 
+                {# `required` rides in the cascade URL, not just the first render: the
+                   swap replaces the whole <select>, so without it the "no agent"
+                   option would come back the moment a workspace was chosen. #}
                 <form method="post" action="/chatbot-settings/{{ key.uuid }}/data-agent"
                       class="row g-2 align-items-end">
                     <div class="col-md-5">
@@ -75,7 +88,7 @@
                             Workspace
                         </label>
                         <select class="form-select" id="caiWorkspaceSelect" name="workspace_id"
-                                hx-get="/deep-agents/agent-options"
+                                hx-get="/deep-agents/agent-options{% if agent_required %}?required=true{% endif %}"
                                 hx-trigger="change"
                                 hx-target="#caiDataAgentField"
                                 hx-swap="innerHTML"
@@ -246,6 +259,20 @@
                     <i class="las la-info-circle text-primary"></i> How this prompt is used
                 </div>
                 <div class="card-body small text-muted">
+                    {% if key.target_type == "agent" %}
+                    <p class="mb-2">
+                        Every visitor message is answered with this prompt, and data questions are
+                        answered by running the attached <strong>data agent</strong>'s tools. This
+                        widget has no data source of its own, so the agent below is what it reads
+                        &mdash; changing it changes what the widget can answer.
+                    </p>
+                    <p class="mb-2">
+                        Two rules are always appended and cannot be overridden by the prompt: answers may
+                        only use figures a tool returned, and the assistant must say so when no tool
+                        covers the question. If the agent can't run, the widget says it can't reach the
+                        data rather than guessing &mdash; there is no data profile to fall back on.
+                    </p>
+                    {% else %}
                     <p class="mb-2">
                         Every visitor message is answered with this prompt, the chatbot's data scope
                         (<strong>{{ key.target_type }}</strong>), and a statistical profile computed from
@@ -256,6 +283,7 @@
                         only use figures from that profile, and the assistant must say so when the data
                         doesn't cover the question.
                     </p>
+                    {% endif %}
                     <p class="mb-2">
                         A saved prompt is rejected if it references a variable you haven't defined &mdash;
                         so a live chatbot never sends a half-filled prompt to the model.

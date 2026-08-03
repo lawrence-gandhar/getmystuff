@@ -56,17 +56,22 @@ class DeepAgentController(Controller):
         agent, otherwise those agents would be unpickable here.
 
         ``field_name`` lets both host forms reuse this fragment with their own field
-        name instead of one form dictating the other's markup.
+        name instead of one form dictating the other's markup, and ``required``
+        drops the "no agent" option for a host that cannot accept one — see
+        :class:`AgentOptionsQuery`. Both are echoed back through every cascade step,
+        or the fragment would revert to its defaults on the first workspace change.
         """
         agents: list = []
         error = None
         selected_id = None
         field_name = "data_agent_id"
+        agent_required = False
 
         try:
             query = AgentOptionsQuery.from_query(request)
             selected_id = query.selected
             field_name = query.select_name
+            agent_required = query.required
             agents = await data_agent_service.get_agent_views(
                 db, user.id, query.workspace_id,
             )
@@ -79,6 +84,7 @@ class DeepAgentController(Controller):
                 "agents": agents,
                 "selected_agent_id": str(selected_id) if selected_id else "",
                 "field_name": field_name,
+                "agent_required": agent_required,
                 "error": error,
             },
         )

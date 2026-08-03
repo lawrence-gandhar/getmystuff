@@ -197,9 +197,10 @@ class SqlAssistController(Controller):
         A POST rather than a GET because it carries the query and re-reads the schema
         to convert it — and because the SQL is too long to put in a query string.
 
-        A query that cannot be represented is answered with the reason, not a form:
-        the tool builder holds columns, aggregations, grouping, filters and joins, and
-        plenty of valid SQL needs more than that.
+        Every valid read-only query gets a form. The draft's ``mode`` says whether
+        the tool will hold the builder's shape or the statement as written; the
+        partial explains which, and why, rather than the two being different
+        outcomes here.
         """
         payload = await SqlAssistToolFormRequest.from_form(request)
         echo = payload.echo()
@@ -250,9 +251,10 @@ class SqlAssistController(Controller):
         """
         Create the drafted Tool Config, then rebuild the host page's table.
 
-        The config travels in a hidden field and is re-validated on the way in by
-        ``tool_config_service`` — the same gate the query builder's own output goes
-        through — so nothing here trusts what the browser posted back.
+        Both the drafted config and the drafted SQL travel in hidden fields and are
+        re-validated on the way in by ``tool_config_service`` — the same gates the
+        Tool Configs form goes through — so nothing here trusts what the browser
+        posted back, ``query_mode`` included.
         """
         payload = await SqlAssistCreateToolRequest.from_form(request)
 
@@ -266,22 +268,26 @@ class SqlAssistController(Controller):
                 table_name=payload.table_name,
                 description=payload.description,
                 config_json=payload.config_json,
+                query_mode=payload.query_mode,
+                sql_query=payload.sql_query,
             )
         except HTTPException as exc:
             # Back to the same form, so a name that is already taken can be fixed
             # without converting the query again. Every value the user had is
             # re-rendered from the validated payload rather than re-read from the
-            # form, so what comes back is what the server accepted.
+            # form, so what comes back is what the server accepted — the mode
+            # included, or a SQL tool would come back as an empty builder one.
             return Template(
                 template_name=_TOOL_FORM_TEMPLATE,
                 context={
-                    "fits": True,
+                    "mode": payload.query_mode,
                     "reason": "",
                     "error": str(exc.detail),
                     "tool_name": payload.tool_name,
                     "description": payload.description or "",
                     "table": payload.table_name,
                     "config_json": json.dumps(payload.config_json),
+                    "sql_query": payload.sql_query,
                     "preview": payload.preview or "",
                     "selected_agent_id": (
                         str(payload.data_agent_id) if payload.data_agent_id else ""

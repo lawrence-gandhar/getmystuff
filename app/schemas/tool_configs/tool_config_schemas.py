@@ -16,6 +16,14 @@ validates every reference inside it. Restating the inner rules here would mean t
 implementations of the same guard, and the one with the schema in hand is the one
 that has to be right.
 
+``sql_query`` is the same boundary drawn once more, for the other way a tool
+config can be written. It is bounded and its mode is checked here; whether the
+statement is a single read-only one is decided by
+``tool_config_service.validated_tool_sql`` (which shares that rule with the
+executor and with Ask AI, via ``app.utils.sql_guard``). Restating a SQL guard in
+a schema would be the same duplication, with the copy that runs at request time
+being the one nobody checks against the copy that runs at query time.
+
 ``agent_filter`` is on every mutation for the same reason the workspace filter is
 on every Data Agents mutation: the list can be narrowed to one agent, and a
 rebuilt table has to keep showing the same subset.
@@ -23,8 +31,9 @@ rebuilt table has to keep showing the same subset.
 
 from typing import Optional
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
+from app.models.tool_configs import QUERY_MODE_BUILDER, QUERY_MODE_VALUES
 from app.schemas.base import (
     MAX_DESCRIPTION_LENGTH,
     MAX_NAME_LENGTH,
@@ -38,6 +47,12 @@ from app.schemas.base import (
     QueryRequest,
     ResponseSchema,
 )
+
+#: A raw tool query travels in a textarea. Bounded well above
+#: ``sql_guard.MAX_SQL_LENGTH`` (which is the real limit, applied by the service)
+#: so an over-long statement is refused with that rule's wording rather than
+#: with a generic length error from here.
+MAX_TOOL_SQL_LENGTH = 20_000
 
 
 class ToolConfigFilterMixin(FormRequest):
@@ -54,6 +69,11 @@ class ToolConfigCreateRequest(ToolConfigFilterMixin):
     required by the service, which is where "required" can be checked *and*
     ownership verified in the same query — splitting it would report "Data agent is
     required" for an agent that exists but belongs to someone else.
+
+    The form always submits both queries — the builder's ``config_json`` and the
+    ``sql_query`` textarea — and ``query_mode`` says which one is meant. The other
+    is discarded by the service rather than stored, so a tool holds exactly one
+    query however the operator arrived at it.
     """
 
     data_agent_id: OptionalUUID = Field(default=None, title="Data agent")
@@ -63,7 +83,25 @@ class ToolConfigCreateRequest(ToolConfigFilterMixin):
     description: OptionalText = Field(
         default=None, title="Description", max_length=MAX_DESCRIPTION_LENGTH
     )
+    query_mode: str = Field(default=QUERY_MODE_BUILDER, title="Query mode")
     config_json: JsonObjectField = Field(default_factory=dict, title="Query")
+    sql_query: str = Field(
+        default="", title="SQL query", max_length=MAX_TOOL_SQL_LENGTH
+    )
+
+    @field_validator("query_mode")
+    @classmethod
+    def validate_query_mode(cls, v: str) -> str:
+        """
+        Blank means the builder — the mode a form that predates SQL mode, or one
+        rendered before a datasource was picked, submits.
+        """
+        mode = (v or "").strip().lower() or QUERY_MODE_BUILDER
+
+        if mode not in QUERY_MODE_VALUES:
+            raise ValueError("Query mode is not one of the available options")
+
+        return mode
 
 
 class ToolConfigUpdateRequest(ToolConfigCreateRequest):
@@ -115,19 +153,22 @@ class ToolConfigView(ResponseSchema):
     ``agent_id`` and ``datasource_id`` are the related rows' public uuids, empty
     when unset so an unselected ``<option value="">`` matches for preselection.
     ``preview`` is the rendered SQL-ish summary of the saved query, for display
-    only — the Deep Agents executor builds the real query from reflected tables.
+    only — in builder mode the Deep Agents executor builds the real query from
+    reflected tables, and in SQL mode the preview *is* the stored statement.
     """
 
     uuid: str = Field(title="Tool config")
     tool_name: str = Field(title="Tool name")
     table_name: str = Field(title="Table name")
     description: Optional[str] = Field(default=None, title="Description")
+    query_mode: str = Field(default=QUERY_MODE_BUILDER, title="Query mode")
     is_enabled: bool = Field(default=True, title="Enabled")
     agent_id: str = Field(default="", title="Data agent")
     agent_name: Optional[str] = Field(default=None, title="Data agent name")
     datasource_id: str = Field(default="", title="Datasource")
     datasource_name: Optional[str] = Field(default=None, title="Datasource name")
     config: dict = Field(default_factory=dict, title="Query")
+    sql_query: str = Field(default="", title="SQL query")
     preview: str = Field(default="", title="Query preview")
 
 

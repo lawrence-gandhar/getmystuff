@@ -24,8 +24,9 @@
 
 <p class="text-muted small mb-4">
     Define one query a <a href="/data-agents">data agent</a> is allowed to run: pick the
-    datasource and table, then choose the columns, aggregations, grouping and filters.
-    On a relational datasource the query can join further tables in.
+    datasource and table, then either build the query — columns, aggregations,
+    grouping, filters, and joins on a relational datasource — or write the SQL
+    yourself. Either way it has to be read-only, and the agent runs it as saved.
 </p>
 
 {# The banner lives inside the panel, not on the page behind it — the offcanvas
@@ -148,10 +149,20 @@
         </div>
     </div>
 
+    {# The query, written one of two ways. The mode selector and the SQL editor come
+       first, then the builder — static/js/tool_configs.js shows whichever panel the
+       selected mode calls for. #}
+    {% include "tool_configs/partials/query_mode_field.htm" %}
+
     {# `config`, `columns`, `column_map`, `join_tables` and `join_types` all come from
        the route — the same context the /fields cascade renders the builder with, so
-       a swap mid-edit produces exactly what the first render did. #}
-    {% include "tool_configs/partials/query_builder.htm" %}
+       a swap mid-edit produces exactly what the first render did.
+
+       Wrapped rather than carrying the panel marker itself: /tool-configs/fields
+       replaces #toolQueryBuilder outerHTML, which would take the marker with it. #}
+    <div data-query-mode-panel="builder">
+        {% include "tool_configs/partials/query_builder.htm" %}
+    </div>
 
     <div class="d-flex gap-2">
         <button type="submit" class="btn btn-primary">

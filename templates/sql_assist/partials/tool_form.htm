@@ -1,40 +1,53 @@
 {# Auto Create Tool — the generated query expressed as a Tool Config, plus the name to
    save it under. Swapped into #sqlAssistToolPanel.
 
-   `fits` false means the query needs SQL the tool builder cannot hold (ORDER BY, a
-   window function, a subquery…). That is shown as a reason rather than a form: a tool
-   that quietly differs from the query the user just read would be worse than no tool.
+   Any valid read-only query can be saved; `mode` says how the tool will hold it.
+   "builder" means it was expressed as columns, aggregations, grouping, filters and
+   joins — the stronger form, editable in the query builder afterwards. "sql" means
+   the query needs SQL the builder cannot hold (ORDER BY, DISTINCT, a window
+   function, a subquery), so the statement is stored and run exactly as written, and
+   `reason` says what put it there. The form is the same either way: refusing to save
+   a query the user has just read and approved would be the worse outcome.
 
-   Everything below the name is already decided — the table, the parsed query, the
+   Everything below the name is already decided — the table, the query, the
    description — so the form asks for the two things only the user can answer: what to
    call it, and which agent gets it. A tool config belongs to exactly one agent
    (`data_agents.id` is NOT NULL), so the agent is required, not a nicety.
 
-   `config_json` travels in a hidden field and is re-validated server-side by
-   tool_config_service on the way in, exactly as the query builder's own output is. #}
-{% if not fits %}
-<div class="alert alert-warning small mb-0">
-    <i class="las la-exclamation-triangle"></i>
-    <strong>This query can't be saved as a tool config.</strong>
-    {{ reason }}
-    <div class="mt-2">
-        A tool config holds columns, aggregations, grouping, filters and joins. Refine
-        the query above to stay within those, or copy the SQL and use it elsewhere.
-    </div>
-</div>
-{% else %}
+   `config_json` and `sql_query` both travel in hidden fields and are re-validated
+   server-side by tool_config_service on the way in, exactly as the Tool Configs
+   form's own output is. #}
 <div class="card border-success mb-3">
     <div class="card-header d-flex justify-content-between align-items-center">
         <strong><i class="las la-tools text-success"></i> New Tool Config</strong>
+        {% if mode == 'sql' %}
+        <span class="badge bg-info-subtle text-info-emphasis border border-info-subtle">
+            <i class="las la-code"></i> Saved as SQL
+        </span>
+        {% else %}
         <span class="badge bg-success-subtle text-success-emphasis border border-success-subtle">
             Ready to create
         </span>
+        {% endif %}
     </div>
 
     <div class="card-body">
         {% if error %}
         <div class="alert alert-danger small">
             <i class="las la-exclamation-circle"></i> {{ error }}
+        </div>
+        {% endif %}
+
+        {% if mode == 'sql' and reason %}
+        <div class="alert alert-info small">
+            <i class="las la-info-circle"></i>
+            <strong>This one is stored as SQL rather than in the query builder.</strong>
+            {{ reason }}
+            <div class="mt-2">
+                The agent runs the statement exactly as it is written below. You can
+                still edit it later — <strong>Edit</strong> opens it in the SQL editor
+                instead of the builder.
+            </div>
         </div>
         {% endif %}
 
@@ -50,7 +63,14 @@
             <input type="hidden" name="llm_api_key_id" value="{{ llm_api_key_id }}">
             <input type="hidden" name="agent_filter" value="{{ agent_filter }}">
             <input type="hidden" name="table_name" value="{{ table }}">
+            {# Which of the two query fields below is the real one. The server
+               validates the mode and the field it names; the other is discarded. #}
+            <input type="hidden" name="query_mode" value="{{ mode }}">
             <input type="hidden" name="config_json" value='{{ config_json }}'>
+            {# A hidden input, not a hidden textarea: `type=hidden` is exempt from the
+               value sanitization that strips newlines from text inputs, so a
+               multi-line statement survives the round trip intact. #}
+            <input type="hidden" name="sql_query" value="{{ sql_query }}">
             {# Display-only, carried so a rejected name re-renders the same panel
                without converting the query a second time. #}
             <input type="hidden" name="preview" value="{{ preview }}">
@@ -130,13 +150,19 @@
                 </div>
 
                 <div class="col-12">
-                    <label class="form-label fw-semibold">
+                    <p class="form-label fw-semibold mb-1">
                         Reads <code>{{ table }}</code>
-                    </label>
+                    </p>
                     <pre class="bg-dark text-light font-monospace small rounded p-3 mb-1 text-wrap">{{ preview }}</pre>
                     <div class="form-text">
+                        {% if mode == 'sql' %}
+                        The statement the tool will run, exactly as written — capped at
+                        200 rows. Reopen the tool with <strong>Edit</strong> afterwards
+                        to change it.
+                        {% else %}
                         The query as the tool builder will hold it. Reopen the tool with
                         <strong>Edit</strong> afterwards to adjust any part of it.
+                        {% endif %}
                     </div>
                 </div>
             </div>
@@ -157,4 +183,3 @@
         </form>
     </div>
 </div>
-{% endif %}

@@ -4,14 +4,27 @@
    is why the field name is a parameter: each host form keeps its own name instead of
    one dictating the other's markup.
 
-   The empty option is always first and always selectable — attaching an agent is
-   optional, and a chatbot with none answers exactly as it did before this feature. #}
+   The empty option is normally first and selectable — attaching an agent is
+   optional, and a chatbot with none answers exactly as it did before this feature.
+
+   `agent_required` removes it. One host needs that: a chatbot created with no data
+   source of its own reads *through* its agent, so detaching it would leave a
+   published widget that can answer nothing. chatbot_service refuses that outcome
+   either way; omitting the option means the operator is not offered a choice that
+   is going to be rejected. #}
 <select
     class="form-select"
     id="deepAgentSelect"
     name="{{ field_name }}"
+    {% if agent_required %}required{% endif %}
 >
+    {% if agent_required %}
+    <option value="" disabled {% if not selected_agent_id %}selected{% endif %}>
+        Select a data agent&hellip;
+    </option>
+    {% else %}
     <option value="">No data agent &mdash; answer from a data profile</option>
+    {% endif %}
 
     {% for agent in agents %}
     <option

@@ -1000,10 +1000,12 @@ class TestGetJoinOptions:
         self, db, user  # noqa: ANN001
     ) -> None:
         """Returned as a dict so the template has one thing to check — an empty
-        ``join_types`` is exactly "don't render the Joins section"."""
+        ``join_types`` is exactly "don't render the Joins section", and
+        ``supports_sql`` false is "don't offer the SQL-query mode"."""
         assert await svc.get_join_options(db, user.id, None) == {
             "supports_joins": False,
             "join_types": (),
+            "supports_sql": False,
         }
 
     async def test_a_relational_datasource_supports_joins(
@@ -1132,3 +1134,265 @@ class TestGetTableAndColumnChoices:
 
         with pytest.raises(HTTPException, match="schema failed"):
             await svc.get_column_map(db, user.id, datasource.uuid, ["orders"])
+
+
+# ---------------------------------------------------------------------------
+# SQL mode
+# ---------------------------------------------------------------------------
+class TestValidatedToolSql:
+    """
+    The gate on a raw tool query.
+
+    The rule is "any single read-only statement", which is a much wider door than
+    the query builder's — so the tests that matter most are the ones showing that
+    perfectly ordinary SQL the *builder* cannot hold is accepted here without
+    complaint. That is the whole point of the mode existing.
+    """
+
+    @pytest.mark.parametrize(
+        "sql",
+        [
+            "SELECT DISTINCT name FROM inventory_items",
+            "SELECT name FROM items ORDER BY name LIMIT 10",
+            "SELECT sku, COUNT(*) c FROM sales GROUP BY sku HAVING COUNT(*) > 5",
+            "WITH recent AS (SELECT * FROM orders) SELECT * FROM recent",
+            "SELECT a.id, b.id FROM a JOIN b ON a.id = b.a_id",
+            "SELECT name FROM a UNION SELECT name FROM b",
+            "SELECT RANK() OVER (ORDER BY total DESC) AS r, total FROM sales",
+            "SELECT CASE WHEN qty > 0 THEN 'in' ELSE 'out' END AS state FROM stock",
+            "SELECT * FROM orders WHERE id IN (SELECT order_id FROM refunds)",
+            "select name from items",
+        ],
+    )
+    def test_accepts_any_read_only_statement(self, sql: str) -> None:
+        assert svc.validated_tool_sql(sql) == sql
+
+    def test_a_trailing_semicolon_is_dropped_rather_than_refused(self) -> None:
+        """Typing one is a habit, not a second statement."""
+        assert svc.validated_tool_sql("SELECT 1 FROM t;  ") == "SELECT 1 FROM t"
+
+    def test_a_markdown_fence_is_stripped(self) -> None:
+        """Pasted straight out of the Ask AI panel or a chat window."""
+        assert svc.validated_tool_sql("```sql\nSELECT 1 FROM t\n```") == "SELECT 1 FROM t"
+
+    @pytest.mark.parametrize("blank", ["", "   ", None, "```sql\n```"])
+    def test_an_empty_statement_is_required(self, blank) -> None:  # noqa: ANN001
+        with pytest.raises(HTTPException, match="Write the SQL query"):
+            svc.validated_tool_sql(blank)
+
+    @pytest.mark.parametrize(
+        "sql",
+        [
+            "DELETE FROM orders",
+            "UPDATE orders SET total = 0",
+            "INSERT INTO orders (id) VALUES (1)",
+            "DROP TABLE orders",
+            "TRUNCATE orders",
+            "WITH x AS (SELECT 1) INSERT INTO t SELECT * FROM x",
+            "SELECT * INTO backup FROM orders",
+            "SELECT 1; DROP TABLE orders",
+        ],
+    )
+    def test_anything_that_is_not_a_single_read_is_refused(self, sql: str) -> None:
+        with pytest.raises(HTTPException) as excinfo:
+            svc.validated_tool_sql(sql)
+
+        assert excinfo.value.status_code == 400
+        assert "read-only" in str(excinfo.value.detail)
+
+    def test_a_write_word_inside_a_literal_is_not_a_write(self) -> None:
+        """``WHERE action = 'delete'`` is an ordinary read, and the most likely
+        false positive a keyword scan can produce."""
+        sql = "SELECT id FROM audit WHERE action = 'delete' AND note = 'a;b'"
+
+        assert svc.validated_tool_sql(sql) == sql
+
+    def test_an_unusably_long_statement_is_refused(self) -> None:
+        with pytest.raises(HTTPException, match="longer than"):
+            svc.validated_tool_sql("SELECT " + ("x" * 9000) + " FROM t")
+
+
+class TestSqlModeToolConfigs:
+    async def test_creates_a_sql_tool_and_leaves_the_config_empty(
+        self, db, user, make_agent, make_datasource  # noqa: ANN001
+    ) -> None:
+        agent = await make_agent(user, "reporter")
+        datasource = await make_datasource(user, "warehouse")
+
+        config = await svc.create_tool_config(
+            db,
+            user.id,
+            agent.uuid,
+            datasource.uuid,
+            "distinct_items",
+            "inventory_items",
+            query_mode="sql",
+            sql_query="SELECT DISTINCT name FROM inventory_items",
+        )
+
+        assert config.query_mode == "sql"
+        assert config.sql_query == "SELECT DISTINCT name FROM inventory_items"
+        assert config.config == {}
+
+    async def test_a_builder_tool_stores_no_sql(
+        self, db, user, make_agent, make_datasource  # noqa: ANN001
+    ) -> None:
+        """The two never coexist: whichever mode is saved clears the other."""
+        agent = await make_agent(user, "reporter")
+        datasource = await make_datasource(user, "warehouse")
+
+        config = await svc.create_tool_config(
+            db,
+            user.id,
+            agent.uuid,
+            datasource.uuid,
+            "query_orders",
+            "orders",
+            config_json=config_json(columns=[{"column": "total", "alias": ""}]),
+            sql_query="SELECT 1 FROM orders",
+        )
+
+        assert config.query_mode == "builder"
+        assert config.sql_query is None
+
+    async def test_switching_a_sql_tool_back_to_the_builder_clears_the_sql(
+        self, db, user, make_agent, make_datasource, make_tool_config  # noqa: ANN001
+    ) -> None:
+        """Left behind, the stale statement would be what the executor ran — it
+        prefers sql_query whenever it is set."""
+        agent = await make_agent(user, "reporter")
+        datasource = await make_datasource(user, "warehouse")
+        tool = await make_tool_config(
+            agent,
+            datasource,
+            "distinct_items",
+            query_mode="sql",
+            sql_query="SELECT DISTINCT name FROM inventory_items",
+        )
+
+        await svc.update_tool_config(
+            db,
+            user.id,
+            tool.uuid,
+            agent.uuid,
+            datasource.uuid,
+            "distinct_items",
+            "orders",
+            config_json=config_json(columns=[{"column": "total", "alias": ""}]),
+        )
+        await db.refresh(tool)
+
+        assert tool.query_mode == "builder"
+        assert tool.sql_query is None
+
+    async def test_an_unknown_mode_is_refused(
+        self, db, user, make_agent, make_datasource  # noqa: ANN001
+    ) -> None:
+        agent = await make_agent(user, "reporter")
+        datasource = await make_datasource(user, "warehouse")
+
+        with pytest.raises(HTTPException, match="built or written as SQL"):
+            await svc.create_tool_config(
+                db,
+                user.id,
+                agent.uuid,
+                datasource.uuid,
+                "query_orders",
+                "orders",
+                query_mode="freehand",
+            )
+
+    async def test_a_blank_mode_means_the_builder(
+        self, db, user, make_agent, make_datasource  # noqa: ANN001
+    ) -> None:
+        """Every caller written before SQL mode existed sends no mode at all."""
+        agent = await make_agent(user, "reporter")
+        datasource = await make_datasource(user, "warehouse")
+
+        config = await svc.create_tool_config(
+            db, user.id, agent.uuid, datasource.uuid, "query_orders", "orders"
+        )
+
+        assert config.query_mode == "builder"
+
+    async def test_sql_mode_is_refused_for_a_non_relational_datasource(
+        self, db, user, make_agent, make_datasource  # noqa: ANN001
+    ) -> None:
+        """Refused at save time rather than on the agent's first call — a tool
+        that can never run is a mistake the operator can still fix."""
+        agent = await make_agent(user, "reporter")
+        datasource = await make_datasource(user, "events", db_type="mongodb")
+
+        with pytest.raises(HTTPException, match="not a relational datasource"):
+            await svc.create_tool_config(
+                db,
+                user.id,
+                agent.uuid,
+                datasource.uuid,
+                "distinct_items",
+                "events",
+                query_mode="sql",
+                sql_query="SELECT 1 FROM events",
+            )
+
+    async def test_a_sql_tool_previews_as_its_own_statement(
+        self, db, user, make_agent, make_datasource, make_tool_config  # noqa: ANN001
+    ) -> None:
+        agent = await make_agent(user, "reporter")
+        datasource = await make_datasource(user, "warehouse")
+        await make_tool_config(
+            agent,
+            datasource,
+            "distinct_items",
+            query_mode="sql",
+            sql_query="SELECT DISTINCT name FROM inventory_items",
+        )
+
+        (view,) = await svc.get_tool_config_views(db, user.id)
+
+        assert view["query_mode"] == "sql"
+        assert view["query_preview"] == "SELECT DISTINCT name FROM inventory_items"
+
+    async def test_the_edit_view_carries_both_queries(
+        self, db, user, make_agent, make_datasource, make_tool_config  # noqa: ANN001
+    ) -> None:
+        """The form renders both panels and shows one, so a mode switch mid-edit
+        needs no round trip and loses nothing."""
+        agent = await make_agent(user, "reporter")
+        datasource = await make_datasource(user, "warehouse")
+        tool = await make_tool_config(
+            agent,
+            datasource,
+            "distinct_items",
+            query_mode="sql",
+            sql_query="SELECT DISTINCT name FROM inventory_items",
+        )
+
+        view = await svc.get_tool_config_view(db, user.id, tool.uuid)
+
+        assert view["query_mode"] == "sql"
+        assert view["sql_query"] == "SELECT DISTINCT name FROM inventory_items"
+        assert view["config"] == {}
+
+
+class TestBuildQueryPreviewWithSql:
+    def test_a_stored_statement_is_the_preview(self) -> None:
+        assert (
+            build_query_preview({}, "items", "SELECT DISTINCT name FROM items")
+            == "SELECT DISTINCT name FROM items"
+        )
+
+    def test_a_blank_statement_falls_back_to_the_built_query(self) -> None:
+        """Which is what a builder-mode config passes — sql_query is NULL there."""
+        assert build_query_preview({}, "items", None) == "SELECT * FROM items"
+        assert build_query_preview({}, "items", "  ") == "SELECT * FROM items"
+
+
+class TestSupportsSql:
+    @pytest.mark.parametrize("db_type", ["postgres", "mysql", "sqlite", "POSTGRES"])
+    def test_relational_datasources_can_run_sql(self, db_type: str) -> None:
+        assert svc.supports_sql(db_type) is True
+
+    @pytest.mark.parametrize("db_type", ["mongodb", "csv", "", None])
+    def test_everything_else_cannot(self, db_type) -> None:  # noqa: ANN001
+        assert svc.supports_sql(db_type) is False
