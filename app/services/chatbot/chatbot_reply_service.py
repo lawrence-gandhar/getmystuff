@@ -16,6 +16,7 @@ node), so the flow decision cannot live here without a circular import.
 
 import logging
 from dataclasses import dataclass
+from typing import List, Optional
 
 from litestar.exceptions import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -77,6 +78,8 @@ async def generate_reply(
     db: AsyncSession,
     chatbot_key: ChatbotApiKey,
     message: str,
+    history: Optional[List[dict]] = None,
+    session_token: str = "",
 ) -> AnalyticsResult:
     """
     Answer a visitor message with the chatbot's configured prompt, model and
@@ -96,7 +99,10 @@ async def generate_reply(
     context = await load_ai_context(db, chatbot_key)
 
     if getattr(chatbot_key, "data_agent_id", None):
-        return await _generate_deep_agent_reply(db, chatbot_key, message, context)
+        return await _generate_deep_agent_reply(
+            db, chatbot_key, message, context,
+            history=history, session_token=session_token,
+        )
 
     outcome = await maybe_run_action(
         db, chatbot_key, message, context.llm_choice, context.variables
@@ -118,6 +124,8 @@ async def _generate_deep_agent_reply(
     chatbot_key: ChatbotApiKey,
     message: str,
     context: ChatbotAiContext,
+    history: Optional[List[dict]] = None,
+    session_token: str = "",
 ) -> AnalyticsResult:
     """
     Answer through the attached data agent, degrading to the profile path if it
@@ -150,6 +158,12 @@ async def _generate_deep_agent_reply(
             db,
             chatbot_key,
             message,
+            # The previous turns, so a follow-up ("and for last month?") and a bare
+            # confirmation ("yes") resolve against what was actually said. Read back from
+            # the turn log by chatbot_turn_service.recent_history.
+            history=history,
+            # Scopes any download this turn offers to this one visitor's conversation.
+            session_token=session_token,
             forced_key_uuid=context.llm_choice.forced_key_uuid,
             use_inbuilt_llm=context.llm_choice.use_inbuilt_llm,
         )

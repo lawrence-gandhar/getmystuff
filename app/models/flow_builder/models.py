@@ -146,6 +146,21 @@ class ChatbotFlowSession(Base):
     # Values captured from Ask-for-Input nodes: {"var_name": "value", ...}
     variables: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
 
+    # The uuid of a Graph Designer run this session is waiting on an answer for, or
+    # NULL. Set by a Run-Graph node whose graph stopped at an *Ask a human* node: the
+    # question went to the visitor, and their next message is the answer to it.
+    #
+    # Its own column rather than a reserved key in `variables`, for two reasons. That
+    # dict is the visitor's own namespace — it is interpolated into message text — so a
+    # key in it can be read back out in a chat bubble, and a name reserved by the
+    # application is a name an operator can collide with. And this is the same kind of
+    # thing as `ToolGraphRun.thread_id` and `DownloadExport.thread_id`: a handle to work
+    # parked between two requests, which every other feature stores as a column of its
+    # own.
+    awaiting_graph_run: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True,
+    )
+
     # "active" | "completed"
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
 

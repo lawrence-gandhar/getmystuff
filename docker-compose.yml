@@ -32,12 +32,12 @@ services:
       - "5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      # Creates the vector extension on first boot. The Alembic revision also
-      # runs CREATE EXTENSION IF NOT EXISTS, but main.py's create_all path does
-      # not — so without this, a fresh volume fails on the vector column.
+      # Creates the vector extension on first boot. Belt-and-braces since startup
+      # moved to `alembic upgrade head` — revision a3f5c9d21b47 runs CREATE EXTENSION
+      # IF NOT EXISTS itself, which the old create_all path never did.
       - ./docker/postgres-init.sql:/docker-entrypoint-initdb.d/10-extensions.sql:ro
     healthcheck:
-      # The app's on_startup runs create_all immediately, so it must not start
+      # The app's on_startup migrates the schema immediately, so it must not start
       # before the database is actually accepting connections.
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-getmystuff} -d ${POSTGRES_DB:-getmystuff}"]
       interval: 5s

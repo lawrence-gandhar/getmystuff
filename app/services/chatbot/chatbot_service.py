@@ -496,6 +496,24 @@ _WIDGET_SCRIPT_TEMPLATE = r"""
   // double slash and a 404 that looks nothing like a configuration mistake.
   var API_BASE = String(CFG.apiBase == null ? "" : CFG.apiBase).trim().replace(/\/+$/, "");
 
+  /**
+   * A URL the server gave us, made fetchable from this page.
+   *
+   * The download URLs arrive absolute when SITE_URL is set on the server, because a
+   * relative one would be resolved against the embedding page and ask the operator's
+   * own site for a file it has never heard of. Prefixing an already-absolute URL with
+   * API_BASE would produce "https://api.example.com/https://api.example.com/..." — so
+   * anything already carrying a scheme is passed through untouched, and only a bare
+   * path gets the prefix.
+   */
+  function apiUrl(url) {
+    var value = String(url == null ? "" : url);
+
+    if (/^https?:\/\//i.test(value)) return value;
+
+    return API_BASE + value;
+  }
+
   if (!API_KEY) {
     console.error(
       "GetMyStuff chatbot widget: set window.GMSChatbotConfig = { apiKey } before " +
@@ -677,7 +695,19 @@ _WIDGET_SCRIPT_TEMPLATE = r"""
       "line-height:1.3;cursor:pointer;}" +
       ".gms-chatbot-option:hover{background:" + cfg.brand_color + ";color:#fff;}" +
       ".gms-chatbot-table{border-collapse:collapse;margin-top:6px;font-size:11px;}" +
-      ".gms-chatbot-table th,.gms-chatbot-table td{border:1px solid #ced4da;padding:3px 6px;}" +
+      ".gms-chatbot-table th,.gms-chatbot-table td{border:1px solid #ced4da;padding:3px 6px;" +
+      "text-align:left;white-space:nowrap;}" +
+      ".gms-chatbot-table th{background:rgba(0,0,0,.04);font-weight:600;}" +
+      // The panel is ~340px and a wide result is not. The wrapper scrolls so the
+      // table never forces the whole chat window wider than the page allows.
+      ".gms-chatbot-table-wrap{overflow-x:auto;max-width:100%;}" +
+      ".gms-chatbot-msg p{margin:0 0 6px;}" +
+      ".gms-chatbot-msg p:last-child{margin-bottom:0;}" +
+      ".gms-chatbot-msg ul,.gms-chatbot-msg ol{margin:4px 0;padding-left:18px;}" +
+      ".gms-chatbot-msg li{margin:2px 0;}" +
+      ".gms-chatbot-msg code{background:rgba(0,0,0,.07);border-radius:3px;" +
+      "padding:1px 4px;font-size:11px;font-family:ui-monospace,Menlo,Consolas,monospace;}" +
+      ".gms-chatbot-md-h{font-weight:600;margin:6px 0 2px;}" +
       ".gms-chatbot-input-row{display:flex;border-top:1px solid #dee2e6;padding:8px;gap:6px;background:#fff;}" +
       ".gms-chatbot-input{flex:1;border:1px solid #ced4da;border-radius:" + cfg.input_border_radius + "px;padding:8px;" +
       "font-size:13px;resize:none;font-family:inherit;}" +
@@ -689,7 +719,41 @@ _WIDGET_SCRIPT_TEMPLATE = r"""
       // Sits under the bubble it belongs to, indented past the avatar so it
       // lines up with the reply text rather than the icon.
       ".gms-chatbot-meta{position:relative;z-index:1;font-size:10px;color:#6c757d;" +
-      "margin:-6px 0 10px;display:flex;align-items:center;gap:4px;}"
+      "margin:-6px 0 10px;display:flex;align-items:center;gap:4px;}" +
+      // The download card. Its own block under the bubble that announced it rather
+      // than inside that bubble: it outlives the message, updating while the visitor
+      // carries on asking other things, and a bubble is a record of something said.
+      ".gms-chatbot-file{position:relative;z-index:1;max-width:85%;margin:0 0 10px;" +
+      "border:1px solid #dee2e6;border-radius:10px;padding:10px 12px;background:#fff;}" +
+      ".gms-chatbot-file-indent{margin-left:28px;}" +
+      ".gms-chatbot-file-name{display:flex;align-items:center;gap:6px;font-size:12px;" +
+      "font-weight:600;color:#212529;word-break:break-all;}" +
+      ".gms-chatbot-file-sub{font-size:11px;color:#6c757d;margin-top:3px;}" +
+      // The progress bar is a real fraction of records written, never a fake crawl.
+      ".gms-chatbot-file-bar{height:4px;border-radius:2px;background:#e9ecef;" +
+      "margin-top:8px;overflow:hidden;}" +
+      ".gms-chatbot-file-fill{height:100%;width:0;border-radius:2px;background:" +
+      cfg.brand_color + ";transition:width .4s ease;}" +
+      // The shimmer that says "still working". A moving highlight over the text, which
+      // reads as activity at a glance in a way a static line does not — and costs one
+      // CSS animation rather than a timer redrawing the DOM.
+      ".gms-chatbot-file-working{background:linear-gradient(90deg," +
+      "#adb5bd 25%,#212529 50%,#adb5bd 75%);background-size:200% 100%;" +
+      "-webkit-background-clip:text;background-clip:text;color:transparent;" +
+      "animation:gms-chatbot-shimmer 2s linear infinite;}" +
+      "@keyframes gms-chatbot-shimmer{0%{background-position:200% 0;}" +
+      "100%{background-position:-200% 0;}}" +
+      // Reduced-motion is honoured: the shimmer is decoration, and the words still
+      // change, so nothing is lost by holding it still.
+      "@media (prefers-reduced-motion:reduce){.gms-chatbot-file-working{" +
+      "animation:none;background:none;-webkit-background-clip:border-box;" +
+      "background-clip:border-box;color:#495057;}}" +
+      ".gms-chatbot-file-btn{display:inline-flex;align-items:center;gap:6px;" +
+      "margin-top:8px;background:" + cfg.brand_color + ";color:#fff;border:none;" +
+      "border-radius:8px;padding:8px 14px;font-size:13px;font-family:inherit;" +
+      "font-weight:600;line-height:1.3;cursor:pointer;text-decoration:none;}" +
+      ".gms-chatbot-file-btn:hover{opacity:.9;color:#fff;text-decoration:none;}" +
+      ".gms-chatbot-file-failed{color:#842029;font-size:11px;margin-top:4px;}"
     );
   }
 
@@ -702,7 +766,173 @@ _WIDGET_SCRIPT_TEMPLATE = r"""
   function escapeHtml(str) {
     var div = document.createElement("div");
     div.textContent = str;
-    return div.innerHTML;
+    // textContent -> innerHTML escapes & < >, which is everything that matters while
+    // the result only ever lands between tags — which is the case for every caller
+    // here, because nothing in this widget builds an attribute out of message text.
+    // The quotes are escaped anyway: it costs one pass, and it means the day someone
+    // does write `title="' + escapeHtml(x) + '"` they get a working escape instead of
+    // an attribute break. Defence against a future edit, not against today's code.
+    return div.innerHTML.replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+
+  /**
+   * Render an assistant message written in Markdown.
+   *
+   * THE SAFETY RULE, AND IT IS THE WHOLE DESIGN: the text is escaped FIRST, before
+   * a single markdown pattern is looked at. After that line there is no `<` or `>`
+   * left in the string — a model that emitted `<script>` is holding `&lt;script&gt;`
+   * and will still be holding it when this returns. Every tag in the output was
+   * written by the code below, from a fixed set, with no attribute ever built from
+   * message text.
+   *
+   * That ordering is what makes this safe to put in innerHTML on a public widget
+   * embedded in somebody else's website. Reversing it — parsing first and escaping
+   * after, or "sanitising" a model's raw HTML — is the version of this that is an
+   * XSS hole, and no allowlist bolted on afterwards recovers from it.
+   *
+   * **Links and images are deliberately not supported.** `[text](javascript:…)` is
+   * the classic way markdown becomes script execution, and grounding rule 10 already
+   * forbids the model writing a URL at all. Unsupported syntax is left as the literal
+   * text the model wrote, which is honest and inert.
+   *
+   * Supported: tables, headings, bullet and numbered lists, **bold**, *italic* and
+   * `code`. Tables are the reason this exists — a query result is a table, and the
+   * escaped-text renderer this replaces showed one as a wall of `|` characters.
+   */
+  function renderMarkdown(text) {
+    var lines = escapeHtml(String(text == null ? "" : text)).split(/\r?\n/);
+    var out = [];
+    var index = 0;
+
+    while (index < lines.length) {
+      if (!lines[index].trim()) { index += 1; continue; }
+
+      if (startsTable(lines, index)) {
+        var table = renderTableBlock(lines, index);
+        out.push(table.html);
+        index = table.next;
+        continue;
+      }
+
+      if (isListItem(lines[index])) {
+        var list = renderListBlock(lines, index);
+        out.push(list.html);
+        index = list.next;
+        continue;
+      }
+
+      var heading = lines[index].match(/^\s*#{1,6}\s+(.*)$/);
+      if (heading) {
+        out.push('<div class="gms-chatbot-md-h">' + inlineMarkdown(heading[1]) + "</div>");
+        index += 1;
+        continue;
+      }
+
+      // A paragraph runs until a blank line or the start of any block above. The
+      // first line is taken unconditionally: it has already been tested against
+      // every block form and is none of them.
+      var paragraph = [inlineMarkdown(lines[index].trim())];
+      index += 1;
+
+      while (index < lines.length && lines[index].trim() && !startsBlock(lines, index)) {
+        paragraph.push(inlineMarkdown(lines[index].trim()));
+        index += 1;
+      }
+
+      out.push("<p>" + paragraph.join("<br>") + "</p>");
+    }
+
+    return out.join("");
+  }
+
+  function isListItem(line) {
+    return /^\s*(?:[-*+]|\d+\.)\s+/.test(line);
+  }
+
+  function isTableRow(line) {
+    return /^\s*\|.*\|\s*$/.test(line);
+  }
+
+  // The `|---|---|` line under the header. Requiring it is what stops a sentence
+  // that happens to contain pipes being read as a table.
+  function isTableDivider(line) {
+    return /^\s*\|[\s:|-]+\|\s*$/.test(line) && line.indexOf("-") !== -1;
+  }
+
+  function startsTable(lines, index) {
+    return isTableRow(lines[index]) &&
+      index + 1 < lines.length &&
+      isTableDivider(lines[index + 1]);
+  }
+
+  function startsBlock(lines, index) {
+    return isListItem(lines[index]) ||
+      /^\s*#{1,6}\s+/.test(lines[index]) ||
+      startsTable(lines, index);
+  }
+
+  function tableCells(line) {
+    return line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|")
+      .map(function (cell) { return cell.trim(); });
+  }
+
+  function renderTableBlock(lines, start) {
+    var header = tableCells(lines[start]);
+    var index = start + 2;
+    var body = [];
+
+    while (index < lines.length && isTableRow(lines[index])) {
+      body.push(tableCells(lines[index]));
+      index += 1;
+    }
+
+    // Same class as the structured-result table, so one stylesheet describes both.
+    // Wrapped because a widget is around 340px wide and a six-column result is not:
+    // the wrapper scrolls, rather than the table forcing the whole panel wider.
+    var html = '<div class="gms-chatbot-table-wrap"><table class="gms-chatbot-table"><thead><tr>' +
+      header.map(function (cell) { return "<th>" + inlineMarkdown(cell) + "</th>"; }).join("") +
+      "</tr></thead><tbody>" +
+      body.map(function (row) {
+        return "<tr>" + row.map(function (cell) {
+          return "<td>" + inlineMarkdown(cell) + "</td>";
+        }).join("") + "</tr>";
+      }).join("") +
+      "</tbody></table></div>";
+
+    return { html: html, next: index };
+  }
+
+  function renderListBlock(lines, start) {
+    var tag = /^\s*\d+\.\s+/.test(lines[start]) ? "ol" : "ul";
+    var items = [];
+    var index = start;
+
+    while (index < lines.length && isListItem(lines[index])) {
+      items.push(inlineMarkdown(lines[index].replace(/^\s*(?:[-*+]|\d+\.)\s+/, "")));
+      index += 1;
+    }
+
+    return {
+      html: "<" + tag + ">" +
+        items.map(function (item) { return "<li>" + item + "</li>"; }).join("") +
+        "</" + tag + ">",
+      next: index
+    };
+  }
+
+  /**
+   * Inline emphasis, on text that is ALREADY escaped.
+   *
+   * Never call this on raw message text. Every caller above passes a slice of the
+   * string escapeHtml produced at the top of renderMarkdown, and the one caller
+   * outside it (insights) escapes first for the same reason.
+   */
+  function inlineMarkdown(text) {
+    return text
+      .replace(/`([^`]+)`/g, "<code>$1</code>")
+      .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+      .replace(/(^|[^*])\*([^*\s][^*]*)\*/g, "$1<em>$2</em>")
+      .replace(/(^|[^\w_])_([^_\s][^_]*)_/g, "$1<em>$2</em>");
   }
 
   function buildDom(cfg) {
@@ -852,11 +1082,13 @@ _WIDGET_SCRIPT_TEMPLATE = r"""
     var bubble = document.createElement("div");
     bubble.className = "gms-chatbot-msg gms-chatbot-msg-bot";
 
-    var html = escapeHtml(result.summary || "");
+    var html = renderMarkdown(result.summary || "");
 
     if (result.insights && result.insights.length) {
       html += "<ul>" + result.insights.map(function (i) {
-        return "<li>" + escapeHtml(i) + "</li>";
+        // Escaped first, then emphasis — the same order renderMarkdown enforces, and
+        // the reason inlineMarkdown must never be handed raw text.
+        return "<li>" + inlineMarkdown(escapeHtml(i)) + "</li>";
       }).join("") + "</ul>";
     }
 
@@ -925,6 +1157,303 @@ _WIDGET_SCRIPT_TEMPLATE = r"""
     }
 
     container.appendChild(wrap);
+  }
+
+  // ---------------------------------------------------------------------
+  // The download card
+  // ---------------------------------------------------------------------
+  //
+  // A file the visitor asked for, from the moment it is queued to the moment it can
+  // be clicked. It is its own block under the reply that announced it, never inside
+  // that bubble, for one reason: it outlives the message. A visitor can carry on
+  // asking other things while a hundred thousand records are written, new bubbles
+  // appear below, and this keeps updating in place — which is only possible if it was
+  // never part of a message in the first place.
+  //
+  // Nothing here touches the input, the send button or the typing indicator. That is
+  // what "you can keep asking while it builds" means in practice: the turn that
+  // started the build finished when the reply arrived, and the build is not a turn.
+
+  // The words beside the progress. They rotate so a long build reads as alive rather
+  // than stuck. Deliberately vague about which batch is in flight — the record count
+  // under them is the precise part, and a label naming a step it is not on would be
+  // worse than one naming none.
+  var WORKING_WORDS = [
+    "Gathering the records",
+    "Reading the next batch",
+    "Writing rows",
+    "Packing the file",
+    "Nearly there"
+  ];
+
+  var WORD_INTERVAL_MS = 2600;
+  var STATUS_POLL_MS = 4000;
+
+  function formatCount(value) {
+    var n = Number(value);
+    if (!isFinite(n)) return "";
+    return n.toLocaleString ? n.toLocaleString() : String(n);
+  }
+
+  function formatBytes(value) {
+    var n = Number(value);
+    if (!isFinite(n) || n <= 0) return "";
+    if (n < 1024) return n + " B";
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+    return (n / (1024 * 1024)).toFixed(1) + " MB";
+  }
+
+  function fileLabel(download) {
+    var format = String(download.file_format || "csv").toUpperCase();
+    return format === "XLS" ? "Excel" : format;
+  }
+
+  // Everything the card needs to keep itself up to date, in one object, so the SSE
+  // handler and the polling fallback update the same nodes rather than two copies.
+  function renderDownloadCard(container, download, cfg) {
+    if (!download || !download.uuid) return null;
+
+    var card = document.createElement("div");
+    card.className = "gms-chatbot-file" +
+      (cfg.bot_icon_url ? " gms-chatbot-file-indent" : "");
+
+    var name = document.createElement("div");
+    name.className = "gms-chatbot-file-name";
+    name.textContent = "\u{1F4C4} " + (download.file_name || (fileLabel(download) + " file"));
+
+    var sub = document.createElement("div");
+    sub.className = "gms-chatbot-file-sub";
+
+    var bar = document.createElement("div");
+    bar.className = "gms-chatbot-file-bar";
+    var fill = document.createElement("div");
+    fill.className = "gms-chatbot-file-fill";
+    bar.appendChild(fill);
+
+    var foot = document.createElement("div");
+
+    card.appendChild(name);
+    card.appendChild(sub);
+    card.appendChild(bar);
+    card.appendChild(foot);
+    container.appendChild(card);
+    container.scrollTop = container.scrollHeight;
+
+    var state = {
+      container: container,
+      cfg: cfg,
+      download: download,
+      nameEl: name,
+      subEl: sub,
+      barEl: bar,
+      fillEl: fill,
+      footEl: foot,
+      wordTimer: null,
+      pollTimer: null,
+      source: null,
+      settled: false,
+      wordIndex: 0
+    };
+
+    apply(state, download);
+    return card;
+  }
+
+  // One place that decides what the card looks like, whatever told it to. The turn
+  // payload, an SSE frame and a status poll all arrive in the same shape for exactly
+  // this reason — three renderers for three sources would drift.
+  function apply(state, view) {
+    var status = String(view.status || "");
+
+    if (status === "ready" && view.download_url) {
+      paintReady(state, view);
+      return;
+    }
+    if (status === "failed" || status === "expired") {
+      paintFailed(state, view);
+      return;
+    }
+
+    paintWorking(state, view);
+  }
+
+  function paintWorking(state, view) {
+    var written = Number(view.rows_written || 0);
+    var total = Number(view.total_rows || state.download.total_rows || 0);
+
+    if (total > 0) {
+      // A real fraction of records written. Capped at 99% until the artifact exists,
+      // because a full bar next to "still working" is the one thing a progress bar
+      // must never say.
+      var pct = Math.max(2, Math.min(99, Math.round((written / total) * 100)));
+      state.fillEl.style.width = pct + "%";
+    }
+
+    var word = WORKING_WORDS[state.wordIndex % WORKING_WORDS.length];
+
+    state.subEl.innerHTML = "";
+    var working = document.createElement("span");
+    working.className = "gms-chatbot-file-working";
+    working.textContent = word + "…";
+    state.subEl.appendChild(working);
+
+    if (total > 0 && written > 0) {
+      var counts = document.createElement("span");
+      counts.textContent = "  " + formatCount(written) + " of " +
+        formatCount(total) + " records";
+      state.subEl.appendChild(counts);
+    } else if (total > 0) {
+      var pending = document.createElement("span");
+      pending.textContent = "  " + formatCount(total) + " records";
+      state.subEl.appendChild(pending);
+    }
+
+    if (!state.wordTimer) {
+      state.wordTimer = window.setInterval(function () {
+        state.wordIndex += 1;
+        var el = state.subEl.querySelector(".gms-chatbot-file-working");
+        if (el) {
+          el.textContent = WORKING_WORDS[state.wordIndex % WORKING_WORDS.length] + "…";
+        }
+      }, WORD_INTERVAL_MS);
+    }
+
+    watch(state);
+  }
+
+  function paintReady(state, view) {
+    settle(state);
+
+    state.fillEl.style.width = "100%";
+    state.barEl.style.display = "none";
+
+    var parts = [];
+    var total = view.total_rows || state.download.total_rows;
+    if (total) parts.push(formatCount(total) + " records");
+    var size = formatBytes(view.byte_size);
+    if (size) parts.push(size);
+
+    state.subEl.textContent = parts.join("  ·  ") || "Ready";
+    if (view.file_name) state.nameEl.textContent = "\u{1F4C4} " + view.file_name;
+
+    state.footEl.innerHTML = "";
+
+    // An anchor rather than a button: it is a link to a file, so a middle-click, a
+    // right-click "save as" and a keyboard Enter all do what the visitor expects,
+    // none of which a button with a click handler would give them.
+    //
+    // The href must name this application's host, and getting that wrong is silent.
+    // A bare path is resolved by the browser against the *embedding page*, so it asks
+    // the operator's own site for the file and the visitor is told it is unavailable
+    // for a file that exists and is being served perfectly a hostname away. The server
+    // sends an absolute URL when SITE_URL is configured; apiUrl() covers the case where
+    // it is not and apiBase is what names the host instead.
+    var link = document.createElement("a");
+    link.className = "gms-chatbot-file-btn";
+    link.href = apiUrl(view.download_url);
+    link.setAttribute("download", view.file_name || "");
+    link.rel = "noopener";
+    link.textContent = "⬇  Download " + fileLabel(state.download);
+    state.footEl.appendChild(link);
+    state.container.scrollTop = state.container.scrollHeight;
+  }
+
+  function paintFailed(state, view) {
+    settle(state);
+
+    state.barEl.style.display = "none";
+    state.subEl.textContent = "";
+    state.footEl.innerHTML = "";
+
+    var problem = document.createElement("div");
+    problem.className = "gms-chatbot-file-failed";
+    problem.textContent = view.error_message ||
+      "The file could not be created at the moment. Please try again.";
+    state.footEl.appendChild(problem);
+  }
+
+  // Stops every timer and socket the card owns. Called on any terminal state, and
+  // that is the whole of the card's cleanup — a card left holding a live EventSource
+  // would have the browser reopen it forever, re-running the progress stream.
+  function settle(state) {
+    state.settled = true;
+    if (state.wordTimer) { window.clearInterval(state.wordTimer); state.wordTimer = null; }
+    if (state.pollTimer) { window.clearInterval(state.pollTimer); state.pollTimer = null; }
+    if (state.source) { state.source.close(); state.source = null; }
+  }
+
+  // Live progress while the file is built. The stream is the fast path; the status
+  // poll is what keeps the card honest when that stream drops, which a long build
+  // makes likely — the server bounds how long one progress stream stays open, and a
+  // proxy between us and it may bound it harder.
+  function watch(state) {
+    if (state.settled || state.source || state.pollTimer) return;
+
+    var progressUrl = state.download.progress_url;
+
+    if (!progressUrl || typeof window.EventSource === "undefined") {
+      pollStatus(state);
+      return;
+    }
+
+    var source;
+    try {
+      source = new EventSource(apiUrl(progressUrl));
+    } catch (ignored) {
+      pollStatus(state);
+      return;
+    }
+
+    state.source = source;
+
+    ["progress", "retry"].forEach(function (kind) {
+      source.addEventListener(kind, function (message) {
+        try {
+          apply(state, JSON.parse(message.data));
+        } catch (ignored) {
+          // A frame we cannot read changes nothing; the next one will.
+        }
+      });
+    });
+
+    source.addEventListener("ready", function (message) {
+      try { apply(state, JSON.parse(message.data)); } catch (ignored) { pollStatus(state); }
+    });
+
+    source.addEventListener("failed", function (message) {
+      try { apply(state, JSON.parse(message.data)); } catch (ignored) { settle(state); }
+    });
+
+    source.addEventListener("error", function () {
+      // Closed first: the browser reopens a stream that ended by itself, and every
+      // close arrives here whether the export finished or the socket died. If the
+      // export had finished we would already have settled, so reaching this means
+      // the connection went and the build has not.
+      if (state.source) { state.source.close(); state.source = null; }
+      if (!state.settled) pollStatus(state);
+    });
+  }
+
+  function pollStatus(state) {
+    if (state.settled || state.pollTimer || !state.download.status_url) return;
+
+    state.pollTimer = window.setInterval(function () {
+      fetch(apiUrl(state.download.status_url), { credentials: "omit" })
+        .then(function (res) { return res.ok ? res.json() : null; })
+        .then(function (view) { if (view) apply(state, view); })
+        .catch(function (err) {
+          // Reported once, not once every few seconds. The operator needs to know the
+          // card has gone blind, and a poll that failed will almost certainly keep
+          // failing — repeating it would bury everything else in their console.
+          if (state.pollWarned) return;
+          state.pollWarned = true;
+          warnFailure(
+            "could not read download progress, so the file card will stop updating",
+            apiUrl(state.download.status_url),
+            err && err.message
+          );
+        });
+    }, STATUS_POLL_MS);
   }
 
   function newSessionToken() {
@@ -1048,6 +1577,160 @@ _WIDGET_SCRIPT_TEMPLATE = r"""
 
       var messageUrl = API_BASE + "/public/chatbot/message";
 
+      // Stream the reply when we can. A data-agent turn runs real queries and can
+      // take a long time, and a typing indicator that says nothing for a minute is
+      // indistinguishable from a broken widget. A button/dropdown reply is never
+      // streamed — it is a flow answer, which arrives whole — and neither is a turn
+      // for a chatbot with no agent attached; both cases come back as one `fallback`
+      // event and this function retries the POST below.
+      if (!selectedValue && typeof window.EventSource !== "undefined") {
+        if (streamSend(text)) return;
+      }
+
+      postMessage(text, selectedValue, messageUrl);
+    }
+
+    // Opens the SSE turn. Returns false when it could not even be started, so the
+    // caller falls straight back to the POST.
+    function streamSend(text) {
+      var url = API_BASE + "/public/chatbot/message-stream" +
+        "?api_key=" + encodeURIComponent(API_KEY) +
+        "&message=" + encodeURIComponent(text) +
+        "&session_id=" + encodeURIComponent(getSessionId());
+
+      var source;
+      try {
+        source = new EventSource(url);
+      } catch (ignored) {
+        return false;
+      }
+
+      var bubble = null;
+      var answer = "";
+      var settled = false;   // something arrived, so the stream owns this turn
+      var finished = false;  // `done` arrived, so the disconnect that follows is expected
+
+      function finish() {
+        if (source) { source.close(); source = null; }
+        inputEl.disabled = false;
+        sendBtn.disabled = false;
+        typingEl.style.display = "none";
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+        inputEl.focus();
+        armIdleTimer();
+      }
+
+      // The bubble is created on the first token rather than up front, so a turn
+      // that falls back or fails never leaves an empty rectangle behind.
+      //
+      // Rendered through renderMarkdown, exactly as the non-streamed reply is
+      // (renderBotMessage). Painting the raw text instead — which this did — showed
+      // the visitor the literal `**bold**` and `| a | b |` the model was told to write
+      // by grounding rule 14, so a streamed turn displayed a table as a wall of pipes
+      // while the identical answer arriving by POST rendered correctly.
+      //
+      // Re-rendering the whole answer per token rather than appending is deliberate:
+      // markdown is block-structured, so the last line of a partial stream can change
+      // meaning when the next one arrives (a table row is only a table once its
+      // divider is read). A few KB re-parsed per token is not a cost worth splitting
+      // the renderer in two for.
+      //
+      // innerHTML is safe here for the reason it is safe in renderBotMessage, and only
+      // that reason: renderMarkdown escapes before it parses. Never assign `answer`
+      // itself here.
+      function paint() {
+        if (!bubble) {
+          bubble = document.createElement("div");
+          bubble.className = "gms-chatbot-msg gms-chatbot-msg-bot";
+          appendBotSideMessage(messagesEl, bubble, cfg);
+          typingEl.style.display = "none";
+        }
+        bubble.innerHTML = renderMarkdown(answer);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      }
+
+      source.addEventListener("fallback", function () {
+        settled = true;
+        if (source) { source.close(); source = null; }
+        postMessage(text, undefined, API_BASE + "/public/chatbot/message");
+      });
+
+      source.addEventListener("token", function (message) {
+        settled = true;
+        try {
+          answer += JSON.parse(message.data).text || "";
+        } catch (ignored) { return; }
+        paint();
+      });
+
+      source.addEventListener("done", function (message) {
+        settled = true;
+        finished = true;
+
+        var download = null;
+
+        try {
+          var payload = JSON.parse(message.data);
+          if (payload.answer) { answer = payload.answer; paint(); }
+          download = payload.download || null;
+        } catch (ignored) {
+          // Whatever was streamed already stands.
+        }
+
+        finish();
+
+        // After finish(), so the input is already back in the visitor's hands before
+        // the card appears. The build is not a turn and must not hold the widget.
+        if (download) renderDownloadCard(messagesEl, download, cfg);
+      });
+
+      source.addEventListener("error", function (message) {
+        // Closed first: the browser reopens a stream that ended on its own, and that
+        // re-runs the whole turn.
+        if (source) { source.close(); source = null; }
+
+        if (finished) {
+          // The turn ended, so the stream ended. The browser reports every close as an
+          // error, success included — this one is not one. Without this check a turn
+          // that answered with no text at all would be overwritten by a failure notice.
+          return;
+        }
+
+        // Two completely different things arrive at this one listener, and telling
+        // them apart is what `data` is for. The server's own `error` event carries a
+        // JSON payload — it is a turn that ran and failed for a reason the visitor
+        // should be told (a misconfigured agent, a timeout, a rate limit). A transport
+        // failure carries nothing.
+        //
+        // Treating the first as the second is not a cosmetic mistake: it re-POSTs the
+        // whole turn, so a failing chatbot silently answers every question twice and
+        // bills the owner for both, while the actual reason never reaches the screen.
+        var detail = "";
+        if (message && message.data) {
+          settled = true;
+          try { detail = JSON.parse(message.data).message || ""; } catch (ignored) {}
+        }
+
+        if (!settled) {
+          // Nothing arrived at all — the endpoint may not exist on this server, or
+          // a proxy is buffering the stream. Fall back rather than fail: the POST
+          // is the path that has always worked.
+          postMessage(text, undefined, API_BASE + "/public/chatbot/message");
+          return;
+        }
+
+        if (!answer) {
+          renderErrorMessage(messagesEl, detail || "Something went wrong. Please try again.", cfg);
+        }
+        finish();
+      });
+
+      return true;
+    }
+
+    function postMessage(text, selectedValue, messageUrl) {
+      typingEl.style.display = "block";
+
       fetch(messageUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1123,6 +1806,10 @@ _WIDGET_SCRIPT_TEMPLATE = r"""
         renderBotMessage(messagesEl, data, cfg);
         renderResponseTime(messagesEl, data.response_time_ms, cfg);
       }
+
+      // After the reply, whatever kind it was. The card is what the sentence above it
+      // is about, and it goes on updating long after this turn is over.
+      if (data.download) renderDownloadCard(messagesEl, data.download, cfg);
     }
 
     sendBtn.addEventListener("click", function () { send(); });

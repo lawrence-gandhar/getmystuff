@@ -1,0 +1,17 @@
+{# The response to every mutation on the workflows page.
+
+   Two things: a marker or an error for the response area the button targeted, and an
+   out-of-band refresh of the whole table. The marker is what the New Workflow dialog
+   reads to decide whether to close itself, so a refused name leaves it open with what
+   was typed still in it — the same `data-success` contract the rest of the application
+   uses. #}
+{% if error %}
+    <div class="alert alert-danger alert-dismissible fade show mb-0" role="alert">
+        <i class="las la-exclamation-circle"></i> {{ error }}
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+{% else %}
+    <div data-success="true" class="d-none"></div>
+{% endif %}
+
+{% include "integrations/partials/flows_table.htm" %}

@@ -28,7 +28,12 @@ from app.db.db_sessions import AsyncSessionLocal
 from app.db.db_utils import CRUDQueryBuilder
 from app.db.tool_configs.queries import fetch_enabled_tools_for_agent
 from app.models.data_agents import DataAgent
-from app.services.deep_agents.prompt_builder import build_tool_routing_prompt
+from app.services.deep_agents.prompt_builder import (
+    build_tool_routing_prompt,
+    has_current_rules,
+)
+from app.services.tool_configs import tool_chain_service
+from app.services.tool_configs.tool_config_service import tables_read
 
 logger = logging.getLogger(__name__)
 
@@ -45,30 +50,220 @@ async def collect_agent_tools(db: AsyncSession, data_agent_id: int) -> List[dict
     being told about a tool it cannot call, or handed one the prompt never
     mentioned.
 
+    **The set is the agent's own tools plus everything they embed.** Giving an
+    agent a nested tool gives it the whole chain: the children run as part of the
+    parent whether or not they are listed, and listing them means the agent can also
+    call one on its own — which is the point of a child being a tool rather than a
+    sub-query buried in someone else's SQL. Their rows are not modified, so a shared
+    child stays where it belongs and no other agent loses it.
+
     ``datasource`` is the ORM row itself, not a view: the tool factory needs its
     encrypted password to build a connection. Nothing in this list is ever sent to
     a model except the fields prompt_builder explicitly formats.
+
+    **Published graphs appear in this list too**, as entries marked ``kind: "graph"`` —
+    see :func:`_graph_entries`. They are in *this* list rather than a parallel one
+    precisely because of the guarantee in the paragraph above: two lists could describe
+    different sets, and then the agent would be told about something it cannot call, or
+    handed something the prompt never mentioned. Both routes to a graph arrive here the
+    same way: one attached to this agent, and any shared with its workspace.
     """
     rows = await fetch_enabled_tools_for_agent(db, data_agent_id)
 
-    return [
+    # Descendants come after the agent's own tools, so the prompt reads as "what
+    # you were given, then what came with it" and an unchanged set still produces a
+    # byte-identical prompt.
+    inherited = await tool_chain_service.descendant_rows(
+        db, [tool_config.id for tool_config, _datasource in rows],
+    )
+    rows = list(rows) + [
+        (tool_config, datasource)
+        for tool_config, datasource in inherited
+        if tool_config.is_enabled
+    ]
+
+    chains = await tool_chain_service.build_chains(db, rows)
+
+    entries = [
         {
             "uuid": str(tool_config.uuid),
+            # The internal bigint ids. Present because an export has to record which
+            # tool and which agent it came from, and a foreign key takes the id — see
+            # app/services/downloader_agents/base/download_service.create_offer. They
+            # never reach a model: prompt_builder formats named fields only, and the
+            # tool factory passes them to the database rather than into a prompt.
+            "id": tool_config.id,
+            "data_agent_id": tool_config.data_agent_id,
             "tool_name": tool_config.tool_name,
             "description": tool_config.description,
             "table_name": tool_config.table_name,
+            # Every table the tool reads, primary first — the prompt names them all,
+            # and the executor checks each one is still switched on in Data Sources.
+            "table_names": tables_read(
+                tool_config.table_name, tool_config.extra_tables,
+            ),
             "query_mode": tool_config.query_mode,
+            # Whether this tool's whole result set may be read and grouped in
+            # memory. Read by the aggregate tool factory to decide whether to bind
+            # anything at all, and by prompt_builder to decide whether to mention
+            # it — so with every tool opted out, both are unchanged from before the
+            # capability existed.
+            "allow_recursive_aggregate": bool(
+                getattr(tool_config, "allow_recursive_aggregate", False),
+            ),
             "config": dict(tool_config.config or {}),
             # Non-empty only for a SQL-mode tool. Both consumers need it: the
             # factory runs it, and the prompt quotes it as the query the tool runs.
             "sql_query": tool_config.sql_query,
+            # The values a SQL-mode statement asks the assistant for. Non-empty only
+            # in that mode — builder mode's equivalent lives inside `config` — and
+            # needed by both consumers for the same reason as everything else here:
+            # the factory turns them into the tool's arguments, and the prompt says
+            # what the tool needs to be told.
+            "sql_params": list(getattr(tool_config, "sql_params", None) or []),
             "updated_at": tool_config.updated_at,
             "datasource": datasource,
             "datasource_name": datasource.datasource_name,
             "db_type": datasource.db_type,
+            # The resolved tree this tool is the root of. Both consumers need it and
+            # for the same reason as everything else here: the factory runs the
+            # chain, and the prompt says what restricts the tool, so a tool cannot
+            # be described as unrestricted and then run restricted.
+            "chain": chains.get(tool_config.id),
         }
         for tool_config, datasource in rows
     ]
+
+    # Appended after the tool configs, so an agent with no graphs produces a
+    # byte-identical prompt to the one it produced before graphs existed.
+    entries.extend(await _graph_entries(db, data_agent_id))
+
+    return entries
+
+
+async def _graph_entries(db: AsyncSession, data_agent_id: int) -> List[dict]:
+    """
+    Every graph this agent may call, in the same shape a tool config takes.
+
+    Two ways in, and ``fetch_agent_graphs`` is the one place that knows both: a graph
+    **attached** to this agent, and any graph **shared with the workspace** the agent is
+    assigned to. Both require ``is_active``, which is what lets a graph be parked
+    mid-edit without being detached or un-shared.
+
+    A list rather than the single graph this returned before workspace sharing existed.
+    Nothing downstream needed changing for that: ``build_graph_tools`` already takes one
+    entry and is called per entry, and each graph's answering tool is named after the
+    graph, so an agent holding three has three unambiguous ones. What *is* checked
+    elsewhere is that two of them cannot derive the same tool name — see
+    ``graph_service._require_unique_graph_tool_name``, because a model offered two tools
+    of one name cannot choose between them.
+
+    ``updated_at`` is included for a reason worth stating: ``is_prompt_stale`` compares the
+    agent's stored prompt against the newest ``updated_at`` in this list, so putting the
+    graph's timestamp here is what makes **editing a graph invalidate the routing prompt**.
+    Without it the prompt would keep describing the graph as it was, and no new staleness
+    path had to be written for that to work. Sharing a graph with a workspace invalidates
+    the prompt of every agent in it through the same route.
+
+    ``asks_questions`` is derived here rather than in the tool factory because it is a fact
+    about the drawing, and this is the only layer holding the drawing.
+
+    Imported inside the function: ``graph_designer`` reads ``query_executor`` from this
+    package, so a module-scope import would be a cycle. The same lazy-import call
+    ``aggregate_service`` and ``query_test_service`` already make in the other direction.
+    """
+    from app.db.graph_designer.queries import fetch_agent_graphs
+
+    graphs = await fetch_agent_graphs(db, data_agent_id)
+
+    return [_graph_entry(graph, data_agent_id) for graph in graphs]
+
+
+def _graph_entry(graph, data_agent_id: int) -> dict:  # noqa: ANN001
+    """One graph as a tool entry."""
+    from app.models.graph_designer import NODE_HUMAN, NODE_SQL, NODE_SQL_UNION
+
+    nodes = [
+        node for node in (graph.graph_data or {}).get("nodes") or []
+        if isinstance(node, dict)
+    ]
+
+    # Every parameter every statement node declares, de-duplicated by name. These become
+    # the graph tool's arguments, so a value the operator opened on any node is one the model
+    # can fill — and one it did not open has nowhere to land.
+    #
+    # `sql_union` counts as well as `sql`. Its parameters are usually filled by the loop it
+    # sits in, but one it declares and does not wire is filled from the run's inputs exactly
+    # as a SQL node's is — so omitting it would make that parameter reachable from the test
+    # panel and unreachable from a conversation, which is the sort of difference nobody would
+    # think to look for.
+    statement_nodes = {NODE_SQL, NODE_SQL_UNION}
+    declared: Dict[str, dict] = {}
+
+    for node in nodes:
+        if str(node.get("type")) not in statement_nodes:
+            continue
+
+        for param in (node.get("data") or {}).get("params") or []:
+            name = str((param or {}).get("param") or "").strip()
+            if name and name not in declared:
+                declared[name] = dict(param)
+
+    return {
+        "kind": "graph",
+        "graph_uuid": str(graph.uuid),
+        # Whose graph it is, which is **not** necessarily whoever owns the agent calling
+        # it: a graph shared with a workspace is run as its author, because the
+        # datasources its nodes read are scoped to that author. The runner takes this
+        # value and no other.
+        "user_id": graph.user_id,
+        "id": graph.id,
+        # The agent this entry was collected for, not an owner. A shared graph has no
+        # `data_agent_id` of its own, and the exporter needs to know which agent's turn
+        # produced a result.
+        "data_agent_id": data_agent_id,
+        # Deliberately nothing recording *how* the graph got here. Whether it was
+        # attached or inherited from a workspace changes nothing about calling it, and a
+        # clause in the prompt saying so would be noise a model might act on.
+        "tool_name": _graph_tool_name(graph.name),
+        "description": graph.description,
+        "node_count": len(nodes),
+        "asks_questions": any(
+            str(node.get("type")) == NODE_HUMAN for node in nodes
+        ),
+        "sql_params": list(declared.values()),
+        # Whether this graph's whole result may be read and filtered in polars. Under the
+        # **same key** a tool config uses, so `aggregate_service.readable_tools` filters
+        # both kinds with one expression — a second key would be a second thing to
+        # remember, and the one that got forgotten would silently opt nothing in.
+        "allow_recursive_aggregate": bool(
+            getattr(graph, "allow_recursive_aggregate", False),
+        ),
+        "updated_at": graph.updated_at,
+    }
+
+
+def _graph_tool_name(name: Optional[str]) -> str:
+    """
+    A graph's name as an identifier a model can call.
+
+    A graph is named by a person — "Monthly revenue check" — and a tool name has to be a
+    single token. Lowercased, non-word characters collapsed to underscores, and prefixed
+    when it would otherwise start with a digit, because a name a model cannot address is a
+    tool it cannot use.
+    """
+    cleaned = "".join(
+        character if character.isalnum() else "_"
+        for character in str(name or "").strip().lower()
+    ).strip("_")
+
+    while "__" in cleaned:
+        cleaned = cleaned.replace("__", "_")
+
+    if not cleaned:
+        return "saved_graph"
+
+    return cleaned if cleaned[0].isalpha() else f"graph_{cleaned}"
 
 
 def newest_tool_change(tools: List[Dict[str, Any]]) -> Optional[datetime]:
@@ -79,16 +274,27 @@ def newest_tool_change(tools: List[Dict[str, Any]]) -> Optional[datetime]:
 
 def is_prompt_stale(agent: DataAgent, tools: List[Dict[str, Any]]) -> bool:
     """
-    Whether the stored routing prompt is behind the agent's tools.
+    Whether the stored routing prompt is behind the agent's tools *or* behind the
+    grounding rules this build generates.
 
     Never synced is stale. Otherwise the check is against the newest tool change,
     with a tools-but-no-prompt case caught explicitly: an agent whose tools were
     all deleted has no newest change, and its prompt (which still lists them) is
     stale precisely because there is nothing left to compare against.
+
+    The rules check is the second half, and it exists because a timestamp cannot see
+    it. Half of this prompt comes from the agent's tools and half from
+    ``prompt_builder``'s standing rules, and only the first half moves when a tool is
+    saved — so a rule corrected in code stayed unused by every agent already in the
+    database until one of its tools happened to be re-saved. A prompt built before
+    the marker existed has no marker and is stale for the same reason.
     """
     synced_at = getattr(agent, "tool_prompt_synced_at", None)
 
     if synced_at is None:
+        return True
+
+    if not has_current_rules(agent.tool_routing_prompt):
         return True
 
     latest = newest_tool_change(tools)

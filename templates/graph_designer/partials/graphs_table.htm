@@ -1,0 +1,28 @@
+{# The whole graphs table, rendered both by the list page and by every mutation
+   response.
+
+   The wrapper <div> — not the <tbody> — carries hx-swap-oob, for the reason
+   flow_builder/flows_table.htm states: htmx parses a response fragment with
+   DOMParser, and the HTML parser discards a <tbody> or <tr> that is not already
+   inside a <table>, so returning bare rows loses the markup with no error at all and
+   the table silently keeps its stale rows. The attribute is inert on the initial page
+   render — htmx only honours it on response fragments. #}
+<div id="graphsTable" class="card shadow-sm" hx-swap-oob="true">
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th>Name</th>
+                    <th style="width:110px;">Status</th>
+                    <th style="width:200px;">Size</th>
+                    <th style="width:220px;">Callable by</th>
+                    <th style="width:160px;">Last Updated</th>
+                    <th style="width:340px;">Actions</th>
+                </tr>
+            </thead>
+            <tbody id="graphsTableBody">
+                {% include "graph_designer/partials/graph_rows_body.htm" %}
+            </tbody>
+        </table>
+    </div>
+</div>

@@ -69,8 +69,30 @@
     <!-- SQL QUERY — shown in SQL mode only -->
     <div class="mt-3 d-none" data-query-mode-panel="sql">
         <div class="card">
-            <div class="card-header">
+            <div class="card-header d-flex justify-content-between align-items-center">
                 <label for="toolSqlQuery" class="fw-semibold mb-0">SQL Query</label>
+                {# Same endpoint and same partial as the builder's Test Query button.
+                   A hand-written statement is where a run-time failure is most
+                   likely: nothing here parses it, so the database is the only thing
+                   that can say whether it works. #}
+                <div class="d-flex align-items-center gap-2">
+                    <span id="sqlModeTestSpinner" class="htmx-indicator text-muted small">
+                        <i class="las la-spinner la-spin"></i> Running it…
+                    </span>
+                    <button
+                        type="button"
+                        class="btn btn-sm btn-outline-primary"
+                        hx-post="/query-test"
+                        hx-include="closest form"
+                        hx-target="#sqlModeTestResult"
+                        hx-swap="innerHTML"
+                        hx-indicator="#sqlModeTestSpinner"
+                        hx-disabled-elt="this"
+                        title="Run this statement once against the datasource"
+                    >
+                        <i class="las la-vial"></i> Test Query
+                    </button>
+                </div>
             </div>
             <div class="card-body">
                 <textarea
@@ -82,13 +104,66 @@
                     spellcheck="false"
                     placeholder="SELECT DISTINCT name FROM inventory_items ORDER BY name"
                 >{{ tool_config.sql_query if tool_config and tool_config.sql_query else '' }}</textarea>
+                <div id="sqlModeTestResult" class="mt-3"></div>
                 <div class="form-text">
                     One read-only statement — a <code>SELECT</code>, or a
                     <code>WITH</code> that ends in one. No semicolon needed, and only
                     one statement: the agent may read this data, never change it. The
                     query runs exactly as written, capped at 200 rows.
+                    <strong>Test Query</strong> runs it once now, reading a single
+                    row, so a statement the database refuses is found here rather
+                    than by a visitor.
                 </div>
             </div>
         </div>
+
+        {# Assistant-supplied values — one `:name` in the statement each.
+
+           Inside the SQL panel and nowhere else, because builder mode's equivalent
+           is a filter with "Agent fills in" ticked, and offering both would be two
+           controls for one idea. Rows are drawn by static/js/tool_configs.js into
+           one hidden JSON field, the same shape the Nested Tools card uses and for
+           the same reason: parallel repeated keys can arrive at different lengths.
+
+           The test value is not saved. It exists so Test Query can run a statement
+           that cannot run without one — a value the operator chose, never one this
+           application invented. #}
+        <div class="card mt-3" data-sql-params>
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <div>
+                    <strong>Values the assistant supplies</strong>
+                    <span class="text-muted small">
+                        — one <code>:name</code> in the statement each
+                    </span>
+                </div>
+                <button
+                    type="button"
+                    class="btn btn-sm btn-outline-primary"
+                    data-sql-params-add
+                >
+                    + Add Value
+                </button>
+            </div>
+            <div class="card-body" data-sql-params-rows></div>
+            <div class="card-footer bg-transparent">
+                <span class="form-text mb-0">
+                    Write <code>:name</code> into the statement above and declare it
+                    here. The assistant fills it from what the user asked;
+                    <strong>it is bound as a value, never written into the SQL</strong>,
+                    so it can only ever be the right-hand side of a comparison you
+                    wrote. A required value the user did not give makes the assistant
+                    ask rather than guess. The test value is used by
+                    <strong>Test Query</strong> only and is not saved.
+                </span>
+            </div>
+        </div>
+
+        <input
+            type="hidden"
+            name="sql_params_json"
+            data-sql-params-json
+            value='{{ (tool_config.sql_params if tool_config and tool_config.sql_params else []) | tojson }}'
+        >
+        <input type="hidden" name="test_values_json" data-sql-params-test-json value="{}">
     </div>
 </div>

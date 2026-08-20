@@ -673,6 +673,27 @@ class CRUDQueryBuilder:
         await db.refresh(instance)
         return instance
 
+    async def create_pending(self, db: AsyncSession, data: Dict[str, Any]) -> T:
+        """
+        Create a record but leave the transaction open, so the caller can commit it
+        together with whatever else has to land at the same moment.
+
+        ``create()`` commits, which is right for the ordinary case of one row written in
+        answer to one request. It is wrong whenever two rows have to appear together or
+        not at all — a scheduled integration run and its queue job, for instance, where a
+        crash between the two commits either loses a run or leaves a job pointing at
+        nothing. Splitting a commit in half is not something a caller can do from outside,
+        which is why this lives here rather than being worked around per feature.
+
+        ``flush()`` rather than nothing, so the row has its primary key and the caller can
+        use it as a foreign key in the very next statement without a second round trip.
+        The caller owns the ``commit()`` and, on any failure, the ``rollback()``.
+        """
+        instance = self.model(**data)
+        db.add(instance)
+        await db.flush()
+        return instance
+
     async def get_one(
         self,
         db: AsyncSession,

@@ -11,7 +11,10 @@
    no more reusable than a builder query was. #}
 {% include "tool_configs/partials/table_field.htm" %}
 
+{# The nested tools go too: a child has to read the same datasource as its parent,
+   so tools chosen against the previous one are not valid children of this query. #}
 {% with oob_swap = True %}
 {% include "tool_configs/partials/query_mode_field.htm" %}
+{% include "tool_configs/partials/nested_tools_field.htm" %}
 {% include "tool_configs/partials/query_builder.htm" %}
 {% endwith %}

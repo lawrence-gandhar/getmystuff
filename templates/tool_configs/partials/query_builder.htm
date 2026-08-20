@@ -107,17 +107,74 @@
                 + Add Filter
             </button>
         </div>
-        <div class="card-body" data-builder-rows="filters"></div>
+        <div class="card-body">
+            {# Tick "Agent fills in" on a filter and the assistant supplies that one
+               value per question, so a single tool answers "projects in August" and
+               "projects in September" instead of needing a config for each. What it
+               can never do is choose the column, change the comparison, or relax any
+               filter left fixed — see DEEP_AGENTS.md. #}
+            <p class="small text-muted mb-3">
+                A filter is fixed unless you tick <strong>Agent fills in</strong>. Doing
+                that lets the assistant supply <em>that value</em> when it answers a
+                question — the column and the comparison stay exactly as you set them,
+                and every other filter still applies.
+            </p>
+            <div data-builder-rows="filters"></div>
+        </div>
     </div>
 
-    <!-- GENERATED SQL — read-only, never executed -->
+    {# The grouping rule, checked as the rows change so it is not first heard about
+       from the server on save. Mirrors tool_config_service._require_grouped_selection:
+       once a query aggregates or groups, MySQL and PostgreSQL only accept columns
+       that are grouped or aggregated. #}
+    <div class="alert alert-warning small py-2 d-none" data-builder-grouping></div>
+
+    {# GENERATED SQL — a preview, plus the one button that finds out whether the
+       database agrees with it. The preview is display only (it inlines filter values
+       with f-strings server-side and is never executed); Test Query runs the *config*
+       through the executor, exactly as an agent's tool call would. See
+       app/services/query_test/query_test_service.py.
+
+       Only for a relational datasource: `supports_sql` is the same flag that decides
+       whether SQL mode is offered, and a Mongo or CSV datasource has no query the
+       executor can run. #}
     <div class="card mb-3">
-        <div class="card-header">
+        <div class="card-header d-flex justify-content-between align-items-center">
             <strong>Generated SQL</strong>
+            {% if supports_sql %}
+            <div class="d-flex align-items-center gap-2">
+                <span id="builderTestSpinner" class="htmx-indicator text-muted small">
+                    <i class="las la-spinner la-spin"></i> Running it…
+                </span>
+                <button
+                    type="button"
+                    class="btn btn-sm btn-outline-primary"
+                    hx-post="/query-test"
+                    hx-include="closest form"
+                    hx-target="#builderTestResult"
+                    hx-swap="innerHTML"
+                    hx-indicator="#builderTestSpinner"
+                    hx-disabled-elt="this"
+                    title="Run this query once against the datasource"
+                >
+                    <i class="las la-vial"></i> Test Query
+                </button>
+            </div>
+            {% endif %}
         </div>
         <div class="card-body bg-dark text-light font-monospace small">
             <pre class="mb-0" data-builder-preview></pre>
         </div>
+        {% if supports_sql %}
+        <div class="card-footer bg-transparent">
+            <div id="builderTestResult"></div>
+            <span class="form-text mb-0">
+                Runs the query once, reading a single row — nothing is saved and
+                nothing is changed. Test before saving: a tool that fails only when an
+                agent calls it fails in front of whoever asked.
+            </span>
+        </div>
+        {% endif %}
     </div>
 
     {% endif %}

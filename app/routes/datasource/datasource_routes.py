@@ -26,6 +26,7 @@ from app.services.datasource.datasource_service import (
     datasource_crud,
 )
 from app.services.datasource.file_service import check_file_exists, upload_datasource_files
+from app.utils import datasource_status
 from app.schemas.datasource import (
     DatasourceCreateRequest,
     DatasourceNameRequest,
@@ -493,7 +494,7 @@ class DataSourceController(Controller):
         configuration_data = datasource.get("configuration_data") or {}
         table_schema = configuration_data.get(table_name, {})
         column_data = table_schema.get("column_data") or {}
-        table_status = table_schema.get("status", "active")
+        table_status = datasource_status.table_status(configuration_data, table_name)
 
         if not column_data:
             # configuration_data was never populated (e.g. existing datasources
@@ -590,7 +591,7 @@ class DataSourceController(Controller):
         # Re-read the datasource to get the current table status for rendering
         datasource_obj = await datasource_crud.get_by_uuid(db, datasource_id)
         config = (datasource_obj.configuration_data or {}) if datasource_obj else {}
-        table_status = config.get(table_name, {}).get("status", "active")
+        table_status = datasource_status.table_status(config, table_name)
 
         return Template(
             template_name="datasources/column_row.htm",

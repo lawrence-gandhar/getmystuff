@@ -1,0 +1,214 @@
+{% extends "base/layout.htm" %}
+{% block title %}{{ graph.name }} | Graph Designer{% endblock %}
+
+{% block extra_css %}
+<link href="/static/css/graph_designer.css" rel="stylesheet">
+{% endblock %}
+
+{% block content %}
+<div class="mt-3" style="max-width: 100%;">
+
+    <!-- ============================================
+         HEADER
+         ============================================ -->
+    <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
+        <div class="d-flex align-items-center gap-2">
+            <a href="/graph-designer/" class="btn btn-sm btn-outline-secondary">
+                <i class="las la-arrow-left"></i>
+            </a>
+            <h6 class="fw-semibold mb-0">
+                <i class="las la-project-diagram text-primary"></i> {{ graph.name }}
+            </h6>
+            {% if graph.is_active %}
+                <span class="badge bg-success">Published</span>
+            {% else %}
+                <span class="badge bg-secondary">Draft</span>
+            {% endif %}
+            {% if graph.agent_name %}
+                <span class="badge bg-light text-dark border">
+                    <i class="las la-robot"></i> {{ graph.agent_name }}
+                </span>
+            {% endif %}
+            <span id="gdUnsavedBadge" class="badge bg-warning text-dark" style="display:none;">
+                Unsaved changes
+            </span>
+        </div>
+
+        <div class="d-flex align-items-center gap-1 flex-wrap">
+            <button class="btn btn-sm btn-outline-primary" type="button"
+                    data-bs-toggle="offcanvas" data-bs-target="#gdPalette">
+                <i class="las la-plus"></i> Add Node
+            </button>
+            <button id="gdSaveBtn" class="btn btn-sm btn-primary" type="button">
+                <i class="las la-save"></i> Save
+            </button>
+            <button id="gdReloadBtn" class="btn btn-sm btn-outline-secondary" type="button">
+                <i class="las la-undo"></i> Reload
+            </button>
+
+            <span class="vr mx-1"></span>
+
+            <button id="gdRunBtn" class="btn btn-sm btn-success" type="button">
+                <i class="las la-play"></i> Run
+            </button>
+            {# Enabled only once nodes are picked, so the button cannot be pressed in a
+               state where it would silently mean "run everything". #}
+            <button id="gdTestBtn" class="btn btn-sm btn-outline-success" type="button" disabled>
+                <i class="las la-vial"></i> Test selection (<span id="gdPickedCount">0</span>)
+            </button>
+            <button id="gdStopBtn" class="btn btn-sm btn-outline-danger" type="button" disabled>
+                <i class="las la-stop"></i> Stop
+            </button>
+        </div>
+    </div>
+
+    <p class="text-muted small mb-2">
+        Click a node's output dot, then click the node it should lead to, to connect them.
+        Drag a header to move a node; drag a connector's end to re-point it.
+        <strong>Shift-click</strong> nodes to pick them, then <strong>Test selection</strong>
+        to run only those. Everything below the canvas is this run's log.
+    </p>
+
+    <div id="gdSaveResult" class="mb-2"></div>
+
+    <!-- ============================================
+         CANVAS — nodes over connectors
+         ============================================ -->
+    {# The connector <svg> and the node <div> are siblings of the same size, stacked.
+       The SVG is first so nodes paint over the curves. #}
+    <div id="gd-canvas-wrapper">
+        <svg id="gd-edges" role="img" aria-label="Graph connectors">
+            <g id="gd-edges-group"></g>
+        </svg>
+        <div id="gd-canvas"></div>
+    </div>
+
+    <!-- ============================================
+         RUN DOCK — the Azure-Synapse-style pane
+         ============================================ -->
+    <div id="gd-dock">
+        <div id="gd-dock-resize" title="Drag to resize"></div>
+
+        <div class="d-flex justify-content-between align-items-center px-2 py-1 border-bottom flex-wrap gap-2">
+            <ul class="nav nav-pills nav-sm gap-1" role="tablist">
+                <li class="nav-item">
+                    <button class="nav-link active py-0 px-2 small" data-gd-tab="output" type="button">
+                        Output
+                    </button>
+                </li>
+                <li class="nav-item">
+                    <button class="nav-link py-0 px-2 small" data-gd-tab="state" type="button">
+                        State
+                    </button>
+                </li>
+                <li class="nav-item">
+                    <button class="nav-link py-0 px-2 small" data-gd-tab="log" type="button">
+                        Log
+                    </button>
+                </li>
+            </ul>
+
+            <div class="d-flex align-items-center gap-2 small">
+                <span id="gdRunStatus" class="text-muted">No run yet</span>
+                <span id="gdRunTransport" class="text-muted small"></span>
+            </div>
+        </div>
+
+        <div id="gd-dock-body" class="p-2">
+            {# The paused-run prompt. Outside the tabs on purpose: a question the run is
+                 waiting on must be visible whichever tab someone is reading. #}
+            <div id="gd-question" class="mb-2" hidden></div>
+
+            <div data-gd-pane="output">
+                <div class="table-responsive">
+                    <table class="table table-sm gd-dock-table mb-0">
+                        <thead>
+                            <tr>
+                                <th style="width:40px;">#</th>
+                                <th>Node</th>
+                                <th style="width:110px;">Type</th>
+                                <th style="width:60px;">Pass</th>
+                                <th style="width:110px;">Status</th>
+                                <th style="width:90px;">Duration</th>
+                                <th>Detail</th>
+                            </tr>
+                        </thead>
+                        <tbody id="gdOutputRows">
+                            <tr>
+                                <td colspan="7" class="text-muted text-center py-3">
+                                    Press Run, or pick nodes and press Test selection.
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div data-gd-pane="state" hidden>
+                <pre id="gdStateJson" class="gd-dock-json text-muted">No run yet.</pre>
+            </div>
+
+            <div data-gd-pane="log" hidden>
+                <div id="gdLogLines" class="text-muted small">No run yet.</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ============================================
+     OFFCANVAS — PALETTE
+     ============================================ -->
+<!-- offcanvas-end, not -start: the sidebar owns the left edge, so a panel sliding in from
+     there covers the app's own navigation. Both of this page's panels come from the right,
+     the side the properties panel already used. -->
+<div class="offcanvas offcanvas-end" tabindex="-1" id="gdPalette" aria-labelledby="gdPaletteLabel">
+    <div class="offcanvas-header border-bottom">
+        <h6 class="offcanvas-title fw-semibold" id="gdPaletteLabel">
+            <i class="las la-shapes text-primary"></i> Add a node
+        </h6>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+    </div>
+    <div class="offcanvas-body" id="gdPaletteBody">
+        <!-- populated by graph_designer.js from the server's vocabulary -->
+    </div>
+</div>
+
+<!-- ============================================
+     OFFCANVAS — PROPERTIES
+     ============================================ -->
+<div class="offcanvas offcanvas-end" tabindex="-1" id="gdProperties" aria-labelledby="gdPropertiesLabel"
+     style="width: 520px;">
+    <div class="offcanvas-header border-bottom">
+        <h6 class="offcanvas-title fw-semibold" id="gdPropertiesLabel">
+            <i class="las la-sliders-h text-primary"></i> Node settings
+        </h6>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+    </div>
+    <div class="offcanvas-body" id="gdPropertiesBody">
+        <!-- populated by graph_designer.js -->
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+{# The graph, the vocabulary and the selection are handed over as JSON in the page so the
+   canvas draws on first paint instead of flashing empty, and so nothing about the node
+   vocabulary is duplicated in JavaScript — the server's lists are what the validator
+   will accept. #}
+<script type="application/json" id="gdGraphData">{{ graph_data_json | safe }}</script>
+<script type="application/json" id="gdVocabulary">{{ vocabulary_json | safe }}</script>
+
+{# Shared primitives first: graph_designer.js reads window.GraphCanvas at module scope. #}
+<script src="/static/js/graph_canvas.js"></script>
+<script src="/static/js/graph_designer.js"></script>
+<script>
+    GraphDesigner.init({
+        graphUuid: {{ graph.uuid | tojson }},
+        saveUrl: "/graph-designer/{{ graph.uuid }}/save",
+        graphUrl: "/graph-designer/{{ graph.uuid }}/graph",
+        runsUrl: "/graph-designer/{{ graph.uuid }}/runs",
+        nodeOptionsUrl: "/graph-designer/node-options",
+        openRun: {{ selected_run | tojson }},
+    });
+</script>
+{% endblock %}

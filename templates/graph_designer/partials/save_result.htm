@@ -1,0 +1,27 @@
+{# The verdict on one save, shown in the banner under the canvas toolbar.
+
+   A template rather than an HTML string built in the route, which matters here for a
+   specific reason: a refusal quotes things the user typed — a node's label, a table
+   name, part of a SQL statement — and interpolating those into markup by hand is how
+   markup gets injected. Jinja escapes them.
+
+   `data-success` is what graph_designer.js reads to clear its unsaved-changes flag. It
+   carries the same name and the same values flow_builder.js already looks for, so the
+   shared canvas core does not need two conventions. #}
+<div
+    class="alert {% if result.saved %}alert-success{% else %}alert-danger{% endif %} alert-dismissible fade show mb-0 py-2 small"
+    role="alert"
+    data-success="{{ "true" if result.saved else "false" }}"
+>
+    {% if result.saved %}
+        <i class="las la-check-circle"></i>
+        {{ result.message }}
+        <span class="text-muted">
+            {{ result.node_count }} node{{ "" if result.node_count == 1 else "s" }},
+            {{ result.edge_count }} connection{{ "" if result.edge_count == 1 else "s" }}.
+        </span>
+    {% else %}
+        <i class="las la-exclamation-circle"></i> {{ result.message }}
+    {% endif %}
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>

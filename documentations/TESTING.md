@@ -36,7 +36,7 @@ under `app/`, using `os.environ.setdefault` so a real value always wins:
 |---|---|
 | `DATABASE_URL` | `app/db/db_sessions.py` calls `create_async_engine` at module scope, so an unset or Postgres URL would explode on import or point the suite at a real database. |
 | `JWT_SECRET_KEY` | **`app/db/auth/auth.py` raises at import when this is unset** — deliberately, so a deployment can never run on a guessable signing key. The conftest default is a fixed test key; it signs nothing outside the run. |
-| `FERNET_KEY` | Datasource password encryption. |
+| `FERNET_KEY` | **`app/utils/crypto.py` raises at import when this is unset**, for the same reason as `JWT_SECRET_KEY`. It encrypts every stored credential — datasource passwords, AI provider keys, Action headers. The conftest default is the legacy literal, which is deliberate: it makes the re-encryption migration a no-op under test, and it is why `reencrypt_column` is factored out of `upgrade()` so the re-encrypting branch has a test at all. See [SECRETS_AND_KEY_ROTATION.md](SECRETS_AND_KEY_ROTATION.md). |
 | `OLLAMA_BASE_URL`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` | Set to unreachable/dummy values so a missed mock fails loudly rather than reaching a real provider. |
 
 `JWT_SECRET_KEY` is the one that will bite a new checkout: the application
@@ -61,6 +61,24 @@ not true. The container is Python 3.12 with every dependency installed.
 The repository is bind-mounted read-write at `/app`, so tests written on the
 host run in the container immediately, and reports written in the container
 appear on the host. No copying, no rebuild.
+
+`langgraph` is in the same position and is handled the same way: anything that
+compiles or runs a graph opens with
+
+```python
+pytest.importorskip(
+    "langgraph", reason="langgraph is installed in the container only (see Dockerfile)",
+)
+```
+
+so a host run skips it loudly rather than erroring. That covers the export graph, the
+tool chain graph and the aggregation graph. The modules those features are *built* on —
+`partial_algebra`, `frame_ops`, the planners and every schema — deliberately import
+neither langgraph nor a provider SDK, so the rules that carry the correctness of a
+feature stay runnable anywhere. That separation is the reason
+`agent_recursive_dataframes` splits its decomposition rules out of the module that
+implements them: `test_partial_algebra.py` checks the arithmetic against SQLite with no
+DataFrame library and no graph in the process at all.
 
 ---
 
@@ -145,11 +163,99 @@ quietly succeed against a real service and make the suite depend on the network.
 Loopback stays allowed. `@pytest.mark.external` opts a test out, and should be
 rare.
 
-`main.app` is never served by a test. Its `on_startup` runs `create_all` against
-the real engine, seeds a user, and calls `ollama_client.preload_models()` over
-the network. `tests/conftest.py:build_test_app()` assembles an equivalent app
+### Code that opens its own session
+
+Most tests get the per-test database through the `db` fixture, and most application code
+gets it injected. Three code paths do neither: the export graph's nodes, the queue worker,
+and the progress SSE stream (which outlives the handler that returned it, so it *cannot* use
+the request's session). They open their own through
+`download_service.open_session`, which wraps `db_sessions.AsyncSessionLocal` — an engine
+built at import time from `DATABASE_URL`.
+
+**In the container that variable is the development PostgreSQL database.** The env defaults
+at the top of `conftest.py` use `os.environ.setdefault`, which does not override a value
+that is already set. So without help, those paths read and write the development database
+while the assertions look at the in-memory one. Two fixtures exist for it:
+
+| Fixture | Points at the test database |
+|---|---|
+| `background_sessions` | `download_service.open_session` — the nodes, the worker, the SSE stream |
+| `graph_sessions` | `run_store.open_session` — a designed graph's nodes, its background task and its poll loop (`tests/unit/services/graph_designer/conftest.py`, autouse) |
+| `graph_checkpointer` | LangGraph's checkpoint store: forces `InMemorySaver` and clears the cached saver per test |
+
+`graph_checkpointer` earns its keep twice. `checkpointer.get_checkpointer` chooses its store
+from `DATABASE_URL`, so without it a test writes real checkpoint rows into the development
+database. And the saver is cached in a module global — `AsyncPostgresSaver` holds an
+`asyncio.Lock`, which binds to the loop that created it, so the *second* test to reuse a
+cached saver fails inside `asyncio.locks` on a loop that no longer exists.
+
+The `block_network` guard above is what turns both of these into loud failures rather than
+silent ones, which is how they were found.
+
+The Graph Designer's package has its own copies of the first two, **autouse**, plus one more:
+a fixture that cancels any run still in flight when a test ends. A run is a background task,
+and one outliving its test keeps writing through a session bound to an engine the teardown
+has disposed of — which surfaces as an unrelated *later* test failing on a closed connection.
+They are autouse rather than opt-in because every test in that package compiles and runs a
+graph, and the failure from forgetting one is confusing rather than obvious.
+
+### What the suite cannot see
+
+Two things in this application are not reachable from pytest, and both have bitten:
+
+**JavaScript.** There is no JS test harness. The two canvases and the shared
+`static/js/graph_canvas.js` are therefore verified outside pytest, and it is worth recording
+how, because both methods found real bugs that every Python test passed straight through:
+
+* the shared primitives were compared against the arithmetic they replaced, copied verbatim
+  out of git — 83 assertions, all identical. That found two id generators created in the same
+  millisecond minting the same ids.
+* both canvas pages were then **driven in headless Chromium** over the DevTools Protocol: add
+  a node, connect two, delete a connector, drag a node and check the connector followed, save,
+  run, and read the node statuses back off the DOM. That found a dock that never moved because
+  named SSE events do not reach `onmessage`.
+
+Neither is in the repository as a runnable check. What the suite *can* assert about the
+canvases is asserted from the route tests — that the shared script is included before the
+feature's, and that a refusal quoting a user's node label comes back escaped.
+
+`test_widget_script.py` and the download-card
+tests in it assert against the *generated source* — that a helper exists, that a socket is
+closed, that the card names none of the four widget-input variables. That catches an edit
+that removes a property; it cannot catch one that leaves the property in place and broken.
+The download flow is therefore also driven end to end in a real headless browser against a
+real embed page, by hand — and *interacted with*, not merely inspected: the download is
+verified by clicking the button and reading the browser's own download events. Curling a
+link's target proves the route works and says nothing about whether the page can reach it,
+which is how an `href` shipped that asked the embedding site for the file.
+
+Two traps in slicing the generated script for assertions, both of which produced tests
+that passed while asserting nothing: anchor the slice on a string that appears **once**
+(`"// The download card"` also opens that card's CSS, so slicing on it returned the
+stylesheet), and prefer a sweep over a list of fixed strings, so a new call site cannot be
+added without satisfying the rule. See [DOWNLOADER_AGENTS.md](DOWNLOADER_AGENTS.md).
+
+**Context propagation across tasks.** LangGraph runs its nodes as their own asyncio tasks,
+and a new task gets a *copy* of the context — so a `ContextVar.set` inside a tool is
+invisible to the turn that started it. Every Python test passed a version of
+`download_notice` with exactly that bug, because they all called the setter and the getter
+in one context. The fix in the test suite is to make the boundary explicit: the regression
+test calls the setter inside a real `asyncio.create_task` and asserts the parent sees it.
+Any new context-local read at the top of a turn wants the same test.
+
+`main.app` is never served by a test. Its `on_startup` runs `alembic upgrade head`
+against the real engine, seeds a user, and calls `ollama_client.preload_models()`
+over the network. `tests/conftest.py:build_test_app()` assembles an equivalent app
 from the same controllers, middleware and exception handler; `main.py`'s own
 functions are covered directly in `tests/test_main.py`.
+
+The suite builds its own schema with `Base.metadata.create_all` against SQLite and
+never goes through Alembic — the migration chain is PostgreSQL-specific (JSONB,
+`vector`, functional indexes) and could not apply to SQLite anyway. That means the
+tests do **not** verify the chain matches the models; [MIGRATIONS.md](MIGRATIONS.md)
+describes the from-scratch diff that does, and why it is worth running after a
+schema change. `app/db/migrations.py` itself is unit-tested in
+`tests/unit/db/test_migrations.py` with Alembic's `command.upgrade` patched out.
 
 ---
 
@@ -257,6 +363,19 @@ tests/
       auth/                        hashing, JWT, require_auth
       queries/                     the per-feature db/<feature>/queries.py modules
     services/<feature>/            business logic, tested without routes
+      downloader_agents/           the export feature; its conftest.py holds the
+                                   real-SQLite datasource factory and the two
+                                   isolation fixtures described below
+      chatbot/                     includes test_widget_script.py, which asserts
+                                   against the *generated* widget source — the one
+                                   place JavaScript is covered at all
+      agent_recursive_dataframes/  whole-result grouping; its conftest.py holds the
+                                   real-SQLite sales factory and the autouse fixture
+                                   that asserts both module registries are empty
+                                   after every test. test_aggregate_sources.py is
+                                   the one that pins a nested tool's totals to the
+                                   tool's own result set rather than a wider one
+    routes/<feature>/              handler-level tests with a TestClient
   integration/
     routes/<feature>/              one client test per handler
   reports/                         generated run history (committed)

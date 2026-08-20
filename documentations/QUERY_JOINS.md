@@ -102,6 +102,18 @@ base table — rejecting them would make an existing config uneditable.
 A qualified reference naming a table that is not in the query is rejected: that is a reference
 to a table the user never joined.
 
+Every table in the query contributes only its **active** columns, and a joined query that
+selects nothing specific returns every active column of *every* table it reads — the base one
+and each joined one, each field named `table_column`. See
+[SERVICE_PATTERNS.md](SERVICE_PATTERNS.md#who-reads-the-status--apputilsdatasource_statuspy)
+for the status rules and [DEEP_AGENTS.md](DEEP_AGENTS.md) for what the executor does with them.
+
+In Tool Configs, a join may only name a table the tool's **Tables** multi-select lists: the
+builder offers exactly those as join candidates, and `tool_config_service` refuses a saved join
+onto anything else. The two fields describe the same thing — which tables the query reads — and
+this is what stops them disagreeing. See
+[TOOL_QUERY_MODES.md](TOOL_QUERY_MODES.md#a-tool-records-every-table-it-reads).
+
 ### Removing a join is never silent
 
 Removing a join also removes any join that matched against the table it brought in (and, in
@@ -127,8 +139,10 @@ user is losing selections they made, so the panel says so:
   row, rather than replacing the offcanvas mid-edit.
 * **`_builder_context` / `_builder_defaults`** (`tool_config_routes.py`) — one source for the
   builder's context, shared by the first render and the `/tool-configs/fields` cascade, so a
-  mid-edit swap produces exactly what the first render did. The edit form preloads every
-  *joined* table's columns via `get_column_map`, so a saved joined query returns intact.
+  mid-edit swap produces exactly what the first render did. It preloads every **selected**
+  table's columns via `get_column_map`, so a saved joined query returns intact, and it derives
+  `base_table` from the first selection and `join_tables` from the rest — the Joins card offers
+  the tool's own tables, not every object in the datasource.
 * **`GET /tool-configs/tables`** now renders `table_field_response.htm`: the Table field **plus
   an out-of-band reset of the builder**. A query — its joins especially — belongs to one
   datasource, so leaving the previous datasource's builder on screen under a newly chosen one
@@ -239,3 +253,13 @@ SELECT customers.name AS who, SUM(items.qty) AS units
   rather than approximated, and flagged on the agent's console up front. Right joins remain
   authorable (both builders still offer them, and the preview renders them); they are simply not
   runnable by a data agent. See [DEEP_AGENTS.md](DEEP_AGENTS.md).
+
+---
+
+# Related
+
+* [TOOL_GRAPHS.md](TOOL_GRAPHS.md) — these joins drawn as the sets they intersect: one
+  two-circle Venn per join, shaded by type, and why a SQL-mode statement gets a note
+  instead of a diagram
+* [TOOL_QUERY_MODES.md](TOOL_QUERY_MODES.md) — the two ways a tool query is written
+* [DEEP_AGENTS.md](DEEP_AGENTS.md) — the runtime that executes a joined query

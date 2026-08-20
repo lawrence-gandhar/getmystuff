@@ -1,4 +1,6 @@
+import asyncio
 from pathlib import Path
+from typing import List
 import uvicorn
 
 from litestar import Litestar, get
@@ -17,6 +19,7 @@ from litestar.exceptions.responses import (
 from litestar.status_codes import HTTP_500_INTERNAL_SERVER_ERROR
 from litestar.connection import Request
 
+from app.routes.agent_recursive_dataframes import AggregationController
 from app.routes.auth import AuthController
 from app.routes.dashboard import DashboardController
 from app.routes.datasource import DataSourceController, DataSourceConfigurations
@@ -32,15 +35,44 @@ from app.routes.flow_builder import FlowBuilderController, KnowledgeBaseControll
 from app.routes.workspaces import WorkspaceController
 from app.routes.data_agents import DataAgentController
 from app.routes.tool_configs import ToolConfigController
+from app.routes.tool_graphs import ToolGraphController
+from app.routes.graph_designer import GraphDesignerController
+from app.routes.integrations import (
+    IntegrationAIController,
+    IntegrationConnectionController,
+    IntegrationsController,
+)
 from app.routes.sql_assist import SqlAssistController
+from app.routes.query_test import QueryTestController
 from app.routes.deep_agents import DeepAgentController
+from app.routes.downloader_agents import (
+    DownloadController,
+    FileDownloadController,
+    PublicDownloadController,
+)
 
+from app.services.agent_recursive_dataframes import frame_buffer
 from app.services.ai_inbuilt import ollama_client
+from app.services.downloader_agents.base import download_service, job_queue
+from app.services.integrations.engine import (
+    queue as integration_queue,
+    run_service as integration_run_service,
+    scheduler as integration_scheduler,
+)
+from app.services.integrations.runtime import http_client as integration_http
+from app.services.downloader_agents.base.checkpointer import close_checkpointer
+from app.services.downloader_agents.base.record_reader import release_all_readers
+from app.services.graph_designer import graph_run_service
 
 from app.db.db_sessions import get_db
-from app.db.base import Base
-from app.db.db_sessions import engine
+from app.db.migrations import upgrade_to_head
 from app.db.auth import create_fake_user
+
+
+# Long-running asyncio tasks this process owns, so on_shutdown can cancel them. The
+# export queue worker keeps its own handle (job_queue.stop_worker); this is for the
+# reapers, which have nothing else to hold them.
+_background_tasks: List[asyncio.Task] = []
 
 
 # -----------------------------
@@ -80,12 +112,16 @@ async def root() -> Template:
 # -----------------------------
 async def on_startup() -> None:
     """
-    DEV ONLY:
-    Creates tables automatically and seeds the test admin account.
-    Remove in production and use Alembic.
+    Bring the schema up to date, seed the dev admin account, start the background work.
+
+    Migrating here rather than in a separate deploy step means the schema can never be
+    older than the code running against it: the app that needs a column is the same one
+    that applies it. A failure raises, so a database that cannot be migrated stops
+    startup instead of leaving the app serving queries against a stale schema — the
+    failure mode `create_all` used to produce, since it adds missing tables but never a
+    missing column. See app/db/migrations.py.
     """
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    await upgrade_to_head()
 
     # Seed the test admin so a fresh database (a new `pgdata` volume, say) is
     # immediately loggable-into instead of bouncing every login back to the form
@@ -96,10 +132,66 @@ async def on_startup() -> None:
     # a cold model load. Best effort — never blocks startup (see docstring).
     await ollama_client.preload_models()
 
+    # Drain the export queue and expire finished downloads. Both are asyncio tasks in
+    # this process rather than a separate worker container — see the module docstring in
+    # app/services/downloader_agents/base/job_queue.py for why. An export is queued by a
+    # chat turn and built here; without this, a confirmed download would sit in the
+    # queue and the user would be told it was coming.
+    job_queue.start_worker()
+    _background_tasks.append(
+        asyncio.create_task(
+            download_service.run_expiry_reaper(), name="download-expiry-reaper",
+        )
+    )
+
+    # The integration queue and its scheduler, in this process for the same reason. A
+    # workflow set to run every hour has nobody watching it, so "on a schedule" is only a
+    # feature if something ticks — and both hold their state in columns rather than in
+    # memory, so N replicas each running these is safe: the claims are `FOR UPDATE SKIP
+    # LOCKED` and a trigger fires once however many schedulers see it due.
+    integration_queue.start_workers()
+    integration_scheduler.start_scheduler()
+
 
 async def on_shutdown() -> None:
-    """Release the pooled HTTP connection to the local Ollama server."""
+    """Release the Ollama connection, stop the worker, and close the checkpoint pool."""
     await ollama_client.close_client()
+
+    # Stop the worker before the pool it writes through. A job cancelled mid-export is
+    # left saying "running" and is requeued by the stale-job reaper on the next boot —
+    # the same recovery a crash gets, deliberately, so there is only one path to test.
+    await job_queue.stop_worker()
+
+    # And the graph runs, for the same reason and before the checkpointer they write
+    # through: a run torn down with the event loop is one whose sessions never unwind,
+    # whereas a cancelled one at least gets to.
+    await graph_run_service.stop_all_runs()
+
+    # The integration side, in dependency order: stop the scheduler so nothing new is
+    # enqueued, then the workers so nothing new is claimed, then the runs themselves.
+    # Reversing any pair means shutting down while something is still creating work.
+    await integration_scheduler.stop_scheduler()
+    await integration_queue.stop_workers()
+    await integration_run_service.stop_all_runs()
+
+    # The pooled outbound clients an integration run keeps per origin. Closed here rather
+    # than per run, which is the point of pooling them — a forty-page sync must not pay
+    # forty TLS handshakes.
+    await integration_http.close_all_clients()
+
+    for task in _background_tasks:
+        task.cancel()
+
+    _background_tasks.clear()
+
+    await close_checkpointer()
+    await release_all_readers()
+
+    # The other half of release_all_readers: an aggregation run holds its records in
+    # a module registry while the graph passes keys around, and a process going down
+    # mid-run leaves them there. Not async — this drops references, it does not close
+    # cursors — but it belongs beside the readers so the two are read together.
+    frame_buffer.release_all()
 
 
 # -----------------------------
@@ -155,9 +247,24 @@ app = Litestar(
         WorkspaceController,
         DataAgentController,
         ToolConfigController,
+        ToolGraphController,
+        GraphDesignerController,
+        # The connections controller is registered before the workflows one so its
+        # `/integrations/connections/...` paths are matched before
+        # `/integrations/{flow_id:uuid}/...` gets a chance to try parsing "connections" as
+        # a uuid. Litestar resolves literal segments ahead of typed ones anyway, but the
+        # ordering makes that independent of the router's internals.
+        IntegrationAIController,
+        IntegrationConnectionController,
+        IntegrationsController,
         SqlAssistController,
+        AggregationController,
+        QueryTestController,
         DeepAgentController,
+        DownloadController,
         PublicChatbotController,
+        PublicDownloadController,
+        FileDownloadController,
     ],
     debug=True,
     request_class=HTMXRequest,

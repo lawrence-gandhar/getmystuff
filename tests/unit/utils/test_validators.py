@@ -174,9 +174,16 @@ class TestParseJsonObject:
         assert validators.parse_json_object('{"a": 1}', "Query") == {"a": 1}
 
     def test_rejects_malformed_json(self) -> None:
+        """
+        The sentence names the field and says what to do, without naming a page. It used
+        to end "rebuild the query below" — wording written for the tool config builder,
+        which was its first caller — and this validator is now shared with forms that have
+        no query below them. Matches ``schemas/base._json_array``, which has always said
+        this.
+        """
         with pytest.raises(HTTPException) as exc:
             validators.parse_json_object("{not json", "Query")
-        assert "please rebuild the query below" in exc.value.detail
+        assert exc.value.detail == "Query could not be read — please rebuild it and try again"
 
     @pytest.mark.parametrize("value", ["[1, 2]", '"a string"', "42", "true", "null"])
     def test_rejects_valid_json_that_is_not_an_object(self, value) -> None:

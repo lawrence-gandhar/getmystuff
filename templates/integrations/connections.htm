@@ -1,0 +1,231 @@
+{% extends "base/layout.htm" %}
+{% block title %}Connections | GetMyStuff{% endblock %}
+
+{% block content %}
+<div class="container mt-4" style="max-width: 100%;">
+
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h5 class="fw-semibold mb-0">
+            <i class="las la-plug text-primary"></i> Connections
+        </h5>
+        <div class="d-flex gap-2">
+            <a href="/integrations/" class="btn btn-outline-secondary btn-sm">
+                <i class="las la-exchange-alt"></i> Workflows
+            </a>
+            <button
+                class="btn btn-primary btn-sm"
+                type="button"
+                data-bs-toggle="modal"
+                data-bs-target="#newConnectionModal"
+            >
+                <i class="las la-plus"></i> Add Connection
+            </button>
+        </div>
+    </div>
+
+    <p class="text-muted small mb-3">
+        A connection is one authenticated relationship with one external system — a store,
+        a CRM account, an API. You can have <strong>as many as you need</strong> of the same
+        kind: three Shopify stores and forty locations are the ordinary case, not an edge
+        case. Credentials are <strong>encrypted before they are stored</strong> and are
+        never sent back to this page: an edit form starts empty, and leaving it empty means
+        "leave the stored one alone". <strong>Test</strong> makes one real call and shows
+        you what came back, because a connection that saves is not the same as one that
+        works.
+    </p>
+
+    <div id="connections-response" class="mb-3"></div>
+
+    {% include "integrations/partials/connections_table.htm" %}
+
+</div>
+
+<!-- ============================================
+     MODAL — ADD CONNECTION
+     ============================================ -->
+<div class="modal fade" tabindex="-1" id="newConnectionModal" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header border-bottom">
+                <h5 class="modal-title">
+                    <i class="las la-plug text-primary"></i> Add Connection
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form
+                hx-post="/integrations/connections/create"
+                hx-target="#connections-response"
+                hx-swap="innerHTML"
+                hx-on::after-request="
+                    const el = document.getElementById('connections-response');
+                    if (el && el.querySelector('[data-success=true]')) {
+                        this.reset();
+                        bootstrap.Modal.getInstance(document.getElementById('newConnectionModal')).hide();
+                    }
+                "
+            >
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label for="newConnectionConnector" class="form-label fw-semibold">
+                            System <span class="text-danger">*</span>
+                        </label>
+                        <select
+                            id="newConnectionConnector"
+                            name="connector_id"
+                            class="form-select"
+                            required
+                        >
+                            {# The data attributes are what the script below switches the
+                               form on. Carried per option rather than fetched, so
+                               choosing a system rearranges the form with no round trip
+                               and no second copy of the connector list in JavaScript. #}
+                            {% for connector in connectors %}
+                                <option
+                                    value="{{ connector.connector_id }}"
+                                    data-asks-for-base-url="{{ 'true' if connector.asks_for_base_url else 'false' }}"
+                                    data-asks-for-account-id="{{ 'true' if connector.asks_for_account_id else 'false' }}"
+                                    data-account-id-label="{{ connector.account_id_label }}"
+                                    data-account-id-help="{{ connector.account_id_help }}"
+                                    data-account-id-pattern="{{ connector.account_id_pattern }}"
+                                >
+                                    {{ connector.label }}
+                                </option>
+                            {% endfor %}
+                        </select>
+                        <div class="form-text">
+                            What kind of system this connects to. It decides how the
+                            credential is sent and what operations are available, so it
+                            cannot be changed afterwards — add another connection instead.
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="newConnectionLabel" class="form-label fw-semibold">
+                            Name <span class="text-danger">*</span>
+                        </label>
+                        <input
+                            type="text"
+                            id="newConnectionLabel"
+                            name="label"
+                            class="form-control"
+                            placeholder="e.g. Shopify EU"
+                            required
+                            maxlength="255"
+                            autocomplete="off"
+                        >
+                        <div class="form-text">
+                            What you will recognise it by on a workflow step.
+                        </div>
+                    </div>
+
+                    <div class="mb-3" id="newConnectionBaseUrlGroup">
+                        <label for="newConnectionBaseUrl" class="form-label fw-semibold">
+                            API address
+                        </label>
+                        <input
+                            type="url"
+                            id="newConnectionBaseUrl"
+                            name="base_url"
+                            class="form-control"
+                            placeholder="https://api.example.com/v2"
+                            maxlength="2048"
+                        >
+                        <div class="form-text">
+                            Needed for a REST API connection. Must be
+                            <strong>https</strong>, and must not be an address inside your
+                            own network.
+                        </div>
+                    </div>
+
+                    {# Shown only for a system that computes its own address from the
+                       account it belongs to — a Shopify shop domain. The `pattern` is
+                       filled in from the chosen connector, so a bad domain is caught
+                       before the round trip; the server checks it again on the way in and
+                       once more before it becomes a hostname. #}
+                    <div class="mb-3 d-none" id="newConnectionAccountGroup">
+                        <label for="newConnectionAccountId" class="form-label fw-semibold">
+                            <span id="newConnectionAccountLabel">Account</span>
+                            <span class="text-danger">*</span>
+                        </label>
+                        <input
+                            type="text"
+                            id="newConnectionAccountId"
+                            name="external_account_id"
+                            class="form-control"
+                            maxlength="255"
+                            autocomplete="off"
+                            spellcheck="false"
+                            disabled
+                        >
+                        <div class="form-text" id="newConnectionAccountHelp"></div>
+                    </div>
+
+                    <div>
+                        <label for="newConnectionApiKey" class="form-label fw-semibold">
+                            API key
+                        </label>
+                        {# type=password so it is not shoulder-read and not stored by a
+                           browser's form autofill alongside ordinary text fields. #}
+                        <input
+                            type="password"
+                            id="newConnectionApiKey"
+                            name="api_key"
+                            class="form-control"
+                            autocomplete="new-password"
+                            maxlength="4096"
+                        >
+                        <div class="form-text">
+                            Encrypted before it is stored, and never shown again.
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">
+                        Cancel
+                    </button>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="las la-save"></i> Add
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- ============================================
+     MODAL — EDIT CONNECTION
+     Body fetched per open, so the dialog shows what the database holds.
+     ============================================ -->
+<div class="modal fade" tabindex="-1" id="connectionModal" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content" id="connectionModalContent">
+            <div class="modal-body text-center text-muted py-4">
+                <i class="las la-spinner la-spin fs-4"></i> Loading…
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ============================================
+     MODAL — TEST RESULT
+     ============================================ -->
+<div class="modal fade" tabindex="-1" id="connectionTestModal" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header border-bottom">
+                <h5 class="modal-title"><i class="las la-vial text-primary"></i> Connection test</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="connectionTestResult">
+                <div class="text-center text-muted py-3">
+                    <i class="las la-spinner la-spin fs-4"></i> Calling…
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="/static/js/integration_connections.js"></script>
+{% endblock %}

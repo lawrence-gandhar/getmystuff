@@ -70,7 +70,12 @@ field names in this layer read as English (`tool_name`, not `tname`).
 
 **7. A multi-select must be declared.** `multi_fields = ("table_names",)` on the
 schema. Read as a single value, a query built against four tables silently becomes
-a query against one.
+a query against one. Both `ToolConfigCreateRequest` and `SqlAssistEchoMixin` declare
+it for that field.
+
+Where the *order* of a multi-select carries meaning, say so and never sort it. A tool
+config's first table is its primary one — the base table a built query's joins hang
+off — so `table_names` is filtered for blanks and de-duplicated, never reordered.
 
 **8. Files are not schema-validated.** A file part is a stream, not a value.
 `form_to_dict` drops upload parts, and routes read them with
@@ -94,6 +99,7 @@ app/schemas/
 ├── datasource/
 ├── deep_agents/
 ├── flow_builder/
+├── query_test/
 ├── sql_assist/
 ├── tool_configs/
 └── workspaces/
@@ -290,14 +296,34 @@ be the one nobody checks against the copy that runs at query time.
 | Schema | Fields |
 |---|---|
 | `ToolConfigFilterMixin` | `agent_filter` |
-| `ToolConfigCreateRequest` | + `data_agent_id`, `datasource_id`, `tool_name` (identifier), `table_name` (object name), `description`, `query_mode` (`builder`/`sql`, blank means builder), `config_json`, `sql_query` (≤20000) |
+| `ToolConfigCreateRequest` | + `data_agent_id`, `datasource_id`, `tool_name` (identifier), `table_names[]` (object names, ≤`MAX_REFLECTED_TABLES`, at least one — primary first), `description`, `query_mode` (`builder`/`sql`, blank means builder), `config_json`, `sql_query` (≤20000), `children_json` (≤`MAX_NESTED_TOOLS`), `sql_params_json` (≤`MAX_SQL_PARAMS`) |
 | `ToolConfigUpdateRequest` | same as create |
 | `ToolConfigSetEnabledRequest` | + `is_enabled` |
 | `ToolConfigDeleteRequest` | filter only |
 | `ToolConfigListQuery` | `agent` |
-| `SchemaCascadeQuery` | `datasource_id`, `table_name`; `.table` exposes a string so `None` never reaches a service as `"None"` |
-| `ToolConfigView` | `uuid`, `tool_name`, `table_name`, `description`, `query_mode`, `is_enabled`, `agent_id`/`agent_name`, `datasource_id`/`datasource_name`, `config`, `sql_query`, `preview` |
+| `SchemaCascadeQuery` | `datasource_id`, `exclude`, `table_name`, `table_names[]`; `.table` exposes a string so `None` never reaches a service as `"None"`, and `.tables` the whole list (falling back to the single value) |
+| `ToolConfigView` | `uuid`, `tool_name`, `table_name`, `extra_tables[]` and `sql_params[]` (`NULL` coerced to `[]`, so a row predating either column validates), `description`, `query_mode`, `is_enabled`, `agent_id`/`agent_name`, `datasource_id`/`datasource_name`, `config`, `sql_query`, `preview` |
 | `TableColumnsResponse` | `table_name`, `columns`, `error`; `.failure()` reports a connection error in the payload so the join builder shows it beside the row instead of the offcanvas being replaced mid-edit |
+| `ChildToolOption` | `uuid`, `tool_name`, `query_mode`, `columns[]` — one tool the Nested Tools picker may offer. `columns` is empty when the tool's output cannot be known without running it (a SQL tool, or a builder tool selecting everything), and the form then takes a typed name |
+| `ChildToolOptionsResponse` | `tools[]`, `error`; the body of `GET /tool-configs/child-options` |
+
+`children_json` is the tools this one embeds — `[{"child_id", "child_column",
+"parent_reference", "binding_mode", "value_alias"}]` — from the Nested Tools card. A
+JSON array rather than repeated form keys for the same reason `config_json` is one
+object: five parallel controls could arrive at different lengths, and a row would then
+pair the wrong column with the wrong tool. The schema checks the shape and the count;
+whether a tool *may* be embedded — same owner, same datasource, enabled, not a cycle,
+within the depth caps — and whether its binding mode makes sense for the parent's
+statement is `tool_chain_service.validated_children`, which is the only layer that can
+see the other tools. See [TOOL_CHAINING.md](TOOL_CHAINING.md) and
+[TOOL_CHAIN_ITERATION.md](TOOL_CHAIN_ITERATION.md).
+
+`sql_params_json` is the same division for the values a SQL-mode statement asks the
+assistant for — `[{"param", "type", "required", "description"}]`. Bounded here;
+whether each name actually appears as a `:placeholder` in the statement, and whether
+the type is one this application can coerce to, is
+`tool_config_service.validated_sql_params`, which has the statement in hand and this
+schema does not.
 
 `data_agent_id` and `datasource_id` are optional *here* and required by the
 service, where "required" and "you don't own that" are the same query — splitting
@@ -397,7 +423,7 @@ tampered value is just another value the services validate.
 | `SqlAssistTablesQuery` | `datasource_id` |
 | `SqlAssistGenerateRequest` | + `prompt` (≤2000), `history_json` |
 | `SqlAssistToolFormRequest` | + `sql` (≤20000), `history_json` |
-| `SqlAssistCreateToolRequest` | + `data_agent_id`, `tool_name`, `table_name`, `description`, `query_mode`, `config_json`, `sql_query`, `preview` |
+| `SqlAssistCreateToolRequest` | + `data_agent_id`, `tool_name`, `description`, `query_mode`, `config_json`, `sql_query`, `preview`; the tables are the mixin's `table_names[]`, primary first |
 
 `.echo()` returns strings deliberately: the partials put these into hidden inputs,
 and a `None` would render as the text "None" and be posted back as a selection on
@@ -407,12 +433,149 @@ bounded but not pattern-checked — whether it is safe to run is decided by
 `sql_assist_service` against the reflected schema, and a regex over SQL would be a
 false reassurance.
 
+### query_test — `app/schemas/query_test/query_test_schemas.py`
+
+One endpoint, two callers: the Tool Configs form and the Ask AI panel both post the
+form they are holding to `/query-test` and swap the same verdict partial in. See
+[QUERY_TEST.md](QUERY_TEST.md).
+
+| Schema | Fields | Rules |
+|---|---|---|
+| `QueryTestRequest` | `datasource_id`, `table_names[]` (≤`MAX_REFLECTED_TABLES`), `query_mode`, `config_json`, `sql_query` (≤20000), `children_json` | deliberately the same fields the *save* posts, so the query that is tested is the query that will be stored — nested tools included, since testing a chained tool without its chain tests a different query. `query_mode` blank means `builder`, matching the form's default; an unknown mode is refused here |
+| `QueryTestResponse` | `passed`, `message`, `columns[]`, `row_count` | what the partial renders. **No row values** — a passing test needs a row fetched, not displayed, and in the Ask AI panel showing one would break the promise that the panel never displays data |
+
+The request arrives via `hx-include`, so it carries the rest of whichever form sent
+it — the tool name, the description, the agent. Those are ignored (`extra="ignore"`
+on every request schema), which is what lets one endpoint serve two panels without
+either building a payload by hand. `table_names` is in `multi_fields` for the usual
+reason, with an extra edge to it here: a test that silently covered one of four
+tables would report a pass for a query that has not been tested.
+
+Nothing here judges the query. The references inside `config_json` are checked by
+`tool_config_service.validated_query_config` (which has the reflected schema in
+hand), the statement by `validated_tool_sql`, and whether it *runs* is the
+database's answer — which is the whole point of the feature.
+
+### tool_graphs — `app/schemas/tool_graphs/tool_graph_schemas.py`
+
+One selection in, two drawings out. The read-only canvas over tool chains and their
+joins — see [TOOL_GRAPHS.md](TOOL_GRAPHS.md).
+
+| Schema | Fields | Rules |
+|---|---|---|
+| `ToolGraphQuery` | `workspace`, `agent`, `tool` | all optional, and all three may arrive together: the page keeps the branch above a selection expanded and a deep link can carry the whole path, so the *service* picks the most specific rather than the schema refusing the combination. Nothing selected is not an error — it is the state the page opens in |
+| `ToolGraphNode` | `key`, `kind`, `label`, `datasource`, `query_mode`, `is_enabled`, `agent_name`, `layer`, `row` | `key` is a tool's public uuid or the literal `start`/`end`; **no internal id is ever on the wire**, which is what lets a node be clicked back into a Tool Configs link. `layer`/`row` are the computed position as plain integers — see below |
+| `ToolGraphEdge` | `source`, `target`, `kind`, `label` | `label` is `child_column → parent_reference`, empty on the `START`/`END` connectors, which carry nothing |
+| `ToolGraphResponse` | `scope_label`, `nodes[]`, `edges[]`, `error` | `.failure(message)` for an empty canvas plus the reason |
+| `JoinView` | `type`, `type_label`, `left_table`, `left_column`, `table`, `right_column` | `type` picks the shaded region, `type_label` is the SQL keyword it stands for |
+| `ToolJoinsView` | `tool_uuid`, `tool_name`, `query_mode`, `base_table`, `tables[]`, `joins[]`, `note` | `note` is filled exactly when `joins` is empty, and the two empty cases are different sentences: a builder query over one table has nothing to intersect, a SQL tool has a statement this application does not parse |
+| `ToolJoinsResponse` | `scope_label`, `tools[]`, `error` | `.failure(message)` |
+
+One query schema for both endpoints, deliberately. The toggle above the canvas
+changes how a selection is drawn and never what is drawn, so two schemas that parsed
+the selection differently could put two different sets of tools under one heading.
+
+`layer` and `row` are positions computed by `tool_graph_service`, not pixels. Layout
+is the part of a drawing that can be wrong without looking wrong, and keeping it on
+the Python side is what makes it assertable — there is no JavaScript test harness in
+this repository.
+
+Both endpoints return **200 with `error` set** rather than raising, including for a
+malformed uuid: the canvas is a panel inside a page the user is clicking through, and
+one failure path that swapped in an error page would be the surprising one.
+`ChildToolOptionsResponse` answers the same way.
+
+### graph_designer — `app/schemas/graph_designer/graph_designer_schemas.py`
+
+The authored canvas, its runs and its log — see
+[GRAPH_DESIGNER.md](GRAPH_DESIGNER.md).
+
+| Schema | Fields | Rules |
+|---|---|---|
+| `GraphCreateRequest` / `GraphRenameRequest` | `name`, `description` | the description is editable from both, because it is what a model reads when the graph is attached to an agent — a property of the graph rather than of the drawing |
+| `GraphSetActiveRequest` | `is_active` | publishing validates the drawing; the toggle can therefore be refused |
+| `GraphAttachRequest` | `data_agent_id` | optional — blank means detach, and unattached is the ordinary state |
+| `GraphSaveRequest` | `nodes[]`, `edges[]` | `extra="allow"`, so a viewport or a dock height the canvas carries survives. **No node or edge ceiling** — see below |
+| `GraphRunRequest` | `scope`, `node_ids[]`, `inputs` | ids are trimmed and de-duplicated (selecting a node twice is a click, not an instruction to run it twice); `selection()` returns `None` for a full run and a list for a selection, because the run row's nullable column means *everything* versus *exactly these* |
+| `GraphResumeRequest` | `answer` | untyped beyond a length cap: what a valid answer *is* depends on the node's `expects`, which only the service holds |
+| `GraphView` | `uuid`, `name`, `description`, `is_active`, `node_count`, `edge_count`, `agent_id`, `agent_name`, `updated_at` | the counts come from the stored document — two `len()` calls over JSON already in memory |
+| `GraphRunStepView` | `sequence`, `node_id`, `node_type`, `node_label`, `iteration`, `status`, `duration_ms`, `message`, `output_preview`, `state_preview` | every preview is **already capped** by the service before the row was written, so this declares the contract rather than trimming anything |
+| `GraphRunView` | `status`, `scope`, `selected_nodes[]`, `interrupt_payload`, `result_preview`, `error_message`, `steps[]` | one shape for the SSE frame **and** the polling body, so a client that lost its stream does not have to understand a second payload. Every frame is a whole state, never a delta |
+| `GraphNodeOptionsResponse` | `datasources[]`, `tool_configs[]`, `data_agents[]`, `human_expects[]`, `error` | `.failure(message)` — a 200 with the reason, the contract `ChildToolOptionsResponse` established |
+| `GraphSaveResponse` | `saved`, `message`, `node_count`, `edge_count` | `saved` is what the canvas keys its dirty flag off, carrying the same `data-success` values `flow_builder.js` already reads |
+| `GraphRunStartedResponse` | `run`, `events_url`, `status_url` | both URLs are **relative paths**. An absolute URL built server-side is what goes stale when a tunnel rotates — see the note in [DOWNLOADER_AGENTS.md](DOWNLOADER_AGENTS.md) about `API_BASE + url` |
+
+**The node vocabulary is deliberately not pinned here.** `graph_service.validate_graph`
+owns it, because that is the version the compiler and the runners read a graph through, and
+declaring the node types in two places would mean two edits every time one is added. So
+`GraphSaveRequest` checks only what can be decided without the vocabulary: the body is a
+JSON object carrying two collections.
+
+**And there is no node or edge cap**, which is the one place this package deliberately
+differs from `flow_builder`'s. `FlowGraphSaveRequest` bounds a conversation flow at 500
+nodes because a flow that large is a runaway client; a data pipeline is not. What bounds a
+*run* is the per-loop iteration ceiling in `graph_compiler` — a bound on work rather than on
+drawing, and the one that actually protects anything.
+
 ### deep_agents — `app/schemas/deep_agents/deep_agent_schemas.py`
 
 | Schema | Fields | Rules |
 |---|---|---|
 | `AgentOptionsQuery` | `workspace_id`, `selected`, `field_name`, `required` | a blank `workspace_id` lists **every** agent, not none — `data_agents.workspace_id` is nullable, so an unassigned agent has to stay pickable. `.select_name` falls back to `data_agent_id`. `required` drops the "no agent" option for a host that cannot accept one, and must ride through the cascade URL or it would come back on the first workspace change |
 | `DeepAgentAskRequest` | `question` | required, ≤2000 — the same cap Ask AI and AI Analytics use, so a person typing into a console and a person typing into a prompt box don't hit two different limits |
+| `AgentAskStreamQuery` | `question` | the same question and the same cap, off the **query string**: `EventSource` can only issue a GET, so the streaming console endpoint cannot take a form body. A separate class rather than a shared one because the source genuinely differs, and `QueryRequest` requires every field to default — so the empty case is caught by `min_length` rather than by absence |
+
+---
+
+### downloader_agents — `app/schemas/downloader_agents/downloader_agent_schemas.py`
+
+The one place in this application where a **language model** supplies a request payload.
+That is why the tool-argument classes are here and not inline in the tool factory: a model
+is exactly as untrusted as a browser — it invents uuids, proposes formats that do not
+exist, and passes the word "latest" — so its arguments go through the schema layer with
+every other request. See [DOWNLOADER_AGENTS.md](DOWNLOADER_AGENTS.md).
+
+Their field `description=` text is part of the prompt the model reads, which is why it is
+written as instructions to a reader rather than as notes to a developer.
+
+| Schema | Fields | Rules |
+|---|---|---|
+| `ConfirmDownloadArgs` | `export_id`, `file_format` | both default, so a model calling the tool with `{}` still produces a valid request — the common case, where the user said "yes" and nothing else. `wants_latest()` recognises `""`/`latest`/`last`/`previous`/`recent`/`none`, because that is what a model that did not keep the id actually sends. `file_format` maps the near-misses that unambiguously mean one of ours (`xlsx`/`excel`/`spreadsheet`/`sheet` → `xls`, `pq` → `parquet`) and refuses anything else **by name**: silently writing a CSV for someone who asked for Parquet is worse than saying no |
+| `DownloadStatusArgs` | `export_id` | same defaulting and the same `wants_latest()`. A user asking "is it ready yet?" has given the model nothing to identify the export with |
+| `PublicDownloadQuery` | `key`, `session_token` | both optional here and both **required by the route** — this pair *is* the authorisation on an unauthenticated path, and a key without a token would let any visitor of a public widget read every export ever produced for it. Blank arrives as `None` rather than `""` so that check reads clearly |
+| `DownloadExportView` | `uuid`, `status`, `file_format`, `file_name`, `total_rows`, `count_is_lower_bound`, `part_count`, `rows_written`, `byte_size`, `error_message`, `created_at`, `expires_at`, `download_url` | `download_url` is **not** a column: the same export is reachable at two prefixes depending on who is asking, so `.of(export, url)` takes it and this schema only carries it. `None` until the export is ready, which makes "is there a link yet?" a question about the payload |
+| `DownloadProgressEvent` | `event`, `export_id`, `status`, `part`, `of`, `attempt`, `rows_written`, `total_rows`, `message`, `download_url`, `file_name`, `byte_size` | one per completed batch, so deliberately flat and small — an export of a hundred thousand records emits two thousand of them. `event` is the SSE event name *and* a field, from one value, so a browser switching on `event.type` and one reading the payload cannot disagree. The four names are class constants (`PROGRESS`/`RETRY`/`READY`/`FAILED`) so the route and the tests spell them once. `file_name` and `byte_size` are set on the `ready` frame only, because that is when they first exist — a client watching since the build was queued has never seen either, and without them renders a finished file as an unnamed one of unknown size |
+| `DownloadNoticeView` | `uuid`, `status`, `file_format`, `file_name`, `total_rows`, `rows_written`, `byte_size`, `error_message`, `download_url`, `progress_url`, `status_url` | the export **one reply is about**, serialised into `ChatbotTurnResponse.download` so the widget can draw a real download button and a live progress bar instead of leaving the model to write a URL into prose that renders as plain text. Smaller than `DownloadExportView` and different in kind: that one answers "tell me everything about this export" for a status call, this one answers "what goes under this message?" — which is why it carries `progress_url` and `status_url`, the two a status call has no use for. All three URLs are supplied rather than derived, and all three carry the asker's own scope |
+
+`ChatbotTurnResponse.download` holds that payload as a plain `dict`, for the same reason
+`table` does: so the chatbot schemas need not import another feature's package. It is
+`None` on the overwhelming majority of turns and the widget renders nothing when it is.
+
+---
+
+### agent_recursive_dataframes — `app/schemas/agent_recursive_dataframes/aggregate_schemas.py`
+
+The second place a language model supplies a request payload, and the first where it
+supplies a whole *plan* rather than a few arguments. `AggregationPlan` is the structured
+output of an LLM call, which makes it a request however it arrives: a model naming a column
+that does not exist is the expected case here, not the exceptional one. See
+[AGENT_RECURSIVE_DATAFRAMES.md](AGENT_RECURSIVE_DATAFRAMES.md).
+
+The division of labour is worth stating, because neither half is sufficient alone: **the
+schema bounds the shape, the planner bounds the meaning**. Pydantic can say "at most four
+group columns" but not "`regoin` is not a column this tool returns" — and only one of those
+is the mistake a model actually makes. So the column names are checked in
+`aggregate_planner.validate_plan`, against what `probe_tool_query` says the tool really
+returns.
+
+| Schema | Fields | Rules |
+|---|---|---|
+| `PlannedAggregation` | `type`, `column`, `alias` | `type` is refused here for anything without an exact partial fold, and the rule is *asked of* `partial_algebra.unsupported_function` rather than restated — this layer knows a median is unavailable, not why. `column` defaults blank because `count` alone is meaningful and `count(col)` is a different question. `alias` is optional because it is **assigned by the planner, never taken from the model**: an alias is an output column name, and one colliding with a group key would silently overwrite it |
+| `AggregationPlan` | `group_by`, `aggregations`, `filters`, `mode`, `unsupported`, `reason` | caps of 4 group columns and 8 measures, enforced by `max_length` rather than by a validator. Repeating a group column is refused: not a mistake a person makes, but one a model makes, and it would leave the sort order and the carried field names both depending on which copy is read. `unsupported` is how the model **declines** — given a request it cannot express and no way to say so, a model will produce a plan that is shaped right and answers a different question, which is the worst available outcome. `aggregations` may be **empty when `filters` is not**: that asks for the matching records themselves rather than numbers over them, and `mode` records which of the two the planner decided so nothing downstream has to infer it from an empty list. `mode` is assigned by the planner, never taken from the model — the same rule an alias follows |
+| `PlannedFilter` | `column`, `part`, `operator`, `value`, `values` | **Every value is a `str`, and that is imposed from outside.** This schema is sent to a provider as `response_format`, and a field typed `Any` renders as an empty schema `{}` which a strict validator rejects outright — `400 Unsupported JSON schema fields in schema with keys: dict_keys([])`, which was Cerebras refusing every planning call the moment filters existed. A union would render as `anyOf` and is refused by several validators too, so one concrete type is the only shape that travels everywhere. Safe because the value is coerced against the **column's real dtype** in `frame_ops._coerced` and refused with the column named when it cannot be — which is better than trusting the model's JSON types anyway. `value` and `values` are two fields because a model handed one for both puts a single-element list where a scalar belongs about half the time, and `in: 5` then cannot be told from a typo; `""` therefore means *no value given*, and emptiness is asked for with `is_null`. `part` is what makes "in March" expressible without the model doing month-boundary arithmetic |
+| `AggregateRecordsArgs` | `instruction`, `tool_name` | the agent tool's `args_schema`. `tool_name` is optional and, when given and resolvable, is what makes the common case cost no LLM call at all — the routing prompt already lists every tool by name. The `description=` text is part of the prompt the model reads, so it is written as instructions to a reader |
+| `AggregateRunRequest` | `agent_id`, `tool_id`, `instruction` | the console form. `tool_id` is optional and blank means "let the instruction decide", which is what the agent does when it calls this itself |
+| `AggregationResultView` | `tool_name`, `tool_id`, `datasource_name`, `summary`, `columns`, `rows`, `group_count`, `records_read`, `total_records` | `group_count` is separate from `len(rows)` deliberately and is the number that must be reported: the rows are capped at the tool row limit and the group count is not, so 200 rows out of 4,821 groups has to say so rather than reading as the whole answer. `.is_capped` decides that in one place instead of leaving a comparison written into the markup |
 
 ---
 

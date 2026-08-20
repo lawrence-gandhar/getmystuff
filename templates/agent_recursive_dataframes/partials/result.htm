@@ -1,0 +1,70 @@
+{# One finished run, swapped into #aggregationResult.
+
+   `group_count` is shown separately from the number of rows on purpose: the rows
+   are capped and the group count is not, so a run that found more groups than it is
+   showing has to say so. A table that stops at 200 with nothing saying why reads as
+   the whole answer. #}
+<div class="card shadow-sm">
+    <div class="card-body">
+
+        <h6 class="fw-semibold mb-1">
+            <i class="las la-check-circle text-success"></i> {{ result.summary }}
+        </h6>
+        <p class="text-muted small mb-3">
+            Calculated over all {{ "{:,}".format(result.records_read) }} record(s)
+            from <strong>{{ result.tool_name }}</strong>{% if result.datasource_name %}
+            in {{ result.datasource_name }}{% endif %}.
+        </p>
+
+        {% if not result.rows %}
+        <div class="alert alert-info py-2 small mb-0">
+            This tool returned no records, so there was nothing to group.
+        </div>
+        {% else %}
+
+        {% if result.is_capped %}
+        <div class="alert alert-warning py-2 small">
+            Showing {{ result.rows | length }} of
+            {{ "{:,}".format(result.group_count) }} groups, largest first. The
+            figures in each row are totals over every record, not over a sample.
+        </div>
+        {% endif %}
+
+        {# Its own scroll container: a wide result must not make the page scroll
+           sideways. #}
+        <div class="table-responsive">
+            <table class="table table-sm table-striped align-middle mb-0">
+                <thead>
+                    <tr>
+                        {% for column in result.columns %}
+                        <th scope="col" class="small text-nowrap">{{ column }}</th>
+                        {% endfor %}
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in result.rows %}
+                    <tr>
+                        {% for column in result.columns %}
+                        <td class="small text-nowrap">
+                            {%- if row[column] is none -%}
+                            {# NULL is not zero and not blank: a group with no values
+                               is a different fact from one that summed to nothing. #}
+                            <span class="text-muted fst-italic">no value</span>
+                            {%- else -%}
+                            {{ row[column] }}
+                            {%- endif -%}
+                        </td>
+                        {% endfor %}
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="text-muted small mt-2">
+            {{ "{:,}".format(result.group_count) }} group(s) in total.
+        </div>
+        {% endif %}
+
+    </div>
+</div>

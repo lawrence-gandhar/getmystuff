@@ -39,6 +39,18 @@
             >
                 <i class="las la-plus"></i> New Tool Config
             </button>
+            {# A new tab rather than an offcanvas: the help page is read *while*
+               filling the form in, so it must not be the thing covering it. Plain
+               anchor — nothing here is fetched by HTMX. #}
+            <a
+                class="btn btn-outline-secondary btn-sm"
+                href="/tool-configs/help"
+                target="_blank"
+                rel="noopener"
+                title="Every field explained, with a worked example per scenario"
+            >
+                <i class="las la-question-circle"></i> Help
+            </a>
         </div>
     </div>
 
@@ -95,5 +107,8 @@
 {% include "sql_assist/panel.htm" %}
 
 <script src="/static/js/tool_configs.js"></script>
+{# The Nested Tools card. Separate from tool_configs.js because it edits the
+   relationship between tools rather than the columns of one query. #}
+<script src="/static/js/tool_chain.js"></script>
 <script src="/static/js/sql_assist.js"></script>
 {% endblock %}

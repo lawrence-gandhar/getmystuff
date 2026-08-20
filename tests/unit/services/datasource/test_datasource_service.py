@@ -1030,6 +1030,20 @@ class TestToggleTableStatus:
             "active",
         ]
 
+    async def test_an_unconfigured_table_still_reads_as_active(
+        self, db, user, make_datasource  # noqa: ANN001
+    ) -> None:
+        """Regression guard on the shared status helper: the Data Sources listing has
+        to keep treating a table with no stored entry as active, or every datasource
+        created before metadata collection worked would list nothing."""
+        datasource = await make_datasource(user, "sales_data", configuration_data={})
+
+        result = await svc.toggle_table_status_service(
+            db, datasource.uuid, user.id, "orders", "active"
+        )
+
+        assert result["status"] == "active"
+
     async def test_cascade_survives_a_table_with_no_stored_columns(
         self, db, user, make_datasource  # noqa: ANN001
     ) -> None:

@@ -42,6 +42,27 @@ _MAX_TOKENS = 4096
 # a different tool on a retry.
 _TEMPERATURE = 0.0
 
+# How many times the provider SDK retries a 429 before giving up, with its own
+# exponential backoff between attempts.
+#
+# Both SDKs default to 2, which is sized for a provider that rate-limits *per key*:
+# two quick retries and you are past your own burst. It is not enough for a gateway
+# that queues under load and answers `queue_exceeded` — Cerebras and the other
+# OpenAI-compatible hosts do this, and the queue takes seconds to drain, not
+# milliseconds. `ai_analytics_service._with_rate_limit_retry` was added for exactly
+# that; this is the same decision at the layer a Deep Agent needs it.
+#
+# **The retry has to live here, on the client, and not around the graph.** A Deep
+# Agent turn is a loop — call a tool, read the rows, answer — so re-running
+# `deep_agent.ainvoke` on a 429 would re-execute every tool call that had already
+# succeeded, which means running the user's SQL again for a failure that happened
+# after it. Retrying one HTTP call retries one HTTP call.
+#
+# The ceiling on all of this is the turn timeout, which is unchanged: a turn that
+# spends its whole budget waiting on a queue still ends at _VISITOR_TURN_TIMEOUT_SECONDS
+# with the "took too long" message rather than hanging.
+MAX_RETRIES = 4
+
 
 async def build_chat_model(
     db: AsyncSession,
@@ -69,6 +90,7 @@ async def build_chat_model(
             api_key=api_key,
             max_tokens=_MAX_TOKENS,
             temperature=_TEMPERATURE,
+            max_retries=MAX_RETRIES,
         )
 
     # "openai" and "other" (Cerebras, Groq, Together, self-hosted, ...) both speak
@@ -89,6 +111,7 @@ async def build_chat_model(
         base_url=base_url or None,
         max_tokens=_MAX_TOKENS,
         temperature=_TEMPERATURE,
+        max_retries=MAX_RETRIES,
     )
 
 

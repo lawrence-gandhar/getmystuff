@@ -17,6 +17,7 @@ from app.schemas.flow_builder import (
 )
 from app.services.ai_settings import ai_settings_service
 from app.services.flow_builder import flow_service
+from app.services.graph_designer import graph_service
 
 _JSON = "application/json"
 _ROWS_TEMPLATE = "flow_builder/flow_rows.htm"
@@ -67,6 +68,15 @@ class FlowBuilderController(Controller):
             {"id": str(key.uuid), "label": key.label, "provider": key.provider_display}
             for key in ai_api_keys
         ]
+        # The published graphs a Run-Graph node may pick. Only published ones: an
+        # unpublished graph fails the run, and offering it would be offering a choice
+        # that cannot work. Drafts are not flagged-and-offered here the way an inactive
+        # datasource is elsewhere, because the fix is on another page entirely.
+        graphs_json = [
+            {"id": view["uuid"], "label": view["name"]}
+            for view in await graph_service.get_graph_views(db, user.id)
+            if view.get("is_active")
+        ]
         return Template(
             template_name="flow_builder/canvas.htm",
             context={
@@ -74,6 +84,7 @@ class FlowBuilderController(Controller):
                 "flow": flow,
                 "graph_data_json": json.dumps(flow.graph_data),
                 "ai_api_keys_json": json.dumps(ai_api_keys_json),
+                "graphs_json": json.dumps(graphs_json),
                 "active": "flow_builder",
             },
         )

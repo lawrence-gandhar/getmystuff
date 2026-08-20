@@ -14,7 +14,8 @@
 
         <p class="small mb-3">
             <code>{{ tool_config.tool_name }}</code> is saved and enabled. It reads
-            <code>{{ tool_config.table_name }}</code>.
+            <code>{{ tool_config.table_name }}</code>{% for name in tool_config.extra_tables or [] %},
+            <code>{{ name }}</code>{% endfor %}.
         </p>
 
         <div class="d-flex flex-wrap gap-2">

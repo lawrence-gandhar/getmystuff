@@ -189,3 +189,238 @@ class TestVisitorFacingMessagesStaySafe:
             )
             == 1
         )
+
+
+@pytest.fixture(scope="module")
+def card(script: str) -> str:
+    """
+    Just the download card's JavaScript.
+
+    Anchored on ``WORKING_WORDS`` rather than on the section's comment header, because
+    that header's wording also opens the card's CSS — slicing on it returned the
+    stylesheet, and every assertion about the card's behaviour passed against a block
+    that contains none of it.
+    """
+    start = script.index("var WORKING_WORDS = [")
+    end = script.index("function newSessionToken")
+
+    assert start < end
+    return script[start:end]
+
+
+class TestTheDownloadCard:
+    """
+    The file a visitor asked for, from queued to clickable.
+
+    Source assertions rather than behaviour, matching the rest of this file — the card's
+    behaviour is exercised against a real browser instead. What is guarded here is the
+    handful of properties that are easy to edit away by accident and expensive to notice:
+    the card must be a real link, it must stop watching when the build ends, and it must
+    never touch the widget's input.
+    """
+
+    def test_the_card_is_rendered_from_the_turn_payload(self, script: str) -> None:
+        """Both reply paths — the blocking POST and the stream's `done` — draw it."""
+        assert script.count("renderDownloadCard(messagesEl, ") == 2
+        assert "function renderDownloadCard(container, download, cfg)" in script
+
+    def test_a_ready_export_becomes_an_anchor_and_not_a_button(
+        self, script: str,
+    ) -> None:
+        """
+        A real link, so middle-click, "save as" and keyboard Enter all work. A ``<button>``
+        with a click handler looks identical and does none of them.
+        """
+        assert 'document.createElement("a")' in script
+        assert 'link.setAttribute("download"' in script
+        assert "link.href = apiUrl(view.download_url)" in script
+
+    def test_no_url_the_card_uses_is_left_relative(self, card: str) -> None:
+        """
+        The regression this test exists for, and it failed silently in a browser.
+
+        A URL used as it arrives resolves against the *embedding page*, not against this
+        application. The anchor shipped that way once: the visitor was told "file wasn't
+        available on site" for a file that existed and was being served perfectly a
+        hostname away, because their own site had been asked for it. Nothing threw,
+        nothing was logged, and the card looked correct.
+
+        Every network URL in the card now goes through ``apiUrl()``, which passes an
+        already-absolute URL (what the server sends when SITE_URL is configured) through
+        untouched and prefixes ``API_BASE`` onto a bare path. Written as a sweep rather
+        than three fixed strings so a fourth network call cannot be added without one.
+        """
+        uses = re.findall(r"(?:new EventSource\(|fetch\(|\.href = )([^;\n]*)", card)
+
+        assert len(uses) >= 3, "expected the stream, the status poll and the download"
+        for expression in uses:
+            assert "apiUrl(" in expression, f"unresolved URL in the card: {expression}"
+
+    def test_an_absolute_url_is_not_prefixed_a_second_time(self, script: str) -> None:
+        """
+        The download URL arrives absolute whenever SITE_URL is set on the server.
+
+        Prefixing that with apiBase would produce
+        "https://api.example.com/https://api.example.com/file_downloaders/..." — a link
+        that fails in a way pointing at nothing in particular.
+        """
+        assert "function apiUrl(url)" in script
+        assert "if (/^https?:\\/\\//i.test(value)) return value;" in script
+
+    def test_the_link_is_only_drawn_once_the_artifact_exists(
+        self, script: str,
+    ) -> None:
+        """A download button for an export that is not ready is a button that 404s."""
+        assert 'if (status === "ready" && view.download_url)' in script
+
+    def test_the_progress_bar_is_a_real_fraction_and_never_reaches_full(
+        self, script: str,
+    ) -> None:
+        """A bar sitting at 100% beside "still working" is the one thing it must not
+        say, so it is capped until the artifact exists."""
+        assert "Math.round((written / total) * 100)" in script
+        assert "Math.min(99," in script
+
+    def test_the_working_words_rotate(self, script: str) -> None:
+        assert "var WORKING_WORDS = [" in script
+        assert "WORKING_WORDS[state.wordIndex % WORKING_WORDS.length]" in script
+
+    def test_every_timer_and_socket_is_released_on_a_terminal_state(
+        self, script: str,
+    ) -> None:
+        """
+        An EventSource left open is reopened by the browser forever, and the widget
+        would re-run the progress stream for a file that finished long ago.
+        """
+        assert "function settle(state)" in script
+        for teardown in (
+            "window.clearInterval(state.wordTimer)",
+            "window.clearInterval(state.pollTimer)",
+            "state.source.close()",
+        ):
+            assert teardown in script
+
+        # Reached from both endings, which is the whole point of it being one function.
+        assert script.count("settle(state);") >= 2
+
+    def test_a_dropped_progress_stream_falls_back_to_polling(
+        self, script: str,
+    ) -> None:
+        """A build can outlast one SSE connection. A card frozen by a dead socket must
+        not read as a dead build."""
+        assert "function pollStatus(state)" in script
+        assert "if (!state.settled) pollStatus(state);" in script
+
+    def test_the_card_never_touches_the_input(self, card: str) -> None:
+        """
+        "You can keep asking while it builds" is exactly this: the turn ended when the
+        reply arrived, and the build is not a turn. If the card ever disabled the input
+        or drove the typing indicator, a long export would lock the widget.
+        """
+        for forbidden in ("inputEl", "sendBtn", "typingEl", "armIdleTimer"):
+            assert forbidden not in card, f"the download card touches {forbidden}"
+
+
+class TestTheMarkdownRendererIsSafeByConstruction:
+    """
+    The structural half of the renderer's guarantee.
+
+    `test_widget_markdown.py` proves the behaviour by executing it, but needs Node and
+    skips in the app container. These assertions run everywhere, and they guard the
+    one property the whole design rests on: the escape happens *first*, before any
+    markdown pattern is examined. Parse-then-escape produces identical output for
+    every benign input and is a cross-site scripting hole, so it cannot be left to a
+    test that might be skipped.
+    """
+
+    def test_the_escape_happens_before_any_parsing(self, script: str) -> None:
+        body = script[script.index("function renderMarkdown("):]
+        body = body[:body.index("\n  }")]
+        flat = " ".join(body.split())
+
+        # The very first thing done to the input.
+        assert "var lines = escapeHtml(String(text == null ? \"\" : text))" in flat
+
+    def test_the_summary_goes_through_the_renderer(self, script: str) -> None:
+        assert "var html = renderMarkdown(result.summary" in script
+
+    def test_insights_are_escaped_before_emphasis_is_applied(self, script: str) -> None:
+        """
+        The one caller of inlineMarkdown outside renderMarkdown. Handing it raw text
+        would apply emphasis to unescaped markup — the exact ordering mistake the
+        module docstring warns about, made in the one place that looks harmless.
+        """
+        assert "inlineMarkdown(escapeHtml(i))" in script
+
+    def test_no_anchor_or_image_is_ever_constructed(self, script: str) -> None:
+        """
+        `[text](javascript:…)` is how markdown becomes script execution. Links are
+        not supported at all rather than sanitised, so there is no URL scheme check
+        to get wrong.
+        """
+        # Bounded to the renderer's own block. Slicing to the end of the file would
+        # sweep in the download card, which sets an anchor's href quite legitimately.
+        renderer = script[
+            script.index("function renderMarkdown("):script.index("function buildDom(")
+        ]
+
+        assert '"<a' not in renderer
+        assert "href" not in renderer
+        assert '"<img' not in renderer
+
+    def test_quotes_are_escaped_as_well_as_angle_brackets(self, script: str) -> None:
+        """
+        Not needed by today's callers — nothing builds an attribute from message
+        text — and kept so that the day one does, it gets a working escape rather
+        than an attribute break.
+        """
+        assert 'replace(/"/g, "&quot;")' in script
+
+
+class TestBothReplyPathsRenderMarkdown:
+    """
+    A reply must look the same whether it streamed or was posted.
+
+    The widget answers a turn two ways — an SSE stream for a data-agent chatbot,
+    a POST for everything else — and only the POST path rendered Markdown. So the
+    identical answer displayed as a table one way and as raw `**bold**` and a wall
+    of `|` characters the other, decided by which transport happened to be taken.
+
+    The model is *instructed* to write Markdown tables (prompt_builder grounding
+    rule 15), so this was not a rare shape. It is the shape of every multi-row
+    answer a data agent gives.
+    """
+
+    @pytest.fixture()
+    def paint(self, script: str) -> str:
+        """The streaming painter, which owns every frame of a streamed reply."""
+        body = script[script.index("      function paint() {"):]
+        return body[:body.index("\n      }") + 8]
+
+    def test_the_streamed_reply_goes_through_the_renderer(self, paint: str) -> None:
+        assert "renderMarkdown(answer)" in paint
+
+    def test_the_streamed_reply_is_never_painted_as_raw_text(self, paint: str) -> None:
+        """
+        The regression itself. `textContent = answer` renders correctly-formed
+        Markdown as its own source, which is what the visitor was shown.
+        """
+        assert "textContent" not in paint
+
+    def test_the_raw_answer_never_reaches_innerHTML(self, paint: str) -> None:
+        """
+        The other way to fix the above, and the one that is a cross-site scripting
+        hole: `innerHTML = answer` puts model-written text on somebody else's page
+        unescaped. Only renderMarkdown's output — escaped before it was parsed —
+        may be assigned here.
+        """
+        assert "innerHTML = answer" not in paint
+        assert "innerHTML = renderMarkdown(answer)" in paint
+
+    def test_the_final_answer_is_repainted_and_not_appended(self, script: str) -> None:
+        """
+        `done` carries the whole answer, which replaces whatever the tokens built.
+        It has to go through paint() rather than be written directly, or the last
+        frame of a streamed turn would be the one that skipped the renderer.
+        """
+        assert "if (payload.answer) { answer = payload.answer; paint(); }" in script

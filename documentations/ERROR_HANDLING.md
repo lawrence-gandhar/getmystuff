@@ -48,6 +48,33 @@ except Exception as e:
 
 ---
 
+# One rule, two exception types, one sentence
+
+Some rules are enforced in two places that owe the user different exception types. The
+per-table and per-column switches from Data Sources are the worked example: a service refuses
+with an `HTTPException` a person reads in a form, while the Deep Agents executor refuses with a
+`ToolQueryError` an agent relays to a visitor — and neither module should import the other just
+to agree on wording.
+
+The fix is to put the **message** with the rule and leave the raising to the caller.
+`app/utils/datasource_status.py` exports `NO_ACTIVE_TABLES_MESSAGE`,
+`inactive_table_message()`, `no_active_columns_message()` and `inactive_column_message()`, and
+raises nothing itself:
+
+```
+# a service, to a person filling in a form
+raise HTTPException(status_code=400, detail=inactive_table_message(table_name))
+
+# the executor, to a model that will relay it
+raise ToolQueryError(f"{inactive_table_message(name)} Tell the user the tool needs reconfiguring.")
+```
+
+A reword then lands in both at once, and the tests that pin those strings catch a change to
+either. Naming the thing that is wrong — the table, the column — is what makes the message
+actionable; "not available" is not.
+
+---
+
 # User Response Format
 
 Error response:
@@ -142,6 +169,15 @@ the console standing in for the server log:
 every non-success branch calls it; a silent one is a regression, and
 `tests/unit/services/chatbot/test_widget_script.py::test_no_failure_path_is_silent`
 fails if a `.catch` stops reporting.
+
+One failure reports **once** rather than every time: the download card's status poll,
+which runs every four seconds for as long as a file is being built. The operator still
+needs to know the card has gone blind — a frozen progress bar otherwise reads as a
+stalled export rather than a lost connection — but a poll that failed will almost
+certainly keep failing, and repeating it would bury everything else in their console.
+The rule is "no failure path is silent", not "every occurrence is printed"; a `state`
+flag is how the difference is expressed. See
+[DOWNLOADER_AGENTS.md](DOWNLOADER_AGENTS.md).
 
 `blockedRequestHint()` covers case (2) specifically, because it is the only failure
 invisible from *both* sides. It fires only when the page is HTTPS **and** `apiBase` is

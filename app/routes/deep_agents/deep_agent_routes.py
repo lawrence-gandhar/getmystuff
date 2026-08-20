@@ -11,19 +11,30 @@ Three endpoints, and each exists for a distinct reason:
   agent actually does before a visitor does. It reports which tools were called on
   every answer, which is what makes the "the model only sees tool output" claim
   something an operator can check rather than take on trust.
+* :meth:`ask_stream` is the same turn as :meth:`ask`, delivered as it happens. An agent
+  turn runs real queries and can take a long time, and a spinner that says nothing for
+  ninety seconds is indistinguishable from a hang. :meth:`ask` is kept and unchanged —
+  it is what the form falls back to, and what the tests exercise.
 """
 
+import json
 import uuid
+from typing import AsyncIterator
 
 from litestar import Controller, get, post
 from litestar.connection import Request
 from litestar.exceptions import HTTPException
-from litestar.response import Template
+from litestar.response import ServerSentEvent, Template
+from litestar.response.sse import ServerSentEventMessage
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.auth import require_auth
 from app.models.user import User
-from app.schemas.deep_agents import AgentOptionsQuery, DeepAgentAskRequest
+from app.schemas.deep_agents import (
+    AgentAskStreamQuery,
+    AgentOptionsQuery,
+    DeepAgentAskRequest,
+)
 from app.services.data_agents import data_agent_service
 from app.services.deep_agents import deep_agent_service
 
@@ -150,3 +161,47 @@ class DeepAgentController(Controller):
             template_name=_ANSWER_TEMPLATE,
             context={"question": question, **result},
         )
+
+    @get("/{agent_id:uuid}/ask-stream")
+    async def ask_stream(
+        self,
+        agent_id: uuid.UUID,
+        request: Request,
+        db: AsyncSession,
+        user: User,
+    ) -> ServerSentEvent:
+        """
+        Run one turn and stream it: which tool is running, then the answer as it lands.
+
+        A GET rather than a POST, because ``EventSource`` only issues GETs — so the
+        question travels as a query parameter and is validated by the same schema the
+        form posts through.
+
+        Ownership is checked inside the service, before the first event; a stream cannot
+        change its status code once it has started, so a refusal has to arrive as an
+        ``error`` event instead. That is why nothing here raises after the response
+        begins.
+        """
+        payload = AgentAskStreamQuery.from_query(request)
+
+        async def messages() -> AsyncIterator[ServerSentEventMessage]:
+            events = deep_agent_service.stream_answer_with_deep_agent(
+                db, user.id, agent_id, payload.question,
+            )
+
+            try:
+                async for event in events:
+                    yield ServerSentEventMessage(
+                        data=json.dumps(event, default=str),
+                        event=str(event.get("event") or "token"),
+                    )
+            except HTTPException as exc:
+                # A 404 for someone else's agent, raised before the first event. Phrased
+                # as an event because the response has already been committed as a
+                # stream.
+                yield ServerSentEventMessage(
+                    data=json.dumps({"event": "error", "message": str(exc.detail)}),
+                    event="error",
+                )
+
+        return ServerSentEvent(messages())

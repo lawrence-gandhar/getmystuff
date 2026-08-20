@@ -1,0 +1,9 @@
+{# A refused run, swapped into #aggregationResult in place of a result.
+
+   Only the result area is swapped, so the agent, the tool and the instruction are
+   all still there to be corrected — which matters here more than most places,
+   because the common refusals ("this tool has no column called that", "there are
+   too many records") are all answered by editing what was typed. #}
+<div class="alert alert-danger small mb-0">
+    <i class="las la-exclamation-circle"></i> {{ error }}
+</div>

@@ -1,0 +1,33 @@
+{# The verdict on one test run, swapped in below whichever query the user tested.
+
+   One partial for both callers — the Tool Configs builder, the SQL panel and the Ask
+   AI result all target it — because the answer to "will the database run this" cannot
+   be allowed to read differently depending on where it was asked from.
+
+   A failure is red and quotes the database rather than paraphrasing it: the person
+   reading this is the person who has to fix the query, and "Unknown column 'crm_id'
+   in 'on clause'" is the sentence that tells them where to look.
+
+   No rows are rendered, only the shape that came back. Proving the query runs needs
+   a row fetched, not a row displayed — see query_test_service. #}
+{% if passed %}
+<div class="alert alert-success small mb-0" role="status">
+    <i class="las la-check-circle"></i>
+    <strong>Query test passed.</strong> {{ message }}
+    {% if columns %}
+    <div class="mt-1">
+        Columns returned:
+        <span class="font-monospace">{{ columns | join(", ") }}</span>
+    </div>
+    {% endif %}
+</div>
+{% else %}
+<div class="alert alert-danger small mb-0" role="alert">
+    <i class="las la-times-circle"></i>
+    <strong>Query test failed.</strong> {{ message }}
+    <div class="mt-1 text-muted">
+        Fix the query above and test again — saving it now would create a tool that
+        fails the same way when an agent calls it.
+    </div>
+</div>
+{% endif %}

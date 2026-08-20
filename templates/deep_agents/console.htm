@@ -59,7 +59,22 @@
                     <i class="las la-question-circle text-primary"></i> Ask a question
                 </div>
                 <div class="card-body">
+                    {# The hx-post is the fallback and is still what runs when the
+                       browser has no EventSource, when the stream fails before it says
+                       anything, or when the script below fails to load at all.
+                       data-stream-url is what static/js/deep_agent_stream.js opens
+                       instead when it can: an agent turn runs real queries and can take
+                       a minute, and a silent spinner for that long is indistinguishable
+                       from a hang.
+
+                       Both must never run for one submit — that is two whole agent turns
+                       per question. The script stops the submit event in the capture
+                       phase, before htmx's own listener on this form sees it, and issues
+                       the POST itself through htmx.ajax when it needs the fallback. So
+                       these attributes stay exactly as htmx would use them. #}
                     <form
+                        id="deepAgentAskForm"
+                        data-stream-url="/deep-agents/{{ agent.uuid }}/ask-stream"
                         hx-post="/deep-agents/{{ agent.uuid }}/ask"
                         hx-target="#deepAgentAnswer"
                         hx-swap="innerHTML"
@@ -107,14 +122,38 @@
                         {% for tool in agent.tools %}
                         <li class="list-group-item">
                             <code class="fw-semibold">{{ tool.tool_name }}</code>
+                            {% if tool.kind == "graph" %}
+                                <span class="badge bg-info-subtle text-info-emphasis border border-info-subtle">Graph</span>
+                            {% endif %}
+                            {# Shown when on, absent when off. An operator whose agent has
+                               just said it cannot filter by month needs to be able to see
+                               which of its sources may be filtered at all. #}
+                            {% if tool.whole_result_readable %}
+                                <span class="badge bg-success-subtle text-success-emphasis border border-success-subtle"
+                                      title="This source's whole result can be read, filtered and totalled.">
+                                    <i class="las la-filter"></i> Filterable
+                                </span>
+                            {% endif %}
                             <div class="text-muted small">
                                 {{ tool.description or "No description — the agent has only the field list to route on." }}
                             </div>
-                            <div class="text-muted small">
-                                <i class="las la-database"></i>
-                                {{ tool.table_name }} in {{ tool.datasource_name }}
-                                ({{ tool.db_type | upper }})
-                            </div>
+                            {% if tool.kind == "graph" %}
+                                {# A graph has no single table or datasource: each of its
+                                   nodes holds its own. So this line describes the drawing
+                                   instead — and says when the agent may be asked
+                                   something mid-answer, which no tool config ever does. #}
+                                <div class="text-muted small">
+                                    <i class="las la-project-diagram"></i>
+                                    A designed graph, {{ tool.node_count }} node{{ "" if tool.node_count == 1 else "s" }}
+                                    {%- if tool.asks_questions %}, and it can stop to ask a question{% endif %}
+                                </div>
+                            {% else %}
+                                <div class="text-muted small">
+                                    <i class="las la-database"></i>
+                                    {{ tool.table_name }} in {{ tool.datasource_name }}
+                                    ({{ tool.db_type | upper }})
+                                </div>
+                            {% endif %}
                         </li>
                         {% endfor %}
                     </ul>
@@ -139,6 +178,27 @@
                         arguments, so the model chooses <em>which</em> tool to call, never what
                         it queries.
                     </p>
+                    {# The paragraph above stops being the whole truth once a source is
+                       marked Filterable, and saying only the first half is what leaves an
+                       operator unable to explain why the agent refused to filter by month.
+                       The query is still fixed; what changed is that the records it returns
+                       can be narrowed afterwards. #}
+                    {% if agent.has_readable_tools %}
+                    <p class="mb-2">
+                        A source marked <strong>Filterable</strong> is the exception worth
+                        knowing: its query is still fixed, but the model may ask for every
+                        record it returns to be read and then <em>narrowed or totalled</em> —
+                        one month, one department, a total per group. So it can answer
+                        conditions the query itself takes no parameter for.
+                    </p>
+                    {% else %}
+                    <p class="mb-2">
+                        No source here allows its <strong>whole result</strong> to be read, so
+                        the model can only work from the rows a tool returns. If it says it
+                        cannot filter by month or total across everything, that is why &mdash;
+                        switch it on for a source to change that.
+                    </p>
+                    {% endif %}
                     <p class="mb-2">
                         Every answer below lists the tools it called. An answer with figures and
                         no tool call would mean the model invented them.
@@ -159,4 +219,8 @@
         </div>
     </div>
 </div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="/static/js/deep_agent_stream.js"></script>
 {% endblock %}

@@ -76,10 +76,50 @@ Pinned versions currently installed:
 deepagents 0.7.1     langgraph 1.2.10      langchain-core 1.5.3
 langchain-anthropic 1.5.3    langchain-openai 1.4.1    langchain-ollama 1.1.0
 litestar 2.21.1      SQLAlchemy 2.0.51     alembic 1.18.5
+langgraph-checkpoint-postgres 3.1.1        psycopg 3.3.4
 ```
 
 `alembic` was added to `requirements.txt` — it was an implicit dev-installed dependency
 before, despite ten revisions being in the repo.
+
+### The second PostgreSQL driver, and why
+
+`langgraph-checkpoint-postgres` brings **psycopg 3** into an application that otherwise
+talks to PostgreSQL through asyncpg. That is deliberate, and it is the only reason psycopg
+is here.
+
+Downloader Agents pauses a LangGraph run on an `interrupt()` while it asks the user whether
+they want a file, and that pause has to survive the gap between two chat turns *and* be
+resumable from the queue worker rather than from the request that created it. So the
+checkpoint store has to be the database. `AsyncPostgresSaver` is langgraph's own store and
+it is built on psycopg 3 — it cannot use the asyncpg engine. The alternative was writing a
+checkpointer over the existing SQLAlchemy session: roughly two hundred lines of
+`aput`/`aget_tuple`/`alist`/`aput_writes` that we would own and have to keep correct against
+langgraph's protocol. A second driver against the same database is the cheaper honesty.
+
+Only `app/services/downloader_agents/base/checkpointer.py` imports it. Its pool is two
+connections at most, because it serves checkpoint writes rather than traffic, and it falls
+back to langgraph's in-memory saver whenever `DATABASE_URL` is not PostgreSQL — which is
+what keeps the `sqlite+aiosqlite` test suite working. The choice is made from the DSN rather
+than from a setting, so you cannot end up on the in-memory saver while pointed at a real
+database.
+
+langgraph creates its own tables (`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`,
+`checkpoint_migrations`) through its own `setup()`, not through Alembic — the schema belongs
+to langgraph and changes when langgraph changes. `alembic/env.py` excludes them from
+autogenerate for that reason; see [MIGRATIONS.md](MIGRATIONS.md).
+
+### Where generated exports live
+
+`uploads:/app/uploads` is a named volume, and worth knowing about because it is **not**
+where datasource uploads actually go. `file_utils.UPLOAD_BASE` is `app/uploads`, which
+resolves to `/app/app/uploads` — inside the `.:/app` bind mount, i.e. the host's source
+tree. So the named volume was unused.
+
+Generated exports must survive a rebuild, so `EXPORT_BASE` is `uploads/exports` —
+`/app/uploads/exports`, the volume itself. Deliberately not under `static/` either, which
+`main.py` serves with no authentication at all. See
+[DOWNLOADER_AGENTS.md](DOWNLOADER_AGENTS.md).
 
 ---
 
@@ -93,9 +133,11 @@ Getting to 3.11+ was the trigger, but the container solves four problems at once
    RC interpreter, no dependency on a CPython download succeeding on this network.
 3. **Postgres arrives correctly configured.** The image is `pgvector/pgvector:pg16`,
    not plain postgres, because `knowledge_chunks` stores 768-dim embeddings in a
-   `vector` column. `docker/postgres-init.sql` creates the extension on first boot —
-   necessary because `main.py`'s `create_all` runs *before* any migration and would
-   otherwise fail on that column.
+   `vector` column. `docker/postgres-init.sql` creates the extension on first boot.
+   That was load-bearing while startup ran `create_all`, which never issued
+   `CREATE EXTENSION` and so failed on that column; now that startup runs
+   `alembic upgrade head` and revision `a3f5c9d21b47` creates the extension itself, it
+   is belt-and-braces. See [MIGRATIONS.md](MIGRATIONS.md).
 4. **Ollama is versioned with the app** rather than being whatever the host happens to
    have installed.
 
@@ -134,8 +176,8 @@ over the image's 3.12 `site-packages` would shadow every installed package.
 | `db` | `pgvector/pgvector:pg16` | **5433** | 5433 so it cannot collide with a local postgres on 5432 |
 | `ollama` | `ollama/ollama:latest` | 11435 | Own model volume — see below |
 
-`db` has a `pg_isready` healthcheck and `app` waits on it, because `on_startup` runs
-`create_all` immediately and would otherwise race the database.
+`db` has a `pg_isready` healthcheck and `app` waits on it, because `on_startup` migrates
+the schema immediately and would otherwise race the database.
 
 ---
 
@@ -337,22 +379,27 @@ Including the dead ends, because they are the evidence for the decisions above.
 
 ```bash
 docker compose up --build          # app :8003, postgres :5433, ollama :11435
-docker compose exec app alembic upgrade head
 docker compose logs -f app
 ```
+
+No migration step: `on_startup` runs `alembic upgrade head` itself, so the schema is
+current before the first request. See [MIGRATIONS.md](MIGRATIONS.md) — including what to do
+if the app refuses to start because your `pgdata` volume predates this change and has no
+`alembic_version` table.
 
 Then log in at <http://localhost:8003/auth/login> with **`admin@test.com` / `admin123`**.
 
 That account is seeded by `on_startup`, which calls
-`app/db/auth/create_fake_user.py` after `create_all`. It exists because the compose
+`app/db/auth/create_fake_user.py` after the migration. It exists because the compose
 stack has its own `pgdata` volume: a fresh volume means an empty `users` table, and
 every login attempt then bounces back to the form as "Invalid credentials" with nothing
 in the logs to say the account was simply never created. Seeding on boot removes that
 failure mode. It is idempotent — later boots log `already exists — skipping seed`.
 
-**This is DEV ONLY, for the same reason `create_all` is.** A known admin password
-created automatically on boot must not reach production; that whole block goes away in
-favour of Alembic plus a real provisioning step.
+**The seed is DEV ONLY.** A known admin password created automatically on boot must not
+reach production; that block goes away in favour of a real provisioning step. The
+migration beside it does not — applying the schema at startup is the production-shaped
+half of this hook.
 
 Environment variables introduced by this work:
 
@@ -375,9 +422,10 @@ anywhere but localhost.
   so no live Anthropic turn has been run. The agent machinery is proven by the local
   `qwen3:8b` run and by a stub-model integration test; the first real Anthropic call is
   not yet verified.
-* **`main.py` still calls `create_all` at startup** ("DEV ONLY" per its own docstring)
-  alongside Alembic. Unchanged by this work, but worth resolving before production:
-  the two can disagree.
+* ~~**`main.py` still calls `create_all` at startup** alongside Alembic — the two can
+  disagree.~~ **Resolved.** They did disagree, and it cost a 500: `create_all` skipped a
+  newly added column because the table already existed. Startup now runs
+  `alembic upgrade head` and `create_all` is gone — see [MIGRATIONS.md](MIGRATIONS.md).
 * **`docker-compose.yml` is development-shaped** — `--reload`, source bind-mounted,
   `debug=True` in `main.py`. A production compose file would drop all three.
 * **`db_utils` circuit-breaker constants are still un-cast `os.getenv` strings**

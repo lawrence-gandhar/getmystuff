@@ -38,6 +38,37 @@ KB_ACCEPT_ATTR = ".pdf,.txt,.docx"
 # Max size for a single knowledge-base document upload.
 MAX_KB_FILE_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
 
+# Base directory for generated export files (Downloader Agents). Note the path:
+# "uploads/exports", NOT "app/uploads/exports" like the two above.
+#
+# That difference is deliberate and load-bearing. docker-compose mounts the named
+# `uploads` volume at /app/uploads, while UPLOAD_BASE resolves to /app/app/uploads —
+# which falls inside the `.:/app` bind mount, i.e. the host's source tree. Datasource
+# uploads landing there is pre-existing behaviour; generated exports must not, so this
+# base points at the volume that actually survives a rebuild.
+#
+# Also deliberately not under static/, which main.py serves with no authentication at
+# all. An export is one user's data, and it is served by
+# app/routes/downloader_agents/download_routes.py after an ownership check.
+EXPORT_BASE = Path("uploads/exports")
+
+# Base directory for *finished* export artifacts, the files a user actually downloads.
+# One directory per chat session inside it:
+#
+#     uploads/file_downloaders/<session-id>/project_details_2026-08-07.csv
+#
+# Separate from EXPORT_BASE, which holds the per-batch part files an export is built
+# from. Those are scratch and are deleted the moment the merge succeeds; these are the
+# deliverable, and grouping them by session is what lets the reaper — and a session
+# ending — clear out one visitor's files without touching anybody else's.
+#
+# Same two constraints as EXPORT_BASE, for the same reasons: under the `uploads` volume
+# so a rebuild does not take the files with it, and NOT under static/, which main.py
+# serves with no authentication. The URL is /file_downloaders/<session>/<file>, but it
+# is served by app/routes/downloader_agents/download_routes.py after the session,
+# expiry and ownership checks — never as a static directory.
+DOWNLOAD_BASE = Path("uploads/file_downloaders")
+
 # db_type values that represent file-based (non-connection) datasources.
 FILE_BASED_TYPES: frozenset[str] = frozenset({"csv", "xls", "json", "parquet", "avro"})
 

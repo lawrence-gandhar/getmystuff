@@ -1,0 +1,23 @@
+{# The whole connections table. The wrapper <div> carries hx-swap-oob rather than the
+   <tbody>, because htmx parses a response fragment with DOMParser and the HTML parser
+   discards a <tbody> that is not already inside a <table> — bare rows would be lost with
+   no error and the table would silently keep its stale ones. #}
+<div id="integrationConnectionsTable" class="card shadow-sm" hx-swap-oob="true">
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th>Name</th>
+                    <th style="width:160px;">System</th>
+                    <th style="width:240px;">Address</th>
+                    <th style="width:150px;">Status</th>
+                    <th style="width:130px;">Added</th>
+                    <th style="width:300px;">Actions</th>
+                </tr>
+            </thead>
+            <tbody id="integrationConnectionsTableBody">
+                {% include "integrations/partials/connection_rows_body.htm" %}
+            </tbody>
+        </table>
+    </div>
+</div>

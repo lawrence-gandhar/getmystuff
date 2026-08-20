@@ -1,0 +1,136 @@
+{% extends "base/layout.htm" %}
+{% block title %}Whole-result grouping | GetMyStuff{% endblock %}
+
+{% block content %}
+{# The aggregation console: group and total every record a tool returns.
+
+   Exists so an operator can check a total against their own database without
+   spending a chat turn on it, and so the ceilings are read before an instruction is
+   typed rather than discovered when one is refused.
+
+   See documentations/AGENT_RECURSIVE_DATAFRAMES.md. #}
+<div class="container mt-4" style="max-width: 100%;">
+
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h5 class="fw-semibold mb-0">
+            <i class="las la-layer-group text-primary"></i> Whole-result grouping
+        </h5>
+        <a href="/tool-configs" class="btn btn-outline-secondary btn-sm">
+            <i class="las la-arrow-left"></i> Back to Tool Configs
+        </a>
+    </div>
+
+    <p class="text-muted small mb-3">
+        Reads every record a tool returns and groups them here — totals, averages
+        and counts over the whole set, and every group reported. Slower than a
+        grouped query, so prefer letting the database do the grouping where it can.
+    </p>
+
+    {% if error %}
+    <div class="alert alert-danger small">
+        <i class="las la-exclamation-circle"></i> {{ error }}
+    </div>
+    {% endif %}
+
+    <div class="row g-3">
+        <div class="col-lg-5">
+            <div class="card shadow-sm">
+                <div class="card-body">
+
+                    {% if not agents %}
+                    <div class="alert alert-warning py-2 small mb-0">
+                        There are no active data agents. Create one on the
+                        <a href="/data-agents">Data Agents</a> page first.
+                    </div>
+                    {% else %}
+                    <form
+                        hx-post="/aggregations/run"
+                        hx-target="#aggregationResult"
+                        hx-swap="innerHTML"
+                        hx-indicator="#aggregationSpinner"
+                    >
+                        <div class="mb-3">
+                            <label for="aggregationAgent" class="form-label fw-semibold">
+                                Data agent
+                            </label>
+                            {# The cascade: choosing an agent reloads the tool picker,
+                               because which tools may be grouped depends on it. #}
+                            <select
+                                id="aggregationAgent"
+                                name="agent_id"
+                                class="form-select"
+                                required
+                                hx-get="/aggregations/tools"
+                                hx-target="#aggregationToolField"
+                                hx-swap="innerHTML"
+                                hx-trigger="change"
+                            >
+                                <option value="">Choose an agent…</option>
+                                {% for agent in agents %}
+                                <option value="{{ agent.uuid }}"
+                                    {% if selected_agent == agent.uuid %}selected{% endif %}>
+                                    {{ agent.name }}
+                                </option>
+                                {% endfor %}
+                            </select>
+                        </div>
+
+                        <div id="aggregationToolField" class="mb-3">
+                            {% include "agent_recursive_dataframes/partials/tool_field.htm" %}
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="aggregationInstruction" class="form-label fw-semibold">
+                                What to group and measure
+                            </label>
+                            <textarea
+                                id="aggregationInstruction"
+                                name="instruction"
+                                class="form-control"
+                                rows="3"
+                                required
+                                minlength="1"
+                                maxlength="1000"
+                                placeholder="Total and average amount by region"
+                            ></textarea>
+                            <div class="form-text">
+                                Available calculations: count, sum, average, minimum
+                                and maximum. Medians, percentiles and counts of
+                                distinct values cannot be calculated in batches and
+                                will be refused.
+                            </div>
+                        </div>
+
+                        <div class="d-flex gap-2 align-items-center">
+                            <button type="submit" class="btn btn-primary">
+                                <i class="las la-calculator"></i> Calculate
+                            </button>
+                            <span id="aggregationSpinner" class="htmx-indicator text-muted small">
+                                <i class="las la-spinner la-spin"></i> Reading every record…
+                            </span>
+                        </div>
+                    </form>
+                    {% endif %}
+
+                </div>
+            </div>
+
+            {% if limits %}
+            <div class="text-muted small mt-2">
+                Limits: at most {{ "{:,}".format(limits.max_records) }} records per
+                run and {{ "{:,}".format(limits.max_groups) }} groups. A run past
+                either is refused rather than answered partially.
+            </div>
+            {% endif %}
+        </div>
+
+        <div class="col-lg-7">
+            <div id="aggregationResult">
+                <div class="text-muted small">
+                    The totals will appear here.
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

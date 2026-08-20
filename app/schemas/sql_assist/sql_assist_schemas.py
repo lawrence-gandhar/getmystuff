@@ -160,11 +160,15 @@ class SqlAssistCreateToolRequest(SqlAssistEchoMixin):
     travel back in hidden fields and both go through ``tool_config_service``'s own
     validation on the way in — the same gates the Tool Configs form passes — so
     nothing here trusts what the browser posted, including the mode.
+
+    The tables are the mixin's ``table_names``, primary first: a tool config records
+    every table it reads, and the panel already knows which those are — the user
+    picked them to generate against. Which one is primary is the service's decision,
+    made from the order, exactly as it is for the Tool Configs form.
     """
 
     data_agent_id: OptionalUUID = Field(default=None, title="Data agent")
     tool_name: IdentifierName = Field(title="Tool name")
-    table_name: ObjectName = Field(title="Table name", max_length=MAX_NAME_LENGTH)
     description: OptionalText = Field(
         default=None, title="Description", max_length=MAX_DESCRIPTION_LENGTH
     )

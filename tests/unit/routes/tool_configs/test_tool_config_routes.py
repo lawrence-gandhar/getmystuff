@@ -29,7 +29,7 @@ def stub_datasource_reads(monkeypatch: pytest.MonkeyPatch) -> None:
     """The form's two live reads, so no real database is contacted."""
 
     async def fake_objects(db, datasource_id, user_id):  # noqa: ANN001
-        return {"objects": ["inventory_items", "suppliers"]}
+        return {"objects": ["inventory_items", "suppliers"], "configuration_data": {}}
 
     async def fake_schema(db, datasource_id, user_id, table_name):  # noqa: ANN001
         return {"schema": [{"column": "id"}, {"column": "name"}]}
@@ -102,7 +102,7 @@ def form_data(agent, datasource, **overrides) -> dict:  # noqa: ANN001
         "data_agent_id": str(agent.uuid),
         "datasource_id": str(datasource.uuid),
         "tool_name": "distinct_items",
-        "table_name": "inventory_items",
+        "table_names": ["inventory_items"],
         "description": "Every distinct item name.",
         "query_mode": "sql",
         "config_json": "",
@@ -204,7 +204,7 @@ class TestCreatingASqlTool:
     ) -> None:
         response = client.post(
             "/tool-configs/create",
-            data=form_data(agent, mongo_datasource, table_name="events"),
+            data=form_data(agent, mongo_datasource, table_names=["events"]),
         )
 
         assert "not a relational datasource" in response.text
@@ -262,3 +262,53 @@ class TestEditingASqlTool:
         assert tool.query_mode == "builder"
         assert tool.sql_query is None
         assert tool.config["columns"] == [{"column": "name", "alias": ""}]
+
+
+class TestTheHelpPage:
+    """
+    The help page is static, so what is worth testing is that it *renders* and that
+    the list page actually links to it. A page of examples that 500s on a Jinja
+    delimiter inside a JSON sample would otherwise only be discovered by the
+    operator who needed it.
+    """
+
+    def test_it_renders_inside_the_application_layout(self, client) -> None:  # noqa: ANN001
+        response = client.get("/tool-configs/help")
+
+        assert response.status_code == 200
+        assert "Tool Configs — Help" in response.text
+
+    def test_the_examples_survive_template_rendering(self, client) -> None:  # noqa: ANN001
+        """
+        The whole body sits inside `{% raw %}`, so the JSON and SQL samples must
+        arrive as written — braces, colons and placeholders intact.
+        """
+        body = client.get("/tool-configs/help").text
+
+        assert '"agent_supplied": true' in body
+        assert "WHERE department_id = :department_id" in body
+        assert "IS NOT BLANK" in body
+        assert "run once per value" in body
+
+    def test_the_serialised_column_example_keeps_its_like_patterns(
+        self, client
+    ) -> None:  # noqa: ANN001
+        """
+        Scenario 8b is the one example whose whole point is characters a template
+        might eat: `%`, quotes inside quotes, and a `:name` that must appear both
+        inside a literal (as the counter-example) and outside one (as the fix).
+        """
+        body = client.get("/tool-configs/help").text
+
+        assert """p.departments LIKE '%s:6:"depart";%'""" in body
+        assert (
+            "CONCAT('%s:', CHAR_LENGTH(:department_id), ':\"', :department_id, '\"%')"
+            in body
+        )
+        assert """LIKE '%s:1:":department_id"%'""" in body
+
+    def test_the_list_page_links_to_it_in_a_new_tab(self, client) -> None:  # noqa: ANN001
+        body = client.get("/tool-configs/").text
+
+        assert 'href="/tool-configs/help"' in body
+        assert 'target="_blank"' in body

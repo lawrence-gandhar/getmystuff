@@ -192,6 +192,31 @@ async def db(db_engine) -> AsyncIterator[AsyncSession]:  # noqa: ANN001
         yield session
 
 
+@pytest.fixture
+def background_sessions(db_engine, monkeypatch: pytest.MonkeyPatch):  # noqa: ANN001, ANN201
+    """
+    Point ``download_service.open_session`` at the per-test database.
+
+    Needed by anything that opens its **own** session rather than taking the injected one:
+    the export graph's nodes, the queue worker, and the progress SSE stream (which outlives
+    the handler that returned it, so it cannot use the request's session). They all go
+    through ``download_service.open_session``, which wraps
+    ``db_sessions.AsyncSessionLocal`` — the engine built at import from ``DATABASE_URL``.
+
+    In the container that variable is the *development* PostgreSQL database.
+    ``os.environ.setdefault`` above does not override a value that is already set, so
+    without this fixture those code paths read and write the development database while
+    the assertions look at the in-memory one. The autouse ``block_network`` guard turns
+    that into a loud failure rather than a silent one, which is how it was found.
+    """
+    from app.services.downloader_agents.base import download_service
+
+    factory = async_sessionmaker(bind=db_engine, expire_on_commit=False)
+    monkeypatch.setattr(download_service, "open_session", factory)
+
+    return factory
+
+
 # ---------------------------------------------------------------------------
 # Users
 # ---------------------------------------------------------------------------
@@ -453,6 +478,30 @@ def mock_outbound_http(monkeypatch: pytest.MonkeyPatch) -> dict:
 
 
 @pytest.fixture
+def stub_egress(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    Neutralise the SSRF guard **at its source**, for any caller.
+
+    ``mock_outbound_http`` patches ``chatbot_action_service._assert_public_host``,
+    which is that module's own wrapper. That keeps working — the service calls it
+    through the module global — but it neutralises the guard for the chatbot and
+    for nothing else. Anything else that reaches ``app.utils.outbound_http``
+    directly needs this instead, or it performs a real DNS lookup and then trips
+    the ``block_network`` guard with a confusing hostname in the message.
+
+    Deliberately not autouse. A test that is *about* egress must see the real
+    thing; those stub ``getaddrinfo`` on the running loop instead, which exercises
+    every rule while touching no network.
+    """
+    from app.utils import outbound_http
+
+    async def _allow(host, port, **kwargs):  # noqa: ANN001, ANN003
+        return [host]
+
+    monkeypatch.setattr(outbound_http, "assert_public_host", _allow)
+
+
+@pytest.fixture
 def mock_deep_agent(monkeypatch: pytest.MonkeyPatch) -> dict:
     """Stub the LangChain/deepagents runtime so no model is constructed."""
     from app.services.deep_agents import deep_agent_service as svc
@@ -494,10 +543,23 @@ def mock_external_datasources(monkeypatch: pytest.MonkeyPatch) -> dict:
 # ---------------------------------------------------------------------------
 @pytest.fixture
 def upload_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
-    """Redirect file-upload writes into tmp_path instead of the real app/uploads."""
+    """
+    Redirect file writes into tmp_path instead of the real upload directories.
+
+    ``part_store`` is patched as well as ``file_utils``, and it has to be: it binds
+    ``EXPORT_BASE`` and ``DOWNLOAD_BASE`` with a ``from … import`` at module load, so
+    rebinding them on ``file_utils`` alone leaves it writing to the real
+    ``uploads/exports`` — which is what it had been doing, quietly, for every export
+    test that touched the disk.
+    """
+    from app.services.downloader_agents.base import part_store
     from app.utils import file_utils
 
     monkeypatch.setattr(file_utils, "UPLOAD_BASE", tmp_path / "uploads")
     monkeypatch.setattr(file_utils, "WIDGET_UPLOAD_BASE", tmp_path / "widgets")
     monkeypatch.setattr(file_utils, "KNOWLEDGE_BASE_UPLOAD_BASE", tmp_path / "kb")
+    monkeypatch.setattr(file_utils, "EXPORT_BASE", tmp_path / "exports")
+    monkeypatch.setattr(file_utils, "DOWNLOAD_BASE", tmp_path / "file_downloaders")
+    monkeypatch.setattr(part_store, "EXPORT_BASE", tmp_path / "exports")
+    monkeypatch.setattr(part_store, "DOWNLOAD_BASE", tmp_path / "file_downloaders")
     yield tmp_path

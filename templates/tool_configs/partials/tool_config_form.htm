@@ -24,9 +24,9 @@
 
 <p class="text-muted small mb-4">
     Define one query a <a href="/data-agents">data agent</a> is allowed to run: pick the
-    datasource and table, then either build the query — columns, aggregations,
-    grouping, filters, and joins on a relational datasource — or write the SQL
-    yourself. Either way it has to be read-only, and the agent runs it as saved.
+    datasource and the tables it reads, then either build the query — columns,
+    aggregations, grouping, filters, and joins on a relational datasource — or write the
+    SQL yourself. Either way it has to be read-only, and the agent runs it as saved.
 </p>
 
 {# The banner lives inside the panel, not on the page behind it — the offcanvas
@@ -126,9 +126,10 @@
             </div>
         </div>
 
-        {% with selected_table = (tool_config.table_name if tool_config else '') %}
+        {# `selected_tables` comes from the builder context, so the field, the query
+           builder and the Joins card are all rendered from one list rather than the
+           form deciding one of them for itself. #}
         {% include "tool_configs/partials/table_field.htm" %}
-        {% endwith %}
 
         <div class="col-12">
             <label for="toolDescription" class="form-label fw-semibold">Description</label>
@@ -142,6 +143,32 @@
             >{{ tool_config.description if tool_config and tool_config.description else '' }}</textarea>
         </div>
 
+        {# Off by default and deliberately worded as what it costs rather than what
+           it enables: ticking it lets an agent read every record this tool returns,
+           which is a different bargain from the capped 200 every other tool call
+           makes. See documentations/AGENT_RECURSIVE_DATAFRAMES.md. #}
+        <div class="col-12">
+            <div class="form-check">
+                <input
+                    class="form-check-input"
+                    type="checkbox"
+                    value="true"
+                    id="toolAllowRecursiveAggregate"
+                    name="allow_recursive_aggregate"
+                    {% if tool_config and tool_config.allow_recursive_aggregate %}checked{% endif %}
+                >
+                <label class="form-check-label fw-semibold" for="toolAllowRecursiveAggregate">
+                    Allow whole-result grouping
+                </label>
+                <div class="form-text">
+                    Lets the agent read every record this tool returns and group
+                    them itself — totals, averages, counts by category. Slower than
+                    a grouped query and limited to whole-record totals, so leave it
+                    off unless the database cannot do the grouping.
+                </div>
+            </div>
+        </div>
+
         <div class="col-12">
             <span id="toolSchemaSpinner" class="htmx-indicator text-muted small">
                 <i class="las la-spinner la-spin"></i> Reading schema…
@@ -153,6 +180,10 @@
        first, then the builder — static/js/tool_configs.js shows whichever panel the
        selected mode calls for. #}
     {% include "tool_configs/partials/query_mode_field.htm" %}
+
+    {# What this tool embeds. Above the builder because it reads that way: the
+       inner tools run first, and the query below is what their values restrict. #}
+    {% include "tool_configs/partials/nested_tools_field.htm" %}
 
     {# `config`, `columns`, `column_map`, `join_tables` and `join_types` all come from
        the route — the same context the /fields cascade renders the builder with, so

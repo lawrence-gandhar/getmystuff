@@ -1,0 +1,32 @@
+{# The tool picker, re-rendered whenever the agent changes.
+
+   An agent with no opted-in tool gets an explanation and no dropdown. An empty
+   select looks like a page that failed to load; "there are none, and here is how to
+   add one" is the state worth rendering. #}
+<label for="aggregationTool" class="form-label fw-semibold">Tool</label>
+
+{% if error %}
+<div class="alert alert-danger py-2 small mb-0">
+    <i class="las la-exclamation-circle"></i> {{ error }}
+</div>
+{% elif tools %}
+<select id="aggregationTool" name="tool_id" class="form-select">
+    {# Optional: left blank, the instruction decides, which is what the agent does
+       when it calls this itself. #}
+    <option value="">Let the instruction decide</option>
+    {% for tool in tools %}
+    <option value="{{ tool.uuid }}">
+        {{ tool.tool_name }}{% if tool.datasource_name %} — {{ tool.datasource_name }}{% endif %}
+    </option>
+    {% endfor %}
+</select>
+<div class="form-text">
+    Only tools with <strong>Allow whole-result grouping</strong> switched on are listed.
+</div>
+{% else %}
+<div class="alert alert-warning py-2 small mb-0">
+    None of this agent's tools allow whole-result grouping. Switch
+    <strong>Allow whole-result grouping</strong> on for one of them in
+    <a href="/tool-configs">Tool Configs</a>.
+</div>
+{% endif %}

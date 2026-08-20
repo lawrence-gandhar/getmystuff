@@ -1,0 +1,150 @@
+{% extends "base/layout.htm" %}
+{% block title %}{{ flow.name }} — runs | GetMyStuff{% endblock %}
+
+{% block content %}
+<div class="container mt-4" style="max-width: 100%;">
+
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <div>
+            <h5 class="fw-semibold mb-0">
+                <i class="las la-history text-primary"></i> {{ flow.name }}
+            </h5>
+            <div class="small text-muted">Every run of this workflow, newest first.</div>
+        </div>
+        <div class="d-flex gap-2">
+            <a href="/integrations/" class="btn btn-outline-secondary btn-sm">
+                <i class="las la-list"></i> All workflows
+            </a>
+            <a href="/integrations/{{ flow.uuid }}/canvas" class="btn btn-outline-primary btn-sm">
+                <i class="las la-project-diagram"></i> Design
+            </a>
+        </div>
+    </div>
+
+    {# **Four numbers, always all four.** A run that wrote most of its records and dropped
+       some is `partial`, not `succeeded`, and showing only what was written would hide
+       exactly the runs worth looking at. The same argument the exporter makes about part
+       files: a result that silently contains some of the data is worse than none, because
+       nothing about it says so. #}
+    <div class="card shadow-sm">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th style="width:130px;">Status</th>
+                        <th style="width:120px;">Started by</th>
+                        <th>Records</th>
+                        <th style="width:170px;">Started</th>
+                        <th style="width:110px;">Took</th>
+                        <th style="width:200px;">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for run in runs %}
+                    <tr>
+                        <td>
+                            {% set tone = {
+                                "succeeded": "success",
+                                "partial": "warning",
+                                "failed": "danger",
+                                "cancelled": "secondary",
+                                "skipped": "secondary",
+                                "running": "primary",
+                                "queued": "info",
+                                "awaiting_input": "info"
+                            }.get(run.status, "secondary") %}
+                            <span class="badge bg-{{ tone }}">{{ run.status }}</span>
+                            {% if run.mode == "dry_run" %}
+                                <div>
+                                    <span
+                                        class="badge bg-info-subtle text-info-emphasis border border-info-subtle"
+                                        title="Every request was built and nothing was sent"
+                                    >
+                                        Dry run
+                                    </span>
+                                </div>
+                            {% endif %}
+                            {% if run.is_replay %}
+                                <div class="small text-muted">Replay</div>
+                            {% endif %}
+                        </td>
+                        <td class="small text-muted">
+                            {{ run.trigger_kind }}
+                            {% if run.attempt > 1 %}
+                                <div>attempt {{ run.attempt }}</div>
+                            {% endif %}
+                        </td>
+                        <td class="small">
+                            <span class="text-muted">read</span> {{ run.records_read }}
+                            <span class="text-muted ms-2">written</span> {{ run.records_written }}
+                            {% if run.records_failed %}
+                                <span class="text-danger ms-2">failed {{ run.records_failed }}</span>
+                            {% endif %}
+                            {% if run.records_skipped %}
+                                <span class="text-warning ms-2">skipped {{ run.records_skipped }}</span>
+                            {% endif %}
+                            {% if run.error_message %}
+                                <div class="text-danger">{{ run.error_message }}</div>
+                            {% endif %}
+                        </td>
+                        <td class="small text-muted">
+                            {{ run.started_at[:19].replace("T", " ") if run.started_at else "" }}
+                        </td>
+                        <td class="small text-muted">
+                            {% if run.started_at and run.finished_at %}
+                                {{ run.finished_at[11:19] }}
+                            {% elif run.status in ("running", "queued") %}
+                                <i class="las la-spinner la-spin"></i>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <div class="d-flex flex-wrap gap-1">
+                                <a
+                                    class="btn btn-sm btn-outline-secondary"
+                                    href="/integrations/{{ flow.uuid }}/canvas?run={{ run.uuid }}"
+                                >
+                                    <i class="las la-eye"></i> Open
+                                </a>
+
+                                {% if run.status in ("running", "queued") %}
+                                    {# Stopping is a request, not an instruction: a step
+                                       already waiting on somebody else's server finishes
+                                       that call first. #}
+                                    <button
+                                        class="btn btn-sm btn-outline-danger"
+                                        hx-post="/integrations/runs/{{ run.uuid }}/stop"
+                                        hx-swap="none"
+                                    >
+                                        Stop
+                                    </button>
+                                {% else %}
+                                    {# Pinned to the same version as the original, so a
+                                       replay of last Tuesday's failure is the thing that
+                                       failed last Tuesday. #}
+                                    <button
+                                        class="btn btn-sm btn-outline-primary"
+                                        hx-post="/integrations/runs/{{ run.uuid }}/replay"
+                                        hx-swap="none"
+                                        hx-on::after-request="window.location.reload()"
+                                    >
+                                        Replay
+                                    </button>
+                                {% endif %}
+                            </div>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="6" class="text-center text-muted py-4">
+                            <i class="las la-history fs-4 d-block mb-1"></i>
+                            This workflow has not run yet.
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+</div>
+{% endblock %}

@@ -189,7 +189,11 @@ def parse_json_object(raw, field_label: str) -> dict:
     except ValueError as exc:
         raise HTTPException(
             status_code=400,
-            detail=f"{field_label} could not be read — please rebuild the query below",
+            # "please rebuild it and try again", not "rebuild the query below". This
+            # validator is shared: the tool config builder was its first caller and its
+            # wording was written for that one page, but an integration operation's header
+            # template has no query below it and never did.
+            detail=f"{field_label} could not be read — please rebuild it and try again",
         ) from exc
 
     if not isinstance(parsed, dict):

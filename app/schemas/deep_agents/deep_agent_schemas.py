@@ -75,3 +75,22 @@ class DeepAgentAskRequest(FormRequest):
     question: str = Field(
         title="Question", min_length=1, max_length=MAX_QUESTION_LENGTH
     )
+
+
+class AgentAskStreamQuery(QueryRequest):
+    """
+    The same question, off the query string, for the streaming console endpoint.
+
+    A separate schema rather than reusing :class:`DeepAgentAskRequest` because the
+    source genuinely differs: ``EventSource`` can only issue a GET, so the question
+    arrives as a query parameter rather than as a form body. The rules are identical —
+    same cap, same non-empty requirement — which is the point of both being declared
+    here instead of one handler checking by hand.
+
+    ``QueryRequest`` requires every field to have a default, so the empty case is
+    caught by ``min_length`` on validation rather than by the field being absent.
+    """
+
+    question: str = Field(
+        default="", title="Question", min_length=1, max_length=MAX_QUESTION_LENGTH,
+    )

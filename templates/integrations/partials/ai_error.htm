@@ -1,0 +1,34 @@
+{# A refusal from the generator, rendered into the panel it was asked from.
+
+   `alternatives` is what makes it useful: "there is no 'Shopify Prod'" leaves somebody
+   guessing, and the same sentence followed by the connections they do have is one they
+   can act on. That is the single most common failure here — a model naming a system the
+   user has not connected — and it is a two-click fix if the page says so. #}
+<div class="alert alert-warning mb-0">
+    <div class="fw-semibold mb-1">
+        <i class="las la-exclamation-circle"></i> That could not be drafted
+    </div>
+    <div>{{ error }}</div>
+
+    {% if problems %}
+        <ul class="mb-0 mt-2 small">
+            {% for problem in problems %}
+                <li>{{ problem }}</li>
+            {% endfor %}
+        </ul>
+    {% endif %}
+
+    {% if alternatives %}
+        <div class="small mt-2">
+            Connections you have:
+            {% for name in alternatives %}
+                <span class="badge bg-light text-dark border">{{ name }}</span>
+            {% endfor %}
+        </div>
+    {% endif %}
+
+    <div class="form-text mt-2">
+        The canvas still works. You can build this by hand at any time — nothing about it
+        depends on the AI.
+    </div>
+</div>

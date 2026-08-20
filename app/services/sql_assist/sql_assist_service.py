@@ -21,7 +21,13 @@ is opened from today: generating SQL from a schema needs a datasource and nothin
 else, so any page with one in view can call it.
 
 The schema itself is read by reflection, never by a query this application wrote:
-:func:`app.db.db_utils.fetch_rdbms_metadata` goes through SQLAlchemy's Inspector.
+:func:`app.db.db_utils.fetch_rdbms_metadata` goes through SQLAlchemy's Inspector —
+and then :func:`_load_metadata` removes everything the user has switched off in Data
+Sources. That pruning is the whole of the column rule: a model cannot select, join on
+or filter by a column it was never told exists, and one that is not in the metadata
+is one the model is told to treat as nonexistent. The alternative — showing the model
+the full schema and checking its output afterwards — would mean policing a parser we
+do not have.
 
 SQL only — so only relational datasources are offered. A CSV or a Mongo collection
 has no SQL to generate (they are queried through pandas and aggregation pipelines
@@ -56,7 +62,20 @@ from app.utils.query_joins import (
     query_tables,
     supports_joins,
 )
-from app.utils.sql_guard import MAX_SQL_LENGTH, normalised_sql, read_only_violation
+from app.utils.datasource_status import (
+    NO_ACTIVE_TABLES_MESSAGE,
+    active_table_names,
+    inactive_table_names,
+    is_column_active,
+)
+from app.utils.sql_guard import (
+    MAX_SQL_LENGTH,
+    group_by_violation,
+    missing_identifiers,
+    normalised_sql,
+    read_only_violation,
+    star_selection_violation,
+)
 from app.utils.validators import require_object_name
 
 logger = logging.getLogger(__name__)
@@ -231,14 +250,18 @@ async def get_table_choices(
     datasource_id: uuid.UUID,
 ) -> List[str]:
     """
-    The tables and views in one datasource, read by reflection — the same source the
-    generated query's schema comes from, so the picker cannot offer a table the
-    model would then not be shown.
+    The active tables and views in one datasource, read by reflection — the same
+    source the generated query's schema comes from, so the picker cannot offer a
+    table the model would then not be shown.
+
+    A table switched off in Data Sources is not offered, for that same reason: it
+    will be pruned out of the metadata by :func:`_load_metadata`, so picking it could
+    only ever produce a refusal.
     """
     datasource = await _resolve_datasource(db, user_id, datasource_id)
 
     try:
-        return await metadata_service.get_rdbms_reflected_tables(datasource)
+        tables = await metadata_service.get_rdbms_reflected_tables(datasource)
     except Exception as exc:
         raise HTTPException(
             status_code=400,
@@ -247,6 +270,13 @@ async def get_table_choices(
                 "Check the datasource connection and try again."
             ),
         ) from exc
+
+    active = active_table_names(datasource.configuration_data, tables)
+
+    if tables and not active:
+        raise HTTPException(status_code=400, detail=NO_ACTIVE_TABLES_MESSAGE)
+
+    return active
 
 
 async def get_llm_key_choices(db: AsyncSession, user_id: int) -> List[dict]:
@@ -280,8 +310,12 @@ async def generate_sql(
     of the whole feature and not just of the prompt.
 
     Returns ``{"draft": SqlDraft, "history": [{"prompt", "sql"}, ...], "dialect",
-    "tables"}`` — the history includes this turn, ready to be posted back with the
-    next refinement.
+    "tables", "omitted_columns", "warnings"}`` — the history includes this turn, ready
+    to be posted back with the next refinement, ``omitted_columns`` names the active
+    columns the query does not mention so the panel can say so (see
+    :func:`_omitted_columns` for why that is a note and not a refusal), and
+    ``warnings`` carries anything else the user should read before using the query
+    (see :func:`_regrouped`).
     """
     prompt = _validated_prompt(prompt)
     history = _validated_history(history_json)
@@ -293,6 +327,40 @@ async def generate_sql(
     dialect = _dialect_name(datasource.db_type)
     system_prompt, user_content = _build_prompts(dialect, metadata, prompt, history)
 
+    draft = await _generated_draft(
+        db, user_id, system_prompt, user_content, forced_key_uuid, use_inbuilt_llm,
+    )
+
+    draft, warnings = await _regrouped(
+        db,
+        user_id,
+        system_prompt,
+        user_content,
+        draft,
+        metadata,
+        forced_key_uuid,
+        use_inbuilt_llm,
+    )
+
+    return {
+        "draft": draft,
+        "history": history + [{"prompt": prompt, "sql": draft.sql}],
+        "dialect": dialect,
+        "tables": [entry["table"] for entry in metadata],
+        "omitted_columns": _omitted_columns(draft.sql, metadata),
+        "warnings": warnings,
+    }
+
+
+async def _generated_draft(
+    db: AsyncSession,
+    user_id: int,
+    system_prompt: str,
+    user_content: str,
+    forced_key_uuid: Optional[uuid.UUID],
+    use_inbuilt_llm: bool,
+) -> SqlDraft:
+    """One call to the model, with its answer held to the read-only rules."""
     draft = await answer_structured(
         db,
         user_id,
@@ -306,12 +374,125 @@ async def generate_sql(
     draft.sql = _validated_sql(draft.sql)
     draft.assumptions = draft.assumptions[:5]
 
+    return draft
+
+
+# --------------------------------------------------------------------------
+# GROUP BY — a query the database would refuse
+#
+# MySQL's default sql_mode includes ONLY_FULL_GROUP_BY and PostgreSQL has the same
+# rule built in: a grouped query may only select columns that are aggregated,
+# grouped, or functionally dependent on what is grouped. A model that writes
+#
+#     SELECT project_details.client_name, COUNT(*) …  GROUP BY project_details.status
+#
+# has written a query that cannot run anywhere it will be used, and the database's
+# own complaint — "nonaggregated column … not functionally dependent on columns in
+# GROUP BY clause" — reaches the user long after the panel has closed, as a tool that
+# fails in front of a visitor.
+#
+# So it is caught here, while the model is still on the line and the schema is still
+# in hand. See :func:`_regrouped` for why it is one retry and then a note, rather
+# than a refusal or a rewrite.
+# --------------------------------------------------------------------------
+
+async def _regrouped(
+    db: AsyncSession,
+    user_id: int,
+    system_prompt: str,
+    user_content: str,
+    draft: SqlDraft,
+    metadata: List[dict],
+    forced_key_uuid: Optional[uuid.UUID],
+    use_inbuilt_llm: bool,
+) -> Tuple[SqlDraft, List[str]]:
+    """
+    The draft, regenerated once if its grouping would be refused by the database.
+
+    Returns ``(draft, warnings)``.
+
+    **Asked again, never patched.** The obvious repair — add the offending column to
+    the GROUP BY — is a change to what the query counts, one row per group becoming
+    one row per pair, and doing it silently would hand the user a number that answers
+    a different question than the explanation next to it. The model is told what was
+    wrong and writes the query again, so the SQL and the words describing it still
+    come from the same place.
+
+    **One retry, then a note.** The check is a heuristic
+    (:func:`app.utils.sql_guard.group_by_violation`) and the panel does not run the
+    query, so a second failure is reported next to the SQL rather than refused: the
+    user can see the query, read what is wrong with it, and refine — which beats
+    being told to try again with nothing to look at.
+
+    The primary keys go with the check so the shape both databases *do* allow —
+    grouping by a table's key and selecting its other columns — is not reported as a
+    fault.
+    """
+    primary_keys = _primary_keys(metadata)
+    offender = group_by_violation(draft.sql, primary_keys)
+
+    if not offender:
+        return draft, []
+
+    logger.info(
+        "Regenerating a query that groups badly on '%s'; asking the model again",
+        offender,
+    )
+
+    try:
+        retry = await _generated_draft(
+            db,
+            user_id,
+            system_prompt,
+            user_content + _grouping_repair_note(draft.sql, offender),
+            forced_key_uuid,
+            use_inbuilt_llm,
+        )
+    except HTTPException as exc:
+        # The second attempt came back unusable — a write, a `SELECT *`, something
+        # over length. The first one is still a readable query with a known fault, so
+        # it is kept and the fault is reported. Failing the whole turn here would
+        # leave the user with nothing over a retry they never asked for.
+        logger.info("The regenerated query was refused as well: %s", exc.detail)
+        return draft, [_grouping_warning(offender)]
+
+    if retry.sql and not group_by_violation(retry.sql, primary_keys):
+        return retry, []
+
+    return draft, [_grouping_warning(offender)]
+
+
+def _primary_keys(metadata: List[dict]) -> dict:
+    """Each reflected table's primary key columns, for the grouping check."""
     return {
-        "draft": draft,
-        "history": history + [{"prompt": prompt, "sql": draft.sql}],
-        "dialect": dialect,
-        "tables": [entry["table"] for entry in metadata],
+        entry["table"]: list(entry.get("primary_key") or [])
+        for entry in metadata
     }
+
+
+def _grouping_repair_note(sql: str, offender: str) -> str:
+    """What the model is told about the query it just wrote."""
+    return (
+        "\n\nYour previous attempt cannot be run, so it has not been shown:\n"
+        f"{sql}\n\n"
+        f"It selects {offender}, which is neither aggregated nor listed in GROUP BY. "
+        "MySQL (which runs with ONLY_FULL_GROUP_BY) and PostgreSQL both refuse a "
+        "query like that.\n\n"
+        "Write the query again so every non-aggregated column in the SELECT list is "
+        "also in GROUP BY. Add the column to GROUP BY if one row per value of it is "
+        "what was asked for, wrap it in MIN() or MAX() if any value from the group "
+        "will do, or leave it out — and say which you chose in assumptions."
+    )
+
+
+def _grouping_warning(offender: str) -> str:
+    """What the user is told when the second attempt is no better."""
+    return (
+        f"This query selects {offender}, which is neither aggregated nor in its "
+        "GROUP BY clause, so MySQL and PostgreSQL will refuse to run it. Ask again "
+        "for the column to be grouped as well, for it to be aggregated (MIN, MAX), "
+        "or for it to be left out."
+    )
 
 
 # --------------------------------------------------------------------------
@@ -420,6 +601,12 @@ def _sql_tool_draft(
     selected table otherwise — it is a label here, not something the query is built
     against, so a wrong guess is worth correcting quietly rather than refusing over.
 
+    ``tables`` is every table the user selected, with that primary one moved to the
+    front. All of them are recorded on the tool config: the statement reads them, and
+    a SQL-mode tool has no other record of which tables those are — it is what lets
+    the routing prompt state the tool's real scope and the executor check each table
+    is still switched on.
+
     The statement is not re-validated: it arrived through :func:`_validated_sql`,
     and ``tool_config_service.validated_tool_sql`` checks it again on save.
     """
@@ -432,11 +619,23 @@ def _sql_tool_draft(
         "tool_name": draft.tool_name.strip().lower(),
         "description": draft.description.strip(),
         "table": table,
+        "tables": _primary_first(table, tables),
         "config": {},
         "config_json": "{}",
         "sql_query": sql,
         "preview": sql,
     }
+
+
+def _primary_first(primary: str, tables: List[str]) -> List[str]:
+    """
+    The selected tables with the primary one at the front, order otherwise kept.
+
+    The tool config's first table *is* its primary one, so the ordering carries
+    meaning rather than being presentation — see
+    ``tool_config_service._validated_tables``.
+    """
+    return [primary, *[name for name in tables if name != primary]]
 
 
 def _validated_tool_draft(
@@ -505,12 +704,19 @@ def _validated_tool_draft(
         json.dumps(raw_config), base_table, datasource.db_type,
     )
 
+    # The base table plus every table the joins bring in — not every table the user
+    # selected. A builder query reads exactly what it joins, and recording a table it
+    # never touches would overstate the tool's scope as surely as the old
+    # single-table record understated it.
+    joined_tables = query_tables(config.get("joins"), base_table) or [base_table]
+
     return {
         "mode": QUERY_MODE_BUILDER,
         "reason": "",
         "tool_name": draft.tool_name.strip().lower(),
         "description": draft.description.strip(),
         "table": base_table,
+        "tables": joined_tables,
         "config": config,
         "config_json": json.dumps(config, indent=2),
         "sql_query": "",
@@ -565,7 +771,8 @@ def _reference_resolver(joins: List[dict], base_table: str, metadata: List[dict]
                 raise HTTPException(
                     status_code=400,
                     detail=(
-                        f"{field_label} '{name}' is not a column of '{table}'. "
+                        f"{field_label} '{name}' is not an active column of "
+                        f"'{table}' — it may be switched off in Data Sources. "
                         "Regenerate, or create the tool by hand."
                     ),
                 )
@@ -580,8 +787,9 @@ def _reference_resolver(joins: List[dict], base_table: str, metadata: List[dict]
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    f"{field_label} '{name}' is not a column of any table this query "
-                    "reads. Regenerate, or create the tool by hand."
+                    f"{field_label} '{name}' is not an active column of any table this "
+                    "query reads — it may be switched off in Data Sources. "
+                    "Regenerate, or create the tool by hand."
                 ),
             )
 
@@ -627,7 +835,12 @@ def _build_tool_prompts(
         f"- columns: plain column selections, with an optional alias\n"
         f"- aggregations: {aggregations}, over one column, with an optional alias\n"
         "- group_by: a list of columns\n"
-        f"- filters: column, operator ({operators}), literal value — combined with AND\n"
+        f"- filters: column, operator ({operators}), literal value — combined with AND. "
+        "The last four operators take NO value: IS NULL and IS NOT NULL are the SQL of "
+        "the same name, IS BLANK is 'null, empty or whitespace' and IS NOT BLANK is its "
+        "opposite. Convert `col IS NULL` and `col IS NOT NULL` with them, and use "
+        "IS NOT BLANK for the common `col IS NOT NULL AND TRIM(col) <> ''` pair, which "
+        "the builder could not express as two filters before. Omit value for these.\n"
         f"- joins: type ({join_types}), the table joined in, and one equality "
         "matching a column on a table already in the query against a column on it\n\n"
         "Set fits=false, and name what is in the way in reason, whenever the query "
@@ -647,6 +860,11 @@ def _build_tool_prompts(
         "- List joins in the order they can be applied: each one may only match "
         "against the base table or a table joined before it.\n"
         "- Give unqualified column names; the caller adds table prefixes.\n"
+        "- Every column you put in columns must also appear in group_by whenever the "
+        "query has any aggregations or grouping — a tool that selects a column the "
+        "grouping does not cover is refused by the database when it runs. Copy the "
+        "query's own GROUP BY; never add a column to it that the query does not "
+        "group by.\n"
         "- Suggest tool_name as a lowercase identifier (letters, digits, "
         "underscores, starting with a letter) naming what the query answers.\n"
         "- Write description as one sentence an agent can use to decide when to "
@@ -667,7 +885,7 @@ async def create_tool_from_draft(
     datasource_id: Optional[uuid.UUID],
     agent_id: Optional[uuid.UUID],
     tool_name: str,
-    table_name: str,
+    table_names: List[str],
     description: Optional[str],
     config_json: Optional[str],
     query_mode: Optional[str] = None,
@@ -689,7 +907,7 @@ async def create_tool_from_draft(
         agent_id=agent_id,
         datasource_id=datasource_id,
         tool_name=tool_name,
-        table_name=table_name,
+        table_names=table_names,
         description=description,
         config_json=config_json,
         query_mode=query_mode,
@@ -722,6 +940,24 @@ def _build_prompts(
     The system prompt states the one hard fact about this feature — that the model
     has been given structure and nothing else — because a model that believes it has
     seen the data will happily describe rows that do not exist.
+
+    It also states the projection rule: spell every column out, and for a plain
+    row-listing query select **all** of them. That rule exists because the metadata
+    has already been pruned to the columns the user allows, so "all of them" and "all
+    the ones you may read" are the same set — and a ``SELECT *`` would quietly stop
+    being that set the moment a column is added or switched off.
+
+    Aggregates are carved out explicitly. "Include every column" cannot hold for
+    ``SELECT COUNT(*) … GROUP BY status`` without changing what the query counts, and
+    a rule the model has to break to answer the question is a rule it learns to
+    ignore everywhere else.
+
+    That carve-out is also where the grouping rule has to be stated. Told to select
+    every column and then to group, a model will do both — and produce exactly the
+    query MySQL and PostgreSQL refuse, selecting a column the grouping does not
+    determine. So the two are written as one instruction: when the request is an
+    aggregate, the SELECT list is the grouping columns and the aggregates, and
+    nothing else.
     """
     system_prompt = (
         f"You write SQL for a {dialect} database, inside the GetMyStuff analytics "
@@ -730,6 +966,9 @@ def _build_prompts(
         "types, primary keys and foreign keys. You have not seen a single row of "
         "this database and you never will — so never describe, count or quote its "
         "contents, and never claim a result you cannot know.\n\n"
+        "The metadata is the complete list of what you may read. Columns the owner "
+        "of this data has switched off are not in it — a column that is not listed "
+        "does not exist for you, whatever you would expect the table to have.\n\n"
         "Rules:\n"
         "- Use only the tables and columns in the metadata. Never invent one, and "
         "never assume a column exists because it usually would.\n"
@@ -742,13 +981,28 @@ def _build_prompts(
         "join without one, say so in assumptions.\n"
         "- Qualify every column with its table once more than one table is "
         "involved.\n"
-        "- List the columns you select; avoid SELECT *.\n"
+        "- NEVER write SELECT * or table.*. Spell every column out.\n"
+        "- Unless the request is an aggregate or a GROUP BY, select EVERY column "
+        "listed below for EVERY table your query reads, joined tables included.\n"
+        "- When the request IS an aggregate, select only the grouping columns and "
+        "the aggregates, and note in assumptions that the other columns were left "
+        "out.\n"
+        "- Once a query has GROUP BY, EVERY column in the SELECT list must either be "
+        "inside an aggregate function or be listed in the GROUP BY. This database "
+        "refuses anything else — MySQL with ONLY_FULL_GROUP_BY, PostgreSQL by the "
+        "same rule — so a query that breaks it cannot be run at all. If a column is "
+        "wanted alongside an aggregate, either group by it too or wrap it in MIN() "
+        "or MAX().\n"
+        "- The same holds without GROUP BY: a SELECT list may not mix an aggregate "
+        "with a plain column. SELECT client_name, COUNT(*) FROM projects is refused; "
+        "add GROUP BY client_name.\n"
         f"- Write {dialect} syntax, and use LIMIT when the request implies a "
         "top-N or a sample.\n"
         "- Put anything you guessed in assumptions, one short line each."
     )
 
-    user_content = f"Schema metadata (JSON):\n{json.dumps(metadata, default=str)}\n\n"
+    user_content = _required_columns_block(metadata)
+    user_content += f"Schema metadata (JSON):\n{json.dumps(metadata, default=str)}\n\n"
 
     if history:
         user_content += (
@@ -763,6 +1017,46 @@ def _build_prompts(
     user_content += f"Request: {prompt}"
 
     return system_prompt, user_content
+
+
+def _table_qualified_columns(entry: dict) -> List[str]:
+    """One reflected table's columns as ``table.column``, in reflected order."""
+    return [
+        f"{entry['table']}.{column['name']}"
+        for column in entry.get("columns") or []
+    ]
+
+
+def _qualified_columns(metadata: List[dict]) -> List[str]:
+    """
+    Every column in the metadata as ``table.column``, in metadata order.
+
+    One function because two things need the same list from the same source: the block
+    the model is told to select, and the check on what it returned
+    (:func:`_omitted_columns`). Deriving it twice is how the prompt and the check would
+    come to disagree about what "every column" meant.
+    """
+    return [name for entry in metadata for name in _table_qualified_columns(entry)]
+
+
+def _required_columns_block(metadata: List[dict]) -> str:
+    """
+    The literal per-table column list, put ahead of the schema JSON.
+
+    The same names are in the JSON below it, but as one blob of nested objects the
+    model has to walk. Spelling out the projection it is being asked for turns "work
+    out which columns you may read and select all of them" into something it copies,
+    which is the difference between the rule being followed and being approximately
+    followed.
+    """
+    lines = ["Columns to select (all of them, unless this request is an aggregate):"]
+
+    for entry in metadata:
+        columns = ", ".join(_table_qualified_columns(entry))
+        if columns:
+            lines.append(f"  {entry['table']}: {columns}")
+
+    return "\n".join(lines) + "\n\n"
 
 
 # --------------------------------------------------------------------------
@@ -915,7 +1209,42 @@ def _validated_sql(sql: str) -> str:
             ),
         )
 
+    star = star_selection_violation(statement)
+    if star:
+        # Refused rather than shown with a warning. `*` is the one selection whose
+        # column list the database decides at run time, so a query saved as a tool
+        # today would start returning a column switched off tomorrow — the exact
+        # thing the pruning above exists to prevent.
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                f"The AI returned a query using '{star}', which would read columns "
+                "that may be switched off in this datasource. Ask again — the query "
+                "was not shown."
+            ),
+        )
+
     return statement
+
+
+def _omitted_columns(sql: str, metadata: List[dict]) -> List[str]:
+    """
+    Which of the columns the model was told to select are nowhere in its query.
+
+    **Reported, never refused.** The check is a text search, not a parse: it cannot
+    tell a SELECT list from a WHERE clause, and it cannot tell that a CTE's outer
+    query legitimately narrows what the inner one read. Refusing on it would reject
+    every aggregate and every CTE the panel exists to help write. So the answer goes
+    back to the user as a note next to the query, and the decision — ask again, or
+    use it as it is — stays theirs.
+
+    An empty query has nothing omitted: the model reporting that the schema cannot
+    answer the request is not a query missing its columns.
+    """
+    if not normalised_sql(sql):
+        return []
+
+    return missing_identifiers(sql, _qualified_columns(metadata))
 
 
 # --------------------------------------------------------------------------
@@ -955,11 +1284,17 @@ async def _resolve_datasource(
 
 async def _load_metadata(datasource: DataSource, table_names: List[str]) -> List[dict]:
     """
-    Reflect the chosen tables, and insist every one of them came back.
+    Reflect the chosen tables, prune everything switched off, and insist there is
+    still something to write a query against.
 
     A name that no longer exists is named in the error rather than dropped: a query
     generated against three tables when the user picked four looks correct and is
-    not.
+    not. An inactive table is named for the same reason — and refused rather than
+    filtered, because ``table_names`` arrives from a form post and can name a table
+    the picker no longer offers.
+
+    Pruning the columns here, before the prompt is built, is what makes the column
+    rule real: the model is not asked to avoid a column, it is never shown one.
     """
     try:
         metadata = await metadata_service.get_rdbms_reflected_metadata(
@@ -987,6 +1322,16 @@ async def _load_metadata(datasource: DataSource, table_names: List[str]) -> List
             ),
         )
 
+    inactive = inactive_table_names(datasource.configuration_data, table_names)
+    if inactive:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"These tables are inactive in this datasource: {', '.join(inactive)}. "
+                "Activate them in Data Sources or deselect them."
+            ),
+        )
+
     if not any(entry["columns"] for entry in metadata):
         raise HTTPException(
             status_code=400,
@@ -996,7 +1341,65 @@ async def _load_metadata(datasource: DataSource, table_names: List[str]) -> List
             ),
         )
 
-    return metadata
+    return [_pruned_table(datasource.configuration_data, entry) for entry in metadata]
+
+
+def _pruned_table(configuration_data: Any, entry: dict) -> dict:
+    """
+    One reflected table with everything switched off removed.
+
+    The foreign keys are pruned too, not just the column list. A key whose own column
+    or whose referenced column is inactive is a join the model would be invited to
+    write and then could not select either side of — so the relationship is not
+    mentioned at all, and the model joins on what it can actually read or says it
+    cannot answer.
+
+    A table left with no columns is refused here rather than by the caller's
+    all-tables check: with four tables selected and one emptied, that check passes and
+    the model would be handed a table it may read nothing from.
+    """
+    table_name = entry["table"]
+
+    def active(column_name: Any) -> bool:
+        return is_column_active(configuration_data, table_name, str(column_name or ""))
+
+    columns = [column for column in entry.get("columns") or [] if active(column.get("name"))]
+
+    if not columns:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Every column of '{table_name}' is inactive, so there is nothing to "
+                "write a query against. Activate the columns you need in Data Sources."
+            ),
+        )
+
+    pruned = dict(entry)
+    pruned["columns"] = columns
+
+    # A view is reflected without keys at all, so the two are only rewritten when
+    # they were there — an empty list would tell the model a view has no primary key,
+    # which is a different statement from not mentioning one.
+    if "primary_key" in entry:
+        pruned["primary_key"] = [
+            name for name in entry.get("primary_key") or [] if active(name)
+        ]
+
+    if "foreign_keys" in entry:
+        pruned["foreign_keys"] = [
+            key for key in entry.get("foreign_keys") or []
+            if all(active(name) for name in key.get("columns") or [])
+            and all(
+                is_column_active(
+                    configuration_data,
+                    str(key.get("references_table") or ""),
+                    str(name or ""),
+                )
+                for name in key.get("references_columns") or []
+            )
+        ]
+
+    return pruned
 
 
 def _dialect_name(db_type: Any) -> str:

@@ -1,0 +1,121 @@
+{# One row per workflow. Rendered by the table, which is rendered by the page and by
+   every mutation response — so there is one definition of what a row looks like.
+
+   Two statuses, not one, and they are different questions. **Published** is whether
+   there is a frozen version for a run to execute; **On** is whether the schedule fires.
+   A workflow can be published and deliberately parked, and collapsing the two into one
+   badge would make "somebody switched this off" indistinguishable from "this was never
+   published" — which is the difference between pressing one button and doing an hour of
+   work. #}
+{% for flow in flows %}
+<tr id="integration-flow-row-{{ flow.uuid }}">
+    <td>
+        <div class="fw-semibold">
+            {{ flow.name }}
+            {% if flow.created_by_ai %}
+                <span
+                    class="badge bg-info-subtle text-info-emphasis border border-info-subtle ms-1"
+                    title="Drafted by AI and published by a person"
+                >
+                    <i class="las la-magic"></i> AI
+                </span>
+            {% endif %}
+        </div>
+        {% if flow.description %}
+            <div class="small text-muted">{{ flow.description }}</div>
+        {% endif %}
+    </td>
+    <td>
+        {% if flow.is_published %}
+            <span class="badge bg-success">v{{ flow.version_number }}</span>
+        {% else %}
+            <span class="badge bg-secondary">Draft</span>
+        {% endif %}
+        {% if flow.is_active %}
+            <span class="badge bg-primary-subtle text-primary-emphasis border border-primary-subtle">On</span>
+        {% endif %}
+    </td>
+    <td class="small text-muted">
+        {{ flow.node_count }} step{{ "" if flow.node_count == 1 else "s" }}
+    </td>
+    <td class="small">
+        {% if flow.last_run_status %}
+            {# The status decides the colour, and `partial` is deliberately its own —
+               amber, not green. A run that moved most of the records and dropped some is
+               not a success, and showing it as one is how "3 of 50,000 had a bad email"
+               stops being noticed. #}
+            {% set tone = {
+                "succeeded": "success",
+                "partial": "warning",
+                "failed": "danger",
+                "cancelled": "secondary",
+                "skipped": "secondary",
+                "running": "primary",
+                "queued": "info"
+            }.get(flow.last_run_status, "secondary") %}
+            <a
+                href="/integrations/{{ flow.uuid }}/runs"
+                class="text-decoration-none"
+            >
+                <span class="badge bg-{{ tone }}">{{ flow.last_run_status }}</span>
+            </a>
+            <div class="text-muted">
+                {{ flow.last_run_at[:16].replace("T", " ") if flow.last_run_at else "" }}
+            </div>
+        {% else %}
+            <span class="text-muted">Never run</span>
+        {% endif %}
+    </td>
+    <td class="small text-muted">
+        {{ flow.updated_at[:16].replace("T", " ") if flow.updated_at else "" }}
+    </td>
+    <td>
+        <div class="d-flex flex-wrap gap-1">
+            <a
+                class="btn btn-sm btn-outline-primary"
+                href="/integrations/{{ flow.uuid }}/canvas"
+            >
+                <i class="las la-project-diagram"></i> Design
+            </a>
+
+            <a
+                class="btn btn-sm btn-outline-secondary"
+                href="/integrations/{{ flow.uuid }}/runs"
+            >
+                <i class="las la-history"></i> Runs
+            </a>
+
+            {# Switching on needs a published version, and the refusal says so. Posted as
+               the value wanted rather than as a toggle, so two people with the page open
+               do not each flip whatever they happened to load. #}
+            <button
+                class="btn btn-sm {% if flow.is_active %}btn-outline-secondary{% else %}btn-outline-success{% endif %}"
+                hx-post="/integrations/{{ flow.uuid }}/active"
+                hx-vals='{"is_active": "{{ "false" if flow.is_active else "true" }}"}'
+                hx-target="#integrations-response"
+                hx-swap="innerHTML"
+            >
+                {% if flow.is_active %}Switch off{% else %}Switch on{% endif %}
+            </button>
+
+            <button
+                class="btn btn-sm btn-outline-danger"
+                hx-post="/integrations/{{ flow.uuid }}/delete"
+                hx-target="#integrations-response"
+                hx-swap="innerHTML"
+                hx-confirm="Delete the workflow '{{ flow.name }}'? Its versions, schedule and every run it has ever done go with it. This cannot be undone."
+            >
+                Delete
+            </button>
+        </div>
+    </td>
+</tr>
+{% else %}
+<tr>
+    <td colspan="6" class="text-center text-muted py-4">
+        <i class="las la-exchange-alt fs-4 d-block mb-1"></i>
+        No workflows yet. Add a <a href="/integrations/connections/">connection</a> first,
+        then create a workflow to move records between systems.
+    </td>
+</tr>
+{% endfor %}

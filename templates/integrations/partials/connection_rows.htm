@@ -1,0 +1,13 @@
+{# The response to every mutation on the connections page. Marker or error for the
+   targeted response area, plus an out-of-band refresh of the whole table. Same
+   `data-success` contract the rest of the application uses. #}
+{% if error %}
+    <div class="alert alert-danger alert-dismissible fade show mb-0" role="alert">
+        <i class="las la-exclamation-circle"></i> {{ error }}
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+{% else %}
+    <div data-success="true" class="d-none"></div>
+{% endif %}
+
+{% include "integrations/partials/connections_table.htm" %}

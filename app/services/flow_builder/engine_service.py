@@ -228,14 +228,99 @@ async def advance_flow_session(
         # plain AI answering. Nothing is persisted — the session is untouched.
         return FlowEngineResult(type=AI_HANDOFF)
 
-    early_result = _deliver_reply_to_waiting_node(graph_data, session, incoming_message, selected_value)
+    # A graph asked this visitor something on an earlier turn, so their message is the
+    # answer to it rather than input to the flow. Checked **first**, before anything else
+    # reads the message: the session is sitting on a Run-Graph node, which the ordinary
+    # waiting-node path knows nothing about, and running that node again would ask the
+    # same question a second time.
+    if session.awaiting_graph_run:
+        answered = await _answer_waiting_graph(
+            chatbot_key, session, graph_data, incoming_message,
+        )
+
+        if answered is not None:
+            await _persist_session(db, session)
+            return answered
+
+        # The answer landed and the graph finished. The session now points at whatever
+        # follows the Run-Graph node, so the ordinary loop below carries the turn on —
+        # which is what makes the pause invisible in the rest of the conversation.
+        result = await _run_internal_hops(
+            db, chatbot_key, flow.id, graph_data, session, incoming_message,
+        )
+        await _persist_session(db, session)
+        return result
+
+    # Resolved before the selection is consumed, because consuming it moves the
+    # session off the node that owns the options.
+    selected_option = _selected_option(graph_data, session, selected_value)
+
+    early_result = _deliver_reply_to_waiting_node(
+        graph_data, session, incoming_message, selected_value, selected_option,
+    )
     if early_result is not None:
         await _persist_session(db, session)
         return early_result
 
-    result = await _run_internal_hops(db, chatbot_key, flow.id, graph_data, session, incoming_message)
+    result = await _run_internal_hops(
+        db, chatbot_key, flow.id, graph_data, session,
+        _effective_message(incoming_message, selected_option),
+    )
     await _persist_session(db, session)
     return result
+
+
+def _selected_option(
+    graph_data: dict,
+    session: ChatbotFlowSession,
+    selected_value: Optional[str],
+) -> Optional[dict]:
+    """
+    The option the visitor just picked, as it is written in the graph, or None
+    when this turn is not a selection.
+
+    ``selected_value`` is the option's **id** — that is what a Menu/Dropdown node
+    publishes as each button's value (see :func:`_visitor_facing_result`) and what
+    the edges use as their ``source_port``.
+    """
+    if not selected_value:
+        return None
+
+    node = _find_node(graph_data, session.current_node_id)
+    if node is None or node.get("type") not in _AWAITING_SELECTION_TYPES:
+        return None
+
+    for option in (node.get("data") or {}).get("options", []):
+        if option.get("id") == selected_value:
+            return option
+
+    return None
+
+
+def _option_text(option: dict) -> str:
+    """What the visitor effectively said by picking this option."""
+    return str(option.get("label") or option.get("value") or "").strip()
+
+
+def _effective_message(incoming_message: Optional[str], selected_option: Optional[dict]) -> str:
+    """
+    The text the rest of this turn should treat as the visitor's message.
+
+    A button or dropdown reply carries no typed text — the widget sends an empty
+    ``message`` and puts the choice in ``selected_value`` — so anything downstream
+    that needs a question would otherwise get an empty string. An AI Fallback node
+    reached straight from a Menu is the case that matters: asking a model nothing
+    at all makes it answer nothing at all (or, with a scoped system prompt, refuse),
+    and searching a knowledge base for "" matches nothing.
+
+    So a selection turn hands on the option's label, which is exactly what the
+    visitor sees in their own chat bubble. Typed text always wins when both are
+    present, since the visitor's own words are the better question.
+    """
+    message = (incoming_message or "").strip()
+    if message:
+        return message
+    return _option_text(selected_option) if selected_option else ""
 
 
 def _deliver_reply_to_waiting_node(
@@ -243,6 +328,7 @@ def _deliver_reply_to_waiting_node(
     session: ChatbotFlowSession,
     incoming_message: Optional[str],
     selected_value: Optional[str],
+    selected_option: Optional[dict] = None,
 ) -> Optional[FlowEngineResult]:
     """
     If the session's current node was waiting on visitor input and this
@@ -256,13 +342,7 @@ def _deliver_reply_to_waiting_node(
     node_type = node.get("type")
 
     if node_type in _AWAITING_TEXT_TYPES and incoming_message:
-        variable_name = (node.get("data") or {}).get("variable_name")
-        if variable_name:
-            # Reassign to a new dict rather than mutating in place — `variables`
-            # is a plain (non-Mutable) JSONB column, so an in-place `[key] = ...`
-            # on the existing object is invisible to SQLAlchemy's change
-            # tracking and silently would not persist.
-            session.variables = {**session.variables, variable_name: incoming_message.strip()}
+        _store_answer(session, node, incoming_message.strip())
         edge = _find_edge(graph_data, node["id"], "default")
         if edge:
             session.current_node_id = edge["target"]
@@ -271,11 +351,32 @@ def _deliver_reply_to_waiting_node(
     if node_type in _AWAITING_SELECTION_TYPES and selected_value:
         edge = _find_edge(graph_data, node["id"], selected_value)
         if edge:
+            # Recorded before the hop, so a later If/Else can branch on what was
+            # picked. Without this a selection existed only as the edge it chose,
+            # and nothing downstream could tell Python from PHP.
+            if selected_option is not None:
+                _store_answer(session, node, _option_text(selected_option))
             session.current_node_id = edge["target"]
             return None
         return _visitor_facing_result(node)  # unknown selection — re-ask
 
     return None
+
+
+def _store_answer(session: ChatbotFlowSession, node: dict, value: str) -> None:
+    """
+    Record what the visitor just supplied under the node's configured variable
+    name, if it has one. A node with no variable name stores nothing.
+
+    Reassigns to a new dict rather than mutating in place — `variables` is a
+    plain (non-Mutable) JSONB column, so an in-place `[key] = ...` on the
+    existing object is invisible to SQLAlchemy's change tracking and silently
+    would not persist.
+    """
+    variable_name = (node.get("data") or {}).get("variable_name")
+    if not variable_name:
+        return
+    session.variables = {**session.variables, variable_name: value}
 
 
 def _visitor_facing_result(node: dict) -> FlowEngineResult:
@@ -416,6 +517,207 @@ async def _step_ai_fallback(
         return FlowEngineResult(type="text", text=str(exc.detail))
 
 
+async def _step_run_graph(
+    chatbot_key: ChatbotApiKey,
+    graph_data: dict,
+    session: ChatbotFlowSession,
+    node: dict,
+) -> Optional[FlowEngineResult]:
+    """
+    Run a published Graph Designer graph, and decide what that means for this turn.
+
+    The one node whose work happens outside this feature: the graph is somebody's drawn
+    sequence of queries, loops and checks, and it can do things no flow node can. Three
+    outcomes, and each does something different here:
+
+    * **it finished** — whatever it produced is stored under the node's variable name, if
+      it has one, and the flow hops on. Nothing is said to the visitor, exactly as a
+      blank Send Message node says nothing: a graph that read some rows is a step in a
+      conversation, not a message in it.
+    * **it stopped to ask something** — the turn ends with the operator's question, and
+      the run's id is parked on the session so the visitor's next message answers it. This
+      is the only non-prompt node that can end a turn waiting, and
+      :func:`_answer_waiting_graph` is the other half of it.
+    * **it failed** — the ``error`` port if one is drawn, otherwise the flow signs off.
+      Never a silent hop onward: a flow carrying on as though a step had succeeded is how
+      a visitor gets told something that is not true.
+
+    The graph is run **as its owner**, and the owner is resolved from the chatbot key's
+    ``user_id`` rather than taken from the graph row — so a flow can only run a graph its
+    own owner has, and the datasources its nodes read are that person's.
+
+    The visitor's captured variables are passed in as the run's inputs, which is what lets
+    a graph filter on something an Ask-for-Input node collected earlier in the same
+    conversation. A graph declares which of them it will use, as parameters, so a variable
+    it did not ask for has nowhere to land.
+    """
+    from app.services.graph_designer import graph_runner
+
+    data = node.get("data") or {}
+    graph_uuid = str(data.get("graph_id") or "").strip()
+
+    if not graph_uuid:
+        # A node nobody finished configuring. Said out loud rather than skipped: a flow
+        # that quietly steps over a step is a flow whose author cannot tell it is broken.
+        return _end_of_flow(
+            session,
+            "Sorry — this conversation is not set up correctly. Please try again later.",
+        )
+
+    outcome = await graph_runner.run_graph(
+        int(chatbot_key.user_id),
+        graph_uuid,
+        inputs=dict(session.variables or {}),
+    )
+
+    if outcome.asks:
+        session.current_node_id = node["id"]
+        session.awaiting_graph_run = outcome.run_id
+        question = str((outcome.question or {}).get("prompt") or "").strip()
+
+        # The operator's words, unchanged. A paraphrase here would ask the visitor a
+        # different question and make their answer unmatchable — the same rule
+        # `graph_tool_factory` and `download_service.offer_sentence` both keep.
+        return FlowEngineResult(
+            type="text_prompt",
+            text=question or "Could you confirm before I continue?",
+        )
+
+    if not outcome.finished:
+        error_edge = _find_edge(graph_data, node["id"], "error")
+
+        if error_edge:
+            session.current_node_id = error_edge["target"]
+            return None
+
+        return _end_of_flow(
+            session,
+            "Sorry — something went wrong working that out. Please try again later.",
+        )
+
+    _store_graph_result(session, node, outcome)
+
+    edge = _find_edge(graph_data, node["id"], "default")
+
+    return None if _advance_or_complete(session, edge, node["id"]) else _end_of_flow(
+        session,
+    )
+
+
+def _store_graph_result(session: ChatbotFlowSession, node: dict, outcome) -> None:  # noqa: ANN001
+    """
+    Record what a finished graph produced under the node's variable name, if it has one.
+
+    Stored as a **count**, not as the rows. A flow variable is a string that gets
+    interpolated into message text and compared by an If/Else node, so what is useful
+    there is "how many" — *"I found 12 matching orders"*, or a branch on whether there
+    were any at all. Putting a result set in it would produce a chat bubble containing
+    JSON.
+
+    The count is ``total_rows``, which is the real total rather than the length of the
+    preview. Those differ whenever a graph returned more rows than a preview holds, and
+    telling a visitor "20" when there were 5,275 is the exact failure this application
+    keeps writing tests against.
+
+    Reassigns ``variables`` rather than mutating it, for the reason
+    :func:`_store_answer` gives: it is a plain JSONB column and an in-place write is
+    invisible to change tracking.
+    """
+    variable_name = (node.get("data") or {}).get("variable_name")
+
+    if not variable_name:
+        return
+
+    session.variables = {
+        **(session.variables or {}),
+        str(variable_name): str(outcome.total_rows),
+    }
+
+
+async def _answer_waiting_graph(
+    chatbot_key: ChatbotApiKey,
+    session: ChatbotFlowSession,
+    graph_data: dict,
+    incoming_message: Optional[str],
+) -> Optional[FlowEngineResult]:
+    """
+    Hand the visitor's message to a graph that asked them something, and carry on.
+
+    Called before the ordinary hop loop, and only when ``awaiting_graph_run`` is set. Four
+    things can come of it, and the interesting one is the third:
+
+    * **the answer fitted and the graph finished** — the flag is cleared and ``None`` is
+      returned, so the hop loop takes over from the Run-Graph node and moves on. The
+      visitor's answer has done its job and the conversation continues normally.
+    * **the graph asked something else** — a second interrupt in the same graph. The new
+      question goes out and the new run id is parked. Nothing about this is special-cased;
+      it is the same branch as the first question.
+    * **the answer did not fit** — "maybe" to a yes/no. The question is asked **again**
+      with the validator's own sentence in front of it, and the run stays parked. This is
+      the case worth being careful about: it is ordinary input, not a fault, and treating
+      it as a failure would tell a visitor the conversation is broken when they need only
+      answer differently.
+    * **it failed** — the flag is cleared and the flow signs off, rather than leaving a
+      session waiting forever on a run that will never finish.
+    """
+    from app.services.graph_designer import graph_runner
+
+    run_id = str(session.awaiting_graph_run or "")
+    node = _find_node(graph_data, session.current_node_id)
+
+    # The key is passed in rather than reached through `session.chatbot_key`: that is a
+    # lazy relationship, and touching one on an async session outside a load raises
+    # instead of loading. The caller already holds it.
+    outcome = await graph_runner.answer_graph_run(
+        int(chatbot_key.user_id), run_id, incoming_message or "",
+    )
+
+    if outcome.asks and outcome.reason:
+        # Not accepted. Ask again, saying why, and keep the run parked.
+        question = str(
+            (outcome.question or {}).get("prompt")
+            or (node or {}).get("data", {}).get("prompt_text")
+            or ""
+        ).strip()
+
+        return FlowEngineResult(
+            type="text_prompt",
+            text=f"{outcome.reason} {question}".strip(),
+        )
+
+    if outcome.asks:
+        session.awaiting_graph_run = outcome.run_id
+        return FlowEngineResult(
+            type="text_prompt",
+            text=str((outcome.question or {}).get("prompt") or "").strip(),
+        )
+
+    session.awaiting_graph_run = None
+
+    if not outcome.finished:
+        error_edge = (
+            _find_edge(graph_data, node["id"], "error") if node is not None else None
+        )
+
+        if error_edge:
+            session.current_node_id = error_edge["target"]
+            return None
+
+        return _end_of_flow(
+            session,
+            "Sorry — something went wrong working that out. Please try again later.",
+        )
+
+    if node is not None:
+        _store_graph_result(session, node, outcome)
+        edge = _find_edge(graph_data, node["id"], "default")
+
+        if not _advance_or_complete(session, edge, node["id"]):
+            return _end_of_flow(session)
+
+    return None
+
+
 # Node types that auto-advance without producing visitor-facing output —
 # each handler mutates `session` in place and returns None to keep looping,
 # or a FlowEngineResult to end the turn (e.g. an unconnected branch).
@@ -466,6 +768,9 @@ async def _run_one_hop(
 
     if node_type == "ai_fallback":
         return await _step_ai_fallback(db, chatbot_key, flow_id, graph_data, session, node, incoming_message)
+
+    if node_type == "run_graph":
+        return await _step_run_graph(chatbot_key, graph_data, session, node)
 
     # Unknown/unsupported node type reached at runtime — end gracefully.
     return _end_of_flow(session)

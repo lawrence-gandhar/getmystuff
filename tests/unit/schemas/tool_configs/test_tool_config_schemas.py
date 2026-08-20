@@ -16,12 +16,14 @@ the wrong one.
 
 from __future__ import annotations
 
+import json
 import uuid
 
 import pytest
 from litestar.exceptions import HTTPException
 
 from app.schemas.tool_configs import (
+    MAX_NESTED_TOOLS,
     SchemaCascadeQuery,
     TableColumnsResponse,
     ToolConfigCreateRequest,
@@ -44,7 +46,7 @@ def _detail(schema, data: dict) -> str:
 
 
 def _valid() -> dict:
-    return {"tool_name": "total_units", "table_name": "sales_data"}
+    return {"tool_name": "total_units", "table_names": ["sales_data"]}
 
 
 @pytest.mark.parametrize("schema", MUTATIONS)
@@ -64,8 +66,16 @@ class TestWriteForms:
     def test_a_minimal_valid_form(self, schema) -> None:
         payload = schema.parse(_valid())
         assert payload.tool_name == "total_units"
-        assert payload.table_name == "sales_data"
+        assert payload.table_names == ["sales_data"]
         assert payload.config_json == {}
+
+    def test_several_tables_are_kept_in_the_order_posted(self, schema) -> None:
+        """The order carries meaning — the service reads the first as the primary
+        table, so sorting them here would silently re-point a saved query."""
+        payload = schema.parse(
+            {**_valid(), "table_names": ["projects", "project_details"]}
+        )
+        assert payload.table_names == ["projects", "project_details"]
 
     def test_tool_name_is_lowercased(self, schema) -> None:
         assert schema.parse({**_valid(), "tool_name": "Total_Units"}).tool_name == (
@@ -82,10 +92,21 @@ class TestWriteForms:
         )
 
     def test_tool_name_is_required(self, schema) -> None:
-        assert _detail(schema, {"table_name": "sales"}) == "Tool name is required"
+        assert _detail(schema, {"table_names": ["sales"]}) == "Tool name is required"
 
-    def test_table_name_is_required(self, schema) -> None:
-        assert _detail(schema, {"tool_name": "t"}) == "Table name is required"
+    def test_at_least_one_table_is_required(self, schema) -> None:
+        """A tool with nothing to read is not a tool. The sentence is written by the
+        field's own validator — the generic list message would read "needs at least 1
+        entries"."""
+        assert _detail(schema, {"tool_name": "t"}) == (
+            "Select at least one table for this tool to read"
+        )
+
+    def test_blank_entries_are_dropped_rather_than_counted(self, schema) -> None:
+        """A multi-select can post an empty value; it is not a table."""
+        assert _detail(schema, {"tool_name": "t", "table_names": ["", "  "]}) == (
+            "Select at least one table for this tool to read"
+        )
 
     @pytest.mark.parametrize(
         "table_name",
@@ -96,12 +117,12 @@ class TestWriteForms:
     ) -> None:
         """The injection guard — this name is interpolated, not parameterised."""
         assert "is not a valid name" in _detail(
-            schema, {**_valid(), "table_name": table_name}
+            schema, {**_valid(), "table_names": [table_name]}
         )
 
     def test_a_file_datasource_object_name_is_allowed(self, schema) -> None:
-        payload = schema.parse({**_valid(), "table_name": "sales_data.csv"})
-        assert payload.table_name == "sales_data.csv"
+        payload = schema.parse({**_valid(), "table_names": ["sales_data.csv"]})
+        assert payload.table_names == ["sales_data.csv"]
 
     def test_the_query_is_parsed_from_the_hidden_field(self, schema) -> None:
         payload = schema.parse(
@@ -265,3 +286,69 @@ class TestQueryMode:
             schema, {**_valid(), "query_mode": "sql", "sql_query": "x" * 20_001}
         )
         assert "SQL query" in detail
+
+
+@pytest.mark.parametrize("schema", WRITE_FORMS)
+class TestNestedTools:
+    """
+    The tools this one embeds, posted as one JSON array.
+
+    The same split as everywhere else in this schema: shape and size here, meaning
+    in ``tool_chain_service`` — which is the only layer that can see the other
+    tools, their datasource, their owner and the shape of the chain. So a payload
+    naming a tool that does not exist is asserted to *pass* this layer; failing it
+    would mean two guards, and this one is the one that cannot check.
+    """
+
+    def test_no_nested_tools_is_an_empty_list(self, schema) -> None:
+        assert schema.parse(_valid()).children_json == []
+
+    def test_a_blank_field_is_an_empty_list(self, schema) -> None:
+        """What the form posts when the card was never touched."""
+        assert schema.parse({**_valid(), "children_json": "  "}).children_json == []
+
+    def test_the_entries_are_carried_through(self, schema) -> None:
+        parsed = schema.parse({
+            **_valid(),
+            "children_json": json.dumps([
+                {
+                    "child_id": VALID_UUID,
+                    "child_column": "id",
+                    "parent_reference": "client_id",
+                }
+            ]),
+        })
+
+        assert parsed.children_json[0]["child_column"] == "id"
+
+    def test_an_unknown_tool_passes_this_layer(self, schema) -> None:
+        parsed = schema.parse({
+            **_valid(),
+            "children_json": json.dumps([{"child_id": VALID_UUID}]),
+        })
+
+        assert len(parsed.children_json) == 1
+
+    def test_unparseable_json_is_refused(self, schema) -> None:
+        """The hand-rolled version of this swallowed a malformed list into `[]`,
+        which told the user their nesting had saved when it had been discarded."""
+        assert "could not be read" in _detail(schema, {
+            **_valid(), "children_json": "{not json",
+        })
+
+    def test_something_that_is_not_a_list_is_refused(self, schema) -> None:
+        assert "not in the expected format" in _detail(schema, {
+            **_valid(), "children_json": '{"child_id": "x"}',
+        })
+
+    def test_an_entry_that_is_not_an_object_is_refused(self, schema) -> None:
+        assert "not in the expected format" in _detail(schema, {
+            **_valid(), "children_json": '["active_clients"]',
+        })
+
+    def test_more_nested_tools_than_allowed_is_refused(self, schema) -> None:
+        entries = [{"child_id": VALID_UUID}] * (MAX_NESTED_TOOLS + 1)
+
+        assert "at most" in _detail(schema, {
+            **_valid(), "children_json": json.dumps(entries),
+        })

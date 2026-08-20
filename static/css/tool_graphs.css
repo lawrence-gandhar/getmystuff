@@ -1,0 +1,209 @@
+/*
+ * Tool Graphs — the side tree and the two canvases.
+ *
+ * A stylesheet rather than a <style> block in the template (which is what
+ * flow_builder/canvas.htm does) because ARCHITECTURE.md asks for that and this page
+ * is new, so there is nothing to preserve by matching the older file.
+ *
+ * Colours are Bootstrap 5's own CSS variables wherever one exists, so the drawing
+ * stays in step with the rest of the application instead of hardcoding a palette
+ * that drifts the first time the theme changes.
+ */
+
+/* ----------------------------------------------------------------------
+   The tree
+   ---------------------------------------------------------------------- */
+
+.tool-graph-tree {
+    max-height: 70vh;
+    overflow-y: auto;
+}
+
+.tool-graph-branch {
+    margin-bottom: 0.15rem;
+}
+
+.tool-graph-caret {
+    line-height: 1;
+    width: 1rem;
+}
+
+/* Rotates with Bootstrap's own collapse state, so the caret never lies about
+   whether the branch below it is open. */
+.tool-graph-caret[aria-expanded="false"] i {
+    transform: rotate(-90deg);
+    display: inline-block;
+}
+
+.tool-graph-node {
+    border: 1px solid transparent;
+    border-radius: 0.375rem;
+    font-size: 0.8125rem;
+    padding: 0.15rem 0.4rem;
+    white-space: normal;
+    word-break: break-word;
+}
+
+.tool-graph-node:hover {
+    background-color: var(--bs-tertiary-bg, #f8f9fa);
+}
+
+.tool-graph-node.is-selected {
+    background-color: var(--bs-primary-bg-subtle, #cfe2ff);
+    border-color: var(--bs-primary-border-subtle, #9ec5fe);
+}
+
+.tool-graph-node-off {
+    opacity: 0.65;
+}
+
+/* ----------------------------------------------------------------------
+   The canvases
+   ---------------------------------------------------------------------- */
+
+.tool-graph-canvas {
+    height: 70vh;
+    overflow: auto;
+    /* The same dotted grid the Flow Builder canvas uses, so the two node canvases
+       in this application read as the same kind of surface. */
+    background-color: #fff;
+    background-image: radial-gradient(circle, #e5e7eb 1px, transparent 1px);
+    background-size: 20px 20px;
+}
+
+.tool-graph-canvas[data-graph-pane="sql"] {
+    background-image: none;
+    background-color: var(--bs-body-bg, #fff);
+}
+
+.tool-graph-canvas svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
+.tool-graph-message {
+    position: absolute;
+    top: 0.75rem;
+    left: 0.75rem;
+    right: 0.75rem;
+    z-index: 2;
+    padding: 0.5rem 0.75rem;
+    border-radius: 0.375rem;
+    background-color: var(--bs-warning-bg-subtle, #fff3cd);
+    border: 1px solid var(--bs-warning-border-subtle, #ffe69c);
+    color: var(--bs-warning-text-emphasis, #664d03);
+}
+
+.tool-graph-empty {
+    padding: 2rem;
+    color: var(--bs-secondary-color, #6c757d);
+}
+
+/* ----------------------------------------------------------------------
+   Nodes and edges
+   ---------------------------------------------------------------------- */
+
+.tool-graph-box {
+    fill: #fff;
+    stroke: var(--bs-primary, #0d6efd);
+    stroke-width: 1.5;
+}
+
+/* Disabled is dashed and muted rather than hidden: a disabled child is the single
+   most likely reason a chain someone is looking at returns nothing. */
+.tool-graph-node-group.is-disabled .tool-graph-box {
+    stroke: var(--bs-danger, #dc3545);
+    stroke-dasharray: 5 3;
+    fill: var(--bs-danger-bg-subtle, #f8d7da);
+}
+
+.tool-graph-node-group.is-terminal .tool-graph-box {
+    fill: var(--bs-secondary-bg, #e9ecef);
+    stroke: var(--bs-secondary-color, #6c757d);
+}
+
+.tool-graph-node-group.is-focused .tool-graph-box {
+    stroke-width: 3;
+}
+
+.tool-graph-label {
+    font-family: var(--bs-font-monospace, monospace);
+    font-size: 12px;
+    font-weight: 600;
+    fill: var(--bs-body-color, #212529);
+}
+
+.tool-graph-sublabel {
+    font-size: 10px;
+    fill: var(--bs-secondary-color, #6c757d);
+}
+
+.tool-graph-node-group.is-disabled .tool-graph-label {
+    fill: var(--bs-danger-text-emphasis, #58151c);
+}
+
+.tool-graph-edge {
+    fill: none;
+    stroke: var(--bs-primary, #0d6efd);
+    stroke-width: 1.5;
+}
+
+.tool-graph-edge.is-terminal {
+    stroke: var(--bs-secondary-color, #6c757d);
+    stroke-dasharray: 4 3;
+}
+
+.tool-graph-edge-label {
+    font-family: var(--bs-font-monospace, monospace);
+    font-size: 9px;
+    fill: var(--bs-secondary-color, #6c757d);
+}
+
+/* ----------------------------------------------------------------------
+   Venn diagrams
+   ---------------------------------------------------------------------- */
+
+.tool-graph-venn-circle {
+    fill: none;
+    stroke: var(--bs-primary, #0d6efd);
+    stroke-width: 1.5;
+}
+
+.tool-graph-venn-fill {
+    fill: var(--bs-primary, #0d6efd);
+    fill-opacity: 0.28;
+    stroke: none;
+}
+
+.tool-graph-venn-label {
+    font-family: var(--bs-font-monospace, monospace);
+    font-size: 11px;
+    fill: var(--bs-body-color, #212529);
+    text-anchor: middle;
+}
+
+/* ----------------------------------------------------------------------
+   Legend
+   ---------------------------------------------------------------------- */
+
+.tool-graph-key {
+    display: inline-block;
+    width: 0.75rem;
+    height: 0.75rem;
+    border-radius: 0.15rem;
+    vertical-align: -1px;
+    border: 1.5px solid var(--bs-primary, #0d6efd);
+    background-color: #fff;
+}
+
+.tool-graph-key-terminal {
+    border-color: var(--bs-secondary-color, #6c757d);
+    background-color: var(--bs-secondary-bg, #e9ecef);
+}
+
+.tool-graph-key-disabled {
+    border-color: var(--bs-danger, #dc3545);
+    border-style: dashed;
+    background-color: var(--bs-danger-bg-subtle, #f8d7da);
+}

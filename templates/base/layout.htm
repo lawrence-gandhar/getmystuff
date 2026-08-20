@@ -176,6 +176,21 @@ body {
             <i class="las la-tools"></i> Tool Configs
         </a>
 
+        <a href="/tool-graphs" class="{% if active == 'tool_graphs' %}active{% endif %}">
+            <i class="las la-sitemap"></i> Tool Graphs
+        </a>
+
+        <a href="/graph-designer/" class="{% if active == 'graph_designer' %}active{% endif %}">
+            <i class="las la-draw-polygon"></i> Graph Designer
+        </a>
+
+        {# One entry for the whole feature, marked active from both its pages: the
+           connections list sets `active == 'integrations'` too, because it is where a
+           workflow's credentials are set up rather than a separate thing to find. #}
+        <a href="/integrations/" class="{% if active == 'integrations' %}active{% endif %}">
+            <i class="las la-exchange-alt"></i> Integrations
+        </a>
+
         <a href="/ai-settings" class="{% if active == 'ai_settings' %}active{% endif %}">
             <i class="las la-key"></i> AI Settings
         </a>

@@ -317,6 +317,23 @@ class ChatbotMessage(Base):
         index=True,
     )
 
+    # Which visitor conversation this turn belongs to. The same token the widget
+    # already sends for the Flow Builder session, recorded here so the log can be read
+    # back as a *conversation* rather than as one chatbot's undifferentiated stream of
+    # turns.
+    #
+    # That distinction is what makes a follow-up answerable. A visitor replying "yes" to
+    # a question the assistant asked last turn is unanswerable without the turn before
+    # it, and filtering by chatbot_key_id alone would mix in every other visitor's
+    # messages — see chatbot_turn_service.recent_history.
+    #
+    # Nullable, and NULL for every row written before this column existed: those turns
+    # cannot be attributed to a conversation after the fact, and guessing would be worse
+    # than admitting it.
+    session_token: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True, index=True,
+    )
+
     visitor_message: Mapped[str] = mapped_column(Text, nullable=False)
 
     # "success" | "error"

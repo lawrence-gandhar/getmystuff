@@ -1,0 +1,85 @@
+{# Nested Tools — the tools this one embeds, and where their values land.
+
+   Sits between the query mode and the builder because it belongs to *both* modes:
+   a builder query gets an extra `IN` on a column, a SQL query fills a `:name`
+   placeholder, and which one the row asks for is decided live by
+   static/js/tool_chain.js from the selected mode.
+
+   Rendered out of band with the mode field and the builder when the datasource
+   changes (see table_field_response.htm): a child must read the same datasource as
+   its parent, so children chosen against the previous one are no longer valid
+   choices and the card starts empty.
+
+   Only offered for a relational datasource — `supports_sql` is the same flag that
+   enables SQL mode, and a Mongo or CSV datasource has no chain the executor can
+   run. #}
+<div
+    id="toolNestedTools"
+    class="mb-4"
+    data-nested-tools
+    {% if oob_swap %}hx-swap-oob="true"{% endif %}
+>
+    {% if supports_sql %}
+    <div class="card">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <div>
+                <strong>Nested Tools</strong>
+                <span class="text-muted small">
+                    — run another tool or a graph first and restrict this query to
+                    what it returns
+                </span>
+            </div>
+            <button
+                type="button"
+                class="btn btn-sm btn-outline-primary"
+                data-nested-add
+                {% if not datasource_id %}disabled title="Pick a datasource first"{% endif %}
+            >
+                + Embed
+            </button>
+        </div>
+        <div class="card-body" data-nested-rows></div>
+        <div class="card-footer bg-transparent">
+            <span class="form-text mb-0">
+                Each embedded tool runs first, and one column of its result restricts
+                this query — a sub-query, written as two tools. <strong>If an
+                embedded tool returns nothing, this tool returns no rows</strong> and
+                the ones above it never run. The tools stay usable on their own, and
+                an agent given this tool is given them too.
+                <br>
+                You can embed a published <a href="/graph-designer">graph</a> instead
+                of a tool, and one thing about that is worth knowing before you do: a
+                graph containing an <em>Ask a human</em> node will stop and put its
+                question to the person in the conversation, and this tool returns no
+                rows until they answer.
+            </span>
+        </div>
+    </div>
+    {% endif %}
+
+    {# The complete list, as one JSON field. Three parallel controls posted as
+       repeated keys could arrive at different lengths, and a row would then pair
+       the wrong column with the wrong tool — the same reason the query builder
+       posts one config_json. #}
+    <input
+        type="hidden"
+        name="children_json"
+        data-nested-json
+        value='{{ (tool_config.children if tool_config and tool_config.children else []) | tojson }}'
+    >
+
+    {# What the picker draws itself from. `exclude` is this tool, so it cannot be
+       offered as its own child; the endpoint also drops anything that already
+       embeds it. #}
+    <script type="application/json" data-nested-data>
+        {{
+            {
+                "datasource_id": datasource_id | default("", true),
+                "exclude": (tool_config.uuid if tool_config else ""),
+                "base_table": base_table | default("", true),
+                "column_map": column_map | default({}, true),
+                "children": (tool_config.children if tool_config and tool_config.children else []),
+            } | tojson
+        }}
+    </script>
+</div>

@@ -29,6 +29,11 @@ flow_crud = CRUDQueryBuilder(ChatbotFlow)
 _VALID_NODE_TYPES = {
     "start", "if_else", "goto", "menu", "dropdown",
     "ask_input", "send_message", "ai_fallback", "end",
+    # Runs a published Graph Designer graph mid-conversation. The one node type whose
+    # work happens outside this feature entirely — see `engine_service._step_run_graph`,
+    # and note that a graph containing an "Ask a human" node makes this node end the turn
+    # waiting for a reply, which no other non-prompt node does.
+    "run_graph",
 }
 _VALID_OPERATORS = {"equals", "contains", "not_empty"}
 _VALID_CONTEXT_SOURCES = {"datasource", "knowledge_base", "prompt"}

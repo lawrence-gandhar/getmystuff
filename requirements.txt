@@ -46,3 +46,44 @@ langchain-core
 langchain-anthropic
 langchain-openai
 langchain-ollama
+
+# --------------------------------------------------------------------------
+# Downloader Agents — app/services/downloader_agents/
+#
+# The export graph pauses on a LangGraph `interrupt()` to ask the user whether they
+# want the file, and that pause has to survive the gap between two chat turns AND be
+# resumable from the worker rather than from the request that created it. So the
+# checkpoint store has to be the database, not memory.
+#
+# langgraph-checkpoint-postgres is built on psycopg 3 and does NOT support asyncpg,
+# which is why this adds a SECOND Postgres driver alongside the asyncpg the
+# application itself uses. Nothing else in the project talks to psycopg 3; only
+# app/services/downloader_agents/base/checkpointer.py imports it, and that module
+# falls back to langgraph's in-memory saver when DATABASE_URL is not Postgres — which
+# is what keeps the sqlite+aiosqlite test suite working.
+# --------------------------------------------------------------------------
+langgraph-checkpoint-postgres
+psycopg[binary,pool]
+
+# --------------------------------------------------------------------------
+# Recursive DataFrame Agents — app/services/agent_recursive_dataframes/
+#
+# The module reads a tool's whole result set in batches and folds each batch into
+# a partial aggregate, so the grouping happens once per batch in a worker thread
+# while the next batch is being read. polars rather than the pandas already here
+# for one reason that decides it: polars runs group_by/agg in Rust with the GIL
+# released, so the fanned-out workers genuinely overlap. pandas holds the GIL in
+# DataFrame.from_records over dicts and in string-key factorisation, which would
+# serialise the fan-out and leave the design doing nothing.
+#
+# polars is imported at MODULE scope in exactly one file, frame_ops.py, and that
+# is load-bearing rather than tidy: the same hazard documented in
+# downloader_agents/parquet/parquet_writer.py applies to any compiled extension
+# first imported on a worker thread that is later destroyed.
+#
+# The wheel splits into a thin `polars` front end and a `polars-runtime-*` binary
+# (~57 MB) resolved automatically. On a host older than the modern x86-64 baseline
+# it dies with `Illegal instruction` and no Python traceback; the fix there is to
+# swap this line for `polars-lts-cpu`. See documentations/AGENT_RECURSIVE_DATAFRAMES.md.
+# --------------------------------------------------------------------------
+polars

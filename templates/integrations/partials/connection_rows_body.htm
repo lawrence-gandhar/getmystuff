@@ -1,0 +1,120 @@
+{# One row per connection.
+
+   **Two independent states, shown as two things.** `status` is what the vendor and the
+   credential say — active, needs reconnecting, revoked; `is_active` is whether the owner
+   has parked it. Collapsing them would make "I switched this off" indistinguishable from
+   "the vendor revoked our token", which is the difference between pressing a button and
+   going and getting a new key. #}
+{% for connection in connections %}
+<tr id="integration-connection-row-{{ connection.uuid }}">
+    <td>
+        <div class="fw-semibold">{{ connection.label }}</div>
+        {% if connection.external_account_id %}
+            <div class="small text-muted">{{ connection.external_account_id }}</div>
+        {% endif %}
+    </td>
+    <td class="small">
+        {{ connection.connector_label or connection.connector_id }}
+        {% if connection.auth_kind and connection.auth_kind != "none" %}
+            <div class="text-muted">{{ connection.auth_kind.replace("_", " ") }}</div>
+        {% endif %}
+    </td>
+    <td class="small text-muted text-break">
+        {{ connection.base_url or "—" }}
+        {% if connection.allow_private_hosts %}
+            <div>
+                <span
+                    class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle"
+                    title="An administrator allowed this connection to reach an address inside your network"
+                >
+                    <i class="las la-shield-alt"></i> Private network
+                </span>
+            </div>
+        {% endif %}
+    </td>
+    <td>
+        {% if connection.needs_reauth %}
+            <span class="badge bg-danger">Needs reconnecting</span>
+        {% elif connection.status == "revoked" %}
+            <span class="badge bg-danger-subtle text-danger-emphasis border border-danger-subtle">Revoked</span>
+        {% elif not connection.is_active %}
+            <span class="badge bg-secondary">Switched off</span>
+        {% else %}
+            <span class="badge bg-success">Active</span>
+        {% endif %}
+    </td>
+    <td class="small text-muted">
+        {{ connection.created_at[:10] if connection.created_at else "" }}
+    </td>
+    <td>
+        <div class="d-flex flex-wrap gap-1">
+            {# Makes one real call. Opens the dialog first so there is something to render
+               into while it waits — the request can take as long as somebody else's
+               server does. #}
+            <button
+                class="btn btn-sm btn-outline-primary"
+                type="button"
+                hx-post="/integrations/connections/{{ connection.uuid }}/test"
+                hx-target="#connectionTestResult"
+                hx-swap="innerHTML"
+                data-bs-toggle="modal"
+                data-bs-target="#connectionTestModal"
+            >
+                <i class="las la-vial"></i> Test
+            </button>
+
+            <button
+                class="btn btn-sm btn-outline-secondary"
+                type="button"
+                hx-get="/integrations/connections/{{ connection.uuid }}/edit-form"
+                hx-target="#connectionModalContent"
+                hx-swap="innerHTML"
+                data-bs-toggle="modal"
+                data-bs-target="#connectionModal"
+            >
+                <i class="las la-pen"></i> Edit
+            </button>
+
+            <button
+                class="btn btn-sm {% if connection.is_active %}btn-outline-secondary{% else %}btn-outline-success{% endif %}"
+                hx-post="/integrations/connections/{{ connection.uuid }}/active"
+                hx-vals='{"is_active": "{{ "false" if connection.is_active else "true" }}"}'
+                hx-target="#connections-response"
+                hx-swap="innerHTML"
+            >
+                {% if connection.is_active %}Switch off{% else %}Switch on{% endif %}
+            </button>
+
+            {# Deletes the credential and leaves the connection. Workflows point at it by
+               id, so removing the row would turn "reconnect this" into a step whose
+               connection no longer exists. #}
+            <button
+                class="btn btn-sm btn-outline-warning"
+                hx-post="/integrations/connections/{{ connection.uuid }}/revoke"
+                hx-target="#connections-response"
+                hx-swap="innerHTML"
+                hx-confirm="Delete the stored credentials for '{{ connection.label }}'? Workflows using it will stop until you reconnect it. The connection itself stays, so nothing has to be rewired."
+            >
+                Revoke
+            </button>
+
+            <button
+                class="btn btn-sm btn-outline-danger"
+                hx-post="/integrations/connections/{{ connection.uuid }}/delete"
+                hx-target="#connections-response"
+                hx-swap="innerHTML"
+                hx-confirm="Delete '{{ connection.label }}' entirely? Its credentials and its operations go with it, and any workflow step pointing at it will need a new connection chosen. This cannot be undone."
+            >
+                Delete
+            </button>
+        </div>
+    </td>
+</tr>
+{% else %}
+<tr>
+    <td colspan="6" class="text-center text-muted py-4">
+        <i class="las la-plug fs-4 d-block mb-1"></i>
+        No connections yet. Add one to give a workflow somewhere to read from and write to.
+    </td>
+</tr>
+{% endfor %}

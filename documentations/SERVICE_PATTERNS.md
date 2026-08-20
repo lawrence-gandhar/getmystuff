@@ -124,3 +124,62 @@ A table discovered after the datasource was created has no `column_data` yet. Th
 cascade is a no-op there; the view route falls back to a live schema fetch and treats
 every column as active, which matches the table's own default of `"active"` for
 unconfigured tables.
+
+---
+
+# Who reads the status — `app/utils/datasource_status.py`
+
+The switches above are only worth having if every feature honours them, so the reading
+is done in one shared module rather than at each call site. It lives in `utils/`
+alongside `query_joins.py` and `sql_guard.py` for the same reason those do: four
+features depend on it, so it belongs to none of them.
+
+```python
+from app.utils.datasource_status import (
+    is_table_active, is_column_active,
+    active_table_names, active_column_names, active_columns_by_table,
+    inactive_table_names, first_inactive_reference,
+    NO_ACTIVE_TABLES_MESSAGE, inactive_table_message,
+    no_active_columns_message, inactive_column_message,
+)
+```
+
+Four rules, all of them load-bearing:
+
+1. **Absent means active.** Only the literal `"inactive"` switches something off.
+   A missing table entry, an empty `column_data`, a `configuration_data` of `None`,
+   an unrecognised value — all active. Every datasource created before metadata
+   collection worked has an empty `configuration_data`, so "active only if it says
+   active" would empty every dropdown in the application for those users.
+2. **Nothing raises.** `configuration_data` is user-written JSON and hand-editable, so
+   an unrecognised shape reads as unconfigured rather than taking a page down. Callers
+   raise — the services as an `HTTPException`, the executor as a `ToolQueryError` —
+   which is why the message strings live in the module and not in either of them.
+3. **The cascade is re-applied on read.** `active_column_names` returns `[]` for an
+   inactive table whatever its `column_data` says. The write side cascades too, but a
+   row edited straight in psql can disagree with itself.
+4. **The caller owns the list of names.** Every function filters names the caller read
+   from the live database and never returns one it was not given, so a column dropped
+   from the real table but still recorded in `configuration_data` is never offered.
+
+Where it is enforced, and what "enforced" means in each place:
+
+| Surface | Behaviour |
+|---|---|
+| Data Sources listing (`search_sort_tables`) | **Opt-in filter, not a rule** — this is where the switches are set, so it must be able to show inactive tables. |
+| Tool Config pickers (`get_table_choices`, `get_column_choices`, `get_column_map`) | Inactive tables and columns are **not offered at all**. All-inactive raises a named message rather than showing an empty dropdown. |
+| Ask AI table picker (`sql_assist_service.get_table_choices`) | Same. |
+| Ask AI schema (`sql_assist_service._load_metadata`) | Inactive tables refused by name; inactive columns, primary-key entries and foreign keys **pruned out of the metadata** before the prompt is built. The model is never shown a column it may not read. |
+| Agent execution (`query_executor`) | The real guarantee. Checked on **every run**, because a tool config is a standing permission written once and run for months. Builder mode checks tables *and* columns; SQL mode checks the tables the tool records (`table_name` + `extra_tables`), because nothing parses the statement. |
+
+Saving a tool config deliberately does **not** check the status — a datasource that is
+momentarily unreachable must not make an existing config uneditable. Switching a column
+off makes a config *unrunnable until fixed*, not unopenable.
+
+### What happens to a saved config that names a switched-off column
+
+It fails, loudly, with a message the agent relays: *"Column 'orders.total' is inactive
+in this datasource…"*. It is not dropped from the query. A dropped filter widens the
+result set, a dropped group-by changes what each row counts, and either way the query
+still returns a number the agent states as fact. A tool that says it needs
+reconfiguring is recoverable; a plausible wrong figure is not.

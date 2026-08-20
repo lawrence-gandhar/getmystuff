@@ -16,6 +16,7 @@ from app.services.datasource.metadata_service import (
     get_table_schema,
 )
 from app.utils.crypto import encrypt_password
+from app.utils.datasource_status import is_table_active, table_status
 from app.utils.file_utils import FILE_BASED_TYPES
 from app.db.db_utils import (
     CRUDQueryBuilder,
@@ -447,7 +448,7 @@ async def toggle_column_status_service(
     # A distinct 400 rather than the 404 above: this is a business rule the user
     # can act on, and returning the same "not found" for both would tell them
     # nothing about which it was.
-    if table_config.get("status", "active") == "inactive" and new_status == "active":
+    if new_status == "active" and not is_table_active(configuration, table_name):
         raise HTTPException(
             status_code=400,
             detail=(
@@ -550,23 +551,23 @@ async def search_sort_tables(
         needle = search.strip().lower()
         live_tables = [t for t in live_tables if needle in t.lower()]
 
-    # STATUS FILTER — use configuration_data status, default "active" for unconfigured tables
+    # STATUS FILTER
+    #
+    # Deliberately an opt-in filter and not an enforced rule: this listing is where
+    # the user switches tables on and off, so it has to be able to show the inactive
+    # ones. Everywhere a table is *used* — the Tool Configs pickers, the Ask AI
+    # schema, the agent executor — the inactive ones are gone for good.
     if status_filter and status_filter != "all":
         live_tables = [
             t for t in live_tables
-            if configuration.get(t, {}).get("status", "active") == status_filter
+            if table_status(configuration, t) == status_filter
         ]
 
     # SORT
     live_tables.sort(reverse=(sort_by == "za"))
 
     # Build result — overlay status from configuration_data
-    result = []
-    for table_name in live_tables:
-        cfg = configuration.get(table_name, {})
-        result.append({
-            "table_name": table_name,
-            "status": cfg.get("status", "active"),
-        })
-
-    return result
+    return [
+        {"table_name": table_name, "status": table_status(configuration, table_name)}
+        for table_name in live_tables
+    ]

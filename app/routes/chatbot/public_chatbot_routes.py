@@ -1,21 +1,30 @@
+import json
+from typing import AsyncIterator
+
 from litestar import Controller, get, post
 from litestar.config.cors import CORSConfig
 from litestar.connection import Request
 from litestar.exceptions import HTTPException
 from litestar.middleware.base import DefineMiddleware
 from litestar.middleware.cors import CORSMiddleware
-from litestar.response import Response
+from litestar.response import Response, ServerSentEvent
+from litestar.response.sse import ServerSentEventMessage
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.schemas.chatbot import (
     ChatbotTurnResponse,
     PublicChatbotMessageRequest,
+    PublicChatbotStreamQuery,
     PublicWidgetConfigQuery,
     WidgetConfigResponse,
 )
 from app.schemas.common import StatusResponse
 from app.services.chatbot.chatbot_service import get_active_key_by_value, validate_origin
-from app.services.chatbot.chatbot_turn_service import TurnResult, answer_turn
+from app.services.chatbot.chatbot_turn_service import (
+    TurnResult,
+    answer_turn,
+    stream_turn,
+)
 from app.services.chatbot.chatbot_widget_settings_service import (
     build_widget_public_config,
     get_widget_settings_by_key_id,
@@ -129,6 +138,52 @@ class PublicChatbotController(Controller):
             payload.selected_value,
         )
         return _turn_response(result)
+
+    @get("/message-stream")
+    async def message_stream(
+        self, request: Request, db: AsyncSession,
+    ) -> ServerSentEvent | Response:
+        """
+        The same turn as :meth:`message`, streamed as the agent writes it.
+
+        A GET, because ``EventSource`` only issues GETs — so the message, the key and the
+        session id arrive as query parameters and go through their own schema.
+
+        The key and origin checks happen *before* the stream opens, and are ordinary
+        rejections with real status codes: a stream's status is committed the moment it
+        begins, so anything that should be a 403 has to be refused here. Failures after
+        that point arrive as an ``error`` event instead.
+
+        A turn that cannot be streamed — an active flow, or a chatbot with no data agent —
+        yields one ``fallback`` event and the widget posts to :meth:`message` instead. See
+        ``chatbot_turn_service.stream_turn``.
+        """
+        origin = request.headers.get("origin")
+
+        try:
+            payload = PublicChatbotStreamQuery.from_query(request)
+        except HTTPException as exc:
+            return _error(str(exc.detail), exc.status_code)
+
+        chatbot_key = await get_active_key_by_value(db, payload.api_key)
+        if not chatbot_key:
+            return _error(_INVALID_KEY, 404)
+
+        if not validate_origin(chatbot_key, origin):
+            return _error(_FORBIDDEN_ORIGIN, 403)
+
+        async def messages() -> AsyncIterator[ServerSentEventMessage]:
+            events = stream_turn(
+                db, chatbot_key, payload.message, payload.session_id,
+            )
+
+            async for event in events:
+                yield ServerSentEventMessage(
+                    data=json.dumps(event, default=str),
+                    event=str(event.get("event") or "token"),
+                )
+
+        return ServerSentEvent(messages())
 
 
 def _turn_response(result: TurnResult) -> Response:

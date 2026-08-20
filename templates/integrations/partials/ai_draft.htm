@@ -1,0 +1,101 @@
+{# A draft a model produced and this application checked, or the confirmation of one saved.
+
+   **The drawing travels in a hidden field and Save is a second request.** Not a
+   convenience: generating saves nothing at all, which is what makes "a refused draft
+   leaves zero rows behind" a property of the design rather than a hope. An implementation
+   that saved first and validated after would look identical from the outside until the day
+   somebody asked for a workflow against a connection they do not have. #}
+
+{% if saved %}
+    <div class="alert alert-success mb-0">
+        <div class="fw-semibold mb-1">
+            <i class="las la-check-circle"></i> Saved as a draft
+        </div>
+        <strong>{{ saved.name }}</strong> is in your workflows, switched off and
+        unpublished — nothing runs until you open it, check it and publish it.
+        <div class="mt-2">
+            <a href="{{ saved.canvas_url }}" class="btn btn-sm btn-primary">
+                <i class="las la-project-diagram"></i> Open it
+            </a>
+        </div>
+    </div>
+{% else %}
+    <form
+        hx-post="/integrations/ai/save-draft"
+        hx-target="#intAiPanelBody"
+        hx-swap="innerHTML"
+    >
+        <input type="hidden" name="graph_data" value="{{ graph_data_json }}">
+
+        <div class="alert alert-info">
+            <div class="fw-semibold mb-1">
+                <i class="las la-magic"></i> A draft, not a workflow
+            </div>
+            {{ draft.node_count }} step{{ "" if draft.node_count == 1 else "s" }}. It is
+            saved switched off and unpublished, so nothing happens until you have read it
+            and pressed Publish yourself.
+        </div>
+
+        {% if draft.warnings %}
+            {# Warnings rather than refusals, and the difference is deliberate: a required
+               field nobody mapped is five seconds of work, and refusing the whole draft
+               over it would throw away one that is ninety percent right. Publishing
+               refuses it, which is the right moment. #}
+            <div class="alert alert-danger">
+                <div class="fw-semibold mb-1">Needs finishing before it can be published</div>
+                <ul class="mb-0 small">
+                    {% for warning in draft.warnings %}
+                        <li>{{ warning }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+        {% endif %}
+
+        {% if draft.assumptions %}
+            {# What the model had to decide for itself. A guess it reported is one somebody
+               can check; a guess it did not report is indistinguishable from knowledge,
+               which is why the prompt asks for these and why they are shown above the Save
+               button rather than below it. #}
+            <div class="alert alert-warning">
+                <div class="fw-semibold mb-1">It had to assume</div>
+                <ul class="mb-0 small">
+                    {% for assumption in draft.assumptions %}
+                        <li>{{ assumption }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+        {% endif %}
+
+        <div class="mb-3">
+            <label for="aiDraftName" class="form-label fw-semibold small">
+                Workflow name <span class="text-danger">*</span>
+            </label>
+            <input
+                type="text"
+                id="aiDraftName"
+                name="name"
+                class="form-control form-control-sm"
+                value="{{ draft.name }}"
+                required
+                maxlength="255"
+            >
+        </div>
+
+        <div class="mb-3">
+            <label for="aiDraftDescription" class="form-label fw-semibold small">
+                Description
+            </label>
+            <textarea
+                id="aiDraftDescription"
+                name="description"
+                class="form-control form-control-sm"
+                rows="2"
+                maxlength="2000"
+            >{{ draft.description }}</textarea>
+        </div>
+
+        <button type="submit" class="btn btn-primary btn-sm">
+            <i class="las la-save"></i> Save as a draft
+        </button>
+    </form>
+{% endif %}

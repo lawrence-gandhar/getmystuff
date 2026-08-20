@@ -8,10 +8,17 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from alembic import context
 
 from app.db.base import Base
-from app.db import models  # Import all models
+from app.db import models  # noqa: F401  imported for its side effect: registers every model
 
 config = context.config
-fileConfig(config.config_file_name)
+
+# Skipped when the app runs migrations itself at startup — app/db/migrations.py sets
+# configure_logger=False. fileConfig() reconfigures logging for the whole process, and
+# alembic.ini pins the root logger to WARNING, so applying it in-process would silence
+# the app's own INFO logging for the rest of its life. On the command line there is no
+# app to affect and the ini's config is the one that should win.
+if config.config_file_name and config.attributes.get("configure_logger", True):
+    fileConfig(config.config_file_name)
 
 # DATABASE_URL wins over alembic.ini's sqlalchemy.url, so migrations run against
 # whichever database the *app* is configured to use. Without this, alembic.ini's
@@ -25,6 +32,33 @@ if os.getenv("DATABASE_URL"):
 
 target_metadata = Base.metadata
 
+# Tables in our database that are not ours to migrate.
+#
+# LangGraph's checkpoint store lives in this database (see
+# app/services/downloader_agents/base/checkpointer.py) and creates its own tables through
+# its own `setup()`. They are not in Base.metadata, so without this every
+# `--autogenerate` run proposes dropping their indexes — and a revision that carried
+# those drops would break the export confirmation the first time it was applied.
+#
+# Owned by langgraph, versioned by langgraph, upgraded by langgraph. Matched by prefix
+# because the set grows with its releases (`checkpoints`, `checkpoint_blobs`,
+# `checkpoint_writes`, `checkpoint_migrations` today).
+_FOREIGN_TABLE_PREFIXES = ("checkpoint",)
+
+
+def include_name(name, type_, parent_names):  # noqa: ANN001, ANN201
+    """
+    Whether autogenerate should consider a reflected object at all.
+
+    Filtering by *name* rather than by object is what excludes a table we have never
+    declared — an `include_object` hook only ever sees objects alembic already decided to
+    compare, and a foreign table has no object on our side to match against.
+    """
+    if type_ == "table" and name:
+        return not name.startswith(_FOREIGN_TABLE_PREFIXES)
+
+    return True
+
 
 def run_migrations_offline():
     url = config.get_main_option("sqlalchemy.url")
@@ -33,6 +67,7 @@ def run_migrations_offline():
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        include_name=include_name,
     )
 
     with context.begin_transaction():
@@ -40,7 +75,11 @@ def run_migrations_offline():
 
 
 def do_run_migrations(connection: Connection):
-    context.configure(connection=connection, target_metadata=target_metadata)
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+        include_name=include_name,
+    )
 
     with context.begin_transaction():
         context.run_migrations()

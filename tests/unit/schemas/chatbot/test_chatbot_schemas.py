@@ -50,7 +50,13 @@ def _detail(schema, data: dict) -> str:
 
 
 class _Turn:
-    """Stand-in for chatbot_turn_service.TurnResult."""
+    """
+    Stand-in for chatbot_turn_service.TurnResult.
+
+    A stub rather than the real dataclass because importing it would pull the deep
+    agent stack — and langgraph with it — into a schema test. The cost is that it has
+    to be kept in step by hand, so every field ``from_turn`` reads is listed here.
+    """
 
     def __init__(self, **kwargs) -> None:
         self.status = "success"
@@ -61,6 +67,7 @@ class _Turn:
         self.options: list = []
         self.message = ""
         self.response_time_ms = 0
+        self.download = None
         self.__dict__.update(kwargs)
 
 

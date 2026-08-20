@@ -1,0 +1,35 @@
+{# What one Test press came back with.
+
+   A status and a sentence, and never the response body: a vendor's error text frequently
+   echoes the request that caused it, credential included. The sentence has already been
+   through `sender.scrubbed`, which removes this connection's own credential by value —
+   the key-name deny-list cannot see a secret embedded in prose. #}
+{% if result.ok %}
+    <div class="alert alert-success mb-0">
+        <div class="fw-semibold mb-1">
+            <i class="las la-check-circle"></i> It works
+        </div>
+        {{ result.message }}
+    </div>
+{% else %}
+    <div class="alert alert-danger mb-0">
+        <div class="fw-semibold mb-1">
+            <i class="las la-exclamation-circle"></i>
+            Could not use this connection
+            {% if result.status_code %}
+                <span class="badge bg-danger-subtle text-danger-emphasis border border-danger-subtle ms-1">
+                    {{ result.status_code }}
+                </span>
+            {% endif %}
+        </div>
+        {{ result.message }}
+    </div>
+{% endif %}
+
+{% if result.operation_label %}
+    <div class="form-text mt-2">
+        Tested with <strong>{{ result.operation_label }}</strong>. Only read operations are
+        used for a test — writing to prove a connection works would put a record in your
+        production system.
+    </div>
+{% endif %}

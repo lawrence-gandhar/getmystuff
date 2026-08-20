@@ -270,6 +270,10 @@
 {% endblock %}
 
 {% block extra_js %}
+{# The shared canvas primitives — Bezier maths, port measurement, escaping, id
+   generation — used by this canvas and by the Graph Designer's. Must come first:
+   flow_builder.js reads window.GraphCanvas at module scope. #}
+<script src="/static/js/graph_canvas.js"></script>
 <script src="/static/js/flow_builder.js"></script>
 <script>
     FlowBuilder.init({
@@ -279,6 +283,7 @@
         responseTargetId: "fb-save-response",
         kbBaseUrl: "/flow-builder/{{ flow.uuid }}/nodes",
         aiApiKeys: {{ ai_api_keys_json | safe }},
+        graphs: {{ graphs_json | safe }},
     });
 </script>
 {% endblock %}

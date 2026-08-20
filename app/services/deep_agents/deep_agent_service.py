@@ -29,16 +29,22 @@ import asyncio
 import logging
 import os
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List, Optional
 
+import anthropic
+import openai
 from deepagents import create_deep_agent
 from litestar.exceptions import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.data_agents import DataAgent
+from app.services.agent_recursive_dataframes.aggregate_tools import aggregate_context
 from app.services.data_agents import data_agent_service
 from app.services.deep_agents import model_factory
-from app.services.deep_agents.prompt_builder import compose_runtime_prompt
+from app.services.deep_agents.prompt_builder import (
+    INTERNAL_CALL_TAG,
+    compose_runtime_prompt,
+)
 from app.services.deep_agents.prompt_sync_service import (
     build_prompt_for_agent,
     collect_agent_tools,
@@ -50,6 +56,7 @@ from app.services.deep_agents.tool_factory import (
     find_unsupported_tools,
     tool_names,
 )
+from app.services.downloader_agents.base.download_tools import DownloadContext
 from app.utils.turn_recorder import estimate_tokens, record_llm_call
 
 logger = logging.getLogger(__name__)
@@ -98,6 +105,40 @@ _RECURSION_LIMIT = 25
 # the context. Matches the history window sql_assist uses.
 _MAX_HISTORY_TURNS = 6
 
+# A provider refusing because it is busy, from either SDK. Caught separately from
+# everything else below, and that separation is the whole point of naming it: a 429
+# is transient and nothing about the configuration is wrong, so it must not be
+# reported with advice to go and check an API key. The model client has already
+# retried it (model_factory.MAX_RETRIES) by the time one of these reaches us — so
+# this is not "the provider was busy", it is "the provider was still busy after
+# several attempts spaced out over seconds", which is worth telling someone about.
+_RATE_LIMIT_ERRORS = (anthropic.RateLimitError, openai.RateLimitError)
+
+# What the operator and the console are told when that happens. It names the cause,
+# because "try again" without one is indistinguishable from a broken agent, and
+# promises nothing about when — the queue is not ours to predict.
+#
+# The *visitor* never sees this. chatbot_reply_service degrades to _NO_FALLBACK_REPLY,
+# which says the same thing without naming a system they cannot see.
+_BUSY_MESSAGE = (
+    "The AI provider is busy and could not answer in time. This is temporary — "
+    "please try again in a moment. Nothing needs changing in AI Settings."
+)
+
+
+async def agent_has_enabled_tools(db: AsyncSession, data_agent_id: int) -> bool:
+    """
+    Whether this agent has anything to answer with — the cheap question a caller can
+    ask *before* handing it a turn.
+
+    Deliberately built on :func:`collect_agent_tools`, the same call
+    :func:`_prepared_turn` refuses on, rather than a count of its own. A second query
+    with its own idea of what counts as a tool is a second thing to get wrong: nested
+    children and published graphs are tools here, so a plain ``tool_configs`` count
+    would report "no tools" for an agent that runs perfectly well.
+    """
+    return bool(await collect_agent_tools(db, data_agent_id))
+
 
 async def answer_with_deep_agent(
     db: AsyncSession,
@@ -126,6 +167,9 @@ async def answer_with_deep_agent(
         history=history,
         forced_key_uuid=forced_key_uuid,
         use_inbuilt_llm=use_inbuilt_llm,
+        # No session token on the console: there is one operator, and the agent is the
+        # whole scope an export needs to be confined to.
+        download_context=DownloadContext(data_agent_id=agent.id),
         # An operator ran this deliberately and can wait; a slow local model is the
         # thing they are most likely to be testing.
         timeout=_CONSOLE_TURN_TIMEOUT_SECONDS,
@@ -139,6 +183,7 @@ async def answer_for_chatbot(
     history: Optional[List[dict]] = None,
     forced_key_uuid: Optional[uuid.UUID] = None,
     use_inbuilt_llm: bool = False,
+    session_token: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Answer a visitor's message with the data agent attached to this chatbot.
@@ -174,6 +219,14 @@ async def answer_for_chatbot(
         history=history,
         forced_key_uuid=forced_key_uuid,
         use_inbuilt_llm=use_inbuilt_llm,
+        # The key and the token together scope an export to this one conversation, so a
+        # visitor can neither confirm nor download another visitor's file.
+        download_context=DownloadContext(
+            data_agent_id=agent.id,
+            session_token=session_token,
+            chatbot_key_id=chatbot_key.id,
+            chatbot_key_uuid=str(chatbot_key.uuid),
+        ),
         # A visitor is waiting on this request. Deliberately NOT widened for the
         # in-built model: an agent too slow to answer inside this budget should degrade
         # to the data-profile reply, not hold a widget open for several minutes.
@@ -190,6 +243,7 @@ async def _answer_as_agent(
     forced_key_uuid: Optional[uuid.UUID] = None,
     use_inbuilt_llm: bool = False,
     timeout: int = _VISITOR_TURN_TIMEOUT_SECONDS,
+    download_context: Optional[DownloadContext] = None,
 ) -> Dict[str, Any]:
     """
     Run one turn for an already-resolved agent.
@@ -199,34 +253,13 @@ async def _answer_as_agent(
     test. ``timeout`` is the one thing they legitimately differ on, and it is the
     caller's to set because only the caller knows who is waiting.
     """
-    if not agent.is_active:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"Data agent '{agent.name}' is switched off. Enable it on the Data "
-                "Agents page before using it."
-            ),
-        )
-
-    prompt, tools = await _resolved_prompt_and_tools(db, agent)
-
-    if not tools:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"Data agent '{agent.name}' has no enabled tools, so it cannot look "
-                "anything up. Add a tool for it in the Tool Configs section."
-            ),
-        )
-
-    model = await model_factory.build_chat_model(
-        db, user_id, forced_key_uuid=forced_key_uuid, use_inbuilt_llm=use_inbuilt_llm,
-    )
-
-    deep_agent = create_deep_agent(
-        model=model,
-        tools=build_agent_tools(tools),
-        system_prompt=prompt,
+    deep_agent, tools, model = await _prepared_turn(
+        db,
+        user_id,
+        agent,
+        forced_key_uuid=forced_key_uuid,
+        use_inbuilt_llm=use_inbuilt_llm,
+        download_context=download_context,
     )
 
     messages = _conversation(history, message)
@@ -257,6 +290,16 @@ async def _answer_as_agent(
         ) from exc
     except HTTPException:
         raise
+    except _RATE_LIMIT_ERRORS as exc:
+        # Told apart from the catch-all below on purpose. This is the provider saying
+        # "busy, come back" — the key is fine, the prompt is fine, the agent is fine —
+        # and lumping it in with the message underneath sent whoever read the log off
+        # to check an API key that was never the problem.
+        logger.warning(
+            "Deep agent %s was rate-limited by its provider after %s retries: %s",
+            agent.uuid, model_factory.MAX_RETRIES, exc,
+        )
+        raise HTTPException(status_code=503, detail=_BUSY_MESSAGE) from exc
     except Exception as exc:
         # Provider and graph errors both land here. The detail is logged rather
         # than returned: it can carry prompt fragments and endpoint URLs.
@@ -284,8 +327,357 @@ async def _answer_as_agent(
 
 
 # --------------------------------------------------------------------------
+# Streaming
+# --------------------------------------------------------------------------
+
+async def stream_answer_with_deep_agent(
+    db: AsyncSession,
+    user_id: int,
+    agent_id: uuid.UUID,
+    message: str,
+    history: Optional[List[dict]] = None,
+    forced_key_uuid: Optional[uuid.UUID] = None,
+    use_inbuilt_llm: bool = False,
+) -> AsyncIterator[Dict[str, Any]]:
+    """
+    Answer as this agent, yielding the answer as it is written.
+
+    Same turn as :func:`answer_with_deep_agent` — same prompt, same tools, same
+    validation — reported as it happens rather than at the end. The console's blocking
+    endpoint is unchanged and still there; this is an addition, so nothing that worked
+    before depends on a browser being able to hold an event stream open.
+    """
+    agent = await data_agent_service.get_data_agent(db, user_id, agent_id)
+
+    async for event in _stream_as_agent(
+        db,
+        user_id,
+        agent,
+        message,
+        history=history,
+        forced_key_uuid=forced_key_uuid,
+        use_inbuilt_llm=use_inbuilt_llm,
+        timeout=_CONSOLE_TURN_TIMEOUT_SECONDS,
+        download_context=DownloadContext(data_agent_id=agent.id),
+    ):
+        yield event
+
+
+async def stream_answer_for_chatbot(
+    db: AsyncSession,
+    chatbot_key,
+    message: str,
+    history: Optional[List[dict]] = None,
+    forced_key_uuid: Optional[uuid.UUID] = None,
+    use_inbuilt_llm: bool = False,
+    session_token: Optional[str] = None,
+) -> AsyncIterator[Dict[str, Any]]:
+    """Answer a visitor's message as the attached data agent, streaming it."""
+    agent = await data_agent_service.agent_crud.get_one(db, filters={
+        "id": chatbot_key.data_agent_id,
+        "user_id": chatbot_key.user_id,
+    })
+
+    if not agent:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "The data agent this chatbot uses was not found. Re-attach one in "
+                "the chatbot's AI & Prompt settings."
+            ),
+        )
+
+    async for event in _stream_as_agent(
+        db,
+        chatbot_key.user_id,
+        agent,
+        message,
+        history=history,
+        forced_key_uuid=forced_key_uuid,
+        use_inbuilt_llm=use_inbuilt_llm,
+        timeout=_VISITOR_TURN_TIMEOUT_SECONDS,
+        download_context=DownloadContext(
+            data_agent_id=agent.id,
+            session_token=session_token,
+            chatbot_key_id=chatbot_key.id,
+            chatbot_key_uuid=str(chatbot_key.uuid),
+        ),
+    ):
+        yield event
+
+
+async def _stream_as_agent(
+    db: AsyncSession,
+    user_id: int,
+    agent: DataAgent,
+    message: str,
+    history: Optional[List[dict]] = None,
+    forced_key_uuid: Optional[uuid.UUID] = None,
+    use_inbuilt_llm: bool = False,
+    timeout: int = _VISITOR_TURN_TIMEOUT_SECONDS,
+    download_context: Optional[DownloadContext] = None,
+) -> AsyncIterator[Dict[str, Any]]:
+    """
+    Run one turn, yielding events as the agent works.
+
+    Four event shapes, and each exists because something is otherwise invisible:
+
+    ``{"event": "tool", "name": ...}``
+        A tool has started. This is the long part of a turn — it runs a real query
+        against a real database — and without it the interface is silent for exactly as
+        long as the work takes.
+    ``{"event": "token", "text": ...}``
+        A fragment of the answer. Appending these is the answer.
+    ``{"event": "done", ...}``
+        The finished answer plus the same payload
+        :func:`_answer_as_agent` returns, so a consumer can render the final state from
+        one event rather than from an accumulator it has been keeping.
+    ``{"event": "error", "message": ...}``
+        A visitor-safe sentence. Yielded rather than raised: once a stream has begun the
+        status code is already sent, so an exception here would truncate the response
+        with no explanation in it. Carries ``"stage": "setup"`` when the turn never
+        started — see below.
+
+    ``astream_events`` rather than ``astream``: the token stream lives on
+    ``on_chat_model_stream``, and a graph-level stream would only surface whole messages
+    — which is the blocking behaviour with extra steps.
+    """
+    try:
+        deep_agent, tools, model = await _prepared_turn(
+            db,
+            user_id,
+            agent,
+            forced_key_uuid=forced_key_uuid,
+            use_inbuilt_llm=use_inbuilt_llm,
+            download_context=download_context,
+        )
+    except HTTPException as exc:
+        # Setup failures are still ordinary refusals — a switched-off agent, no tools, a
+        # key with no model name — and the operator needs the sentence, not a dead
+        # stream.
+        #
+        # ``stage: "setup"`` marks the one class of failure where *nothing ran*: no model
+        # was built, no tool was called, no token was streamed. That distinction is what
+        # lets a caller retry the turn somewhere else — see chatbot_turn_service.
+        # stream_turn, which turns this into a `fallback` so a published widget degrades
+        # instead of showing a visitor the operator's configuration to-do list. Every
+        # other error below is raised *after* work was done and must never be retried.
+        yield {"event": "error", "message": str(exc.detail), "stage": "setup"}
+        return
+
+    messages = _conversation(history, message)
+    collected: List[str] = []
+    ai_messages: List[Any] = []
+    called: List[str] = []
+
+    try:
+        async for event in _agent_events(deep_agent, messages, timeout):
+            kind = event.get("event")
+
+            if kind == "on_tool_start":
+                name = str(event.get("name") or "")
+                if name:
+                    called.append(name)
+                    yield {"event": "tool", "name": name}
+                continue
+
+            if kind == "on_chat_model_stream":
+                # Not every model call in a turn is the agent talking. `aggregate_records`
+                # makes one of its own to plan the aggregation, and it runs inside a tool —
+                # so without this the plan's raw JSON was streamed as answer text, printed
+                # above the answer it produced. See prompt_builder.INTERNAL_CALL_TAG.
+                if INTERNAL_CALL_TAG in (event.get("tags") or ()):
+                    continue
+
+                text = _chunk_text(event)
+                if text:
+                    collected.append(text)
+                    yield {"event": "token", "text": text}
+                continue
+
+            if kind == "on_chat_model_end":
+                # Kept for the token accounting only. Each model call reports its own
+                # usage, and a streamed turn is several calls.
+                output = (event.get("data") or {}).get("output")
+                if output is not None:
+                    ai_messages.append(output)
+    except asyncio.TimeoutError:
+        logger.warning(
+            "Deep agent %s timed out after %ss while streaming", agent.uuid, timeout,
+        )
+        yield {
+            "event": "error",
+            "message": (
+                "The agent took too long to answer. Try a more specific question, or "
+                "check that the datasource is responding."
+            ),
+        }
+        return
+    except _RATE_LIMIT_ERRORS as exc:
+        logger.warning(
+            "Deep agent %s was rate-limited by its provider while streaming after %s "
+            "retries: %s",
+            agent.uuid, model_factory.MAX_RETRIES, exc,
+        )
+        yield {"event": "error", "message": _BUSY_MESSAGE}
+        return
+    except Exception:  # noqa: BLE001 — one turn's failure, phrased for whoever asked
+        logger.exception("Deep agent %s failed while streaming", agent.uuid)
+        yield {
+            "event": "error",
+            "message": (
+                "The agent could not complete an answer. Please try again, or check "
+                "the agent's AI key in AI Settings."
+            ),
+        }
+        return
+
+    _record_usage(ai_messages, model)
+
+    answer = "".join(collected).strip() or _final_text([])
+
+    yield {
+        "event": "done",
+        "answer": answer,
+        "tools_called": called,
+        "tool_count": len(tools),
+        "available_tools": tool_names(tools),
+        "model": model_factory.describe_model(model),
+    }
+
+
+async def _agent_events(
+    deep_agent: Any,
+    messages: List[dict],
+    timeout: int,
+) -> AsyncIterator[Dict[str, Any]]:
+    """
+    ``astream_events`` with a wall-clock bound on the whole turn.
+
+    ``asyncio.wait_for`` cannot wrap an async generator, so the budget is applied to each
+    ``__anext__`` — with the remaining budget, not the full one, so a model producing a
+    token every second forever still stops at the limit rather than never.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+
+    stream = deep_agent.astream_events(
+        {"messages": messages},
+        version="v2",
+        config={"recursion_limit": _RECURSION_LIMIT},
+    )
+
+    iterator = stream.__aiter__()
+
+    while True:
+        remaining = deadline - loop.time()
+
+        if remaining <= 0:
+            raise asyncio.TimeoutError
+
+        try:
+            event = await asyncio.wait_for(iterator.__anext__(), timeout=remaining)
+        except StopAsyncIteration:
+            return
+
+        yield event
+
+
+def _chunk_text(event: Dict[str, Any]) -> str:
+    """
+    The text in one ``on_chat_model_stream`` event, if it carries any.
+
+    A chunk's content is a string for most providers and a list of typed blocks for
+    Anthropic; both shapes are read here. Tool-call and thinking blocks yield nothing,
+    which is correct — they are not part of the answer.
+
+    **Nothing is stripped.** This is the one difference from :func:`_message_text`, and
+    it is the whole reason this function is not that one. A chunk boundary falls wherever
+    the provider's tokeniser put it, very often on a space, so trimming each chunk
+    concatenates "Here" and "are" into "Hereare" and "There are " and "125" into
+    "There are125". Whitespace inside a stream is content.
+    """
+    chunk = (event.get("data") or {}).get("chunk")
+
+    if chunk is None:
+        return ""
+
+    content = getattr(chunk, "content", None)
+
+    if isinstance(content, str):
+        return content
+
+    if isinstance(content, list):
+        return "".join(
+            str(block.get("text") or "")
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "text"
+        )
+
+    return ""
+
+
+# --------------------------------------------------------------------------
 # Prompt resolution
 # --------------------------------------------------------------------------
+
+async def _prepared_turn(
+    db: AsyncSession,
+    user_id: int,
+    agent: DataAgent,
+    forced_key_uuid: Optional[uuid.UUID] = None,
+    use_inbuilt_llm: bool = False,
+    download_context: Optional[DownloadContext] = None,
+) -> tuple:
+    """
+    Everything a turn needs before it runs: ``(deep_agent, tools, model)``.
+
+    Shared by the blocking and streaming paths so they cannot diverge. The two refusals
+    here — a switched-off agent, an agent with no tools — are the ones that must happen
+    before any model is built, because building one costs a database read and a
+    decryption for a turn that is not going to run.
+    """
+    if not agent.is_active:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Data agent '{agent.name}' is switched off. Enable it on the Data "
+                "Agents page before using it."
+            ),
+        )
+
+    prompt, tools = await _resolved_prompt_and_tools(db, agent)
+
+    if not tools:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Data agent '{agent.name}' has no enabled tools, so it cannot look "
+                "anything up. Add a tool for it in the Tool Configs section."
+            ),
+        )
+
+    model = await model_factory.build_chat_model(
+        db, user_id, forced_key_uuid=forced_key_uuid, use_inbuilt_llm=use_inbuilt_llm,
+    )
+
+    deep_agent = create_deep_agent(
+        model=model,
+        tools=build_agent_tools(
+            tools,
+            download_context=download_context,
+            # None unless one of this agent's tools was opted in, in which case the
+            # tool list and the routing prompt are both exactly what they were
+            # before the capability existed. The same model plans the grouping as
+            # answers the turn — a second provider decision here would be a second
+            # thing to configure and a second thing to get wrong.
+            aggregate_context=aggregate_context(tools, model),
+        ),
+        system_prompt=prompt,
+    )
+
+    return deep_agent, tools, model
+
 
 async def _resolved_prompt_and_tools(
     db: AsyncSession,
@@ -481,16 +873,64 @@ async def get_agent_runtime_view(
         "tool_routing_prompt": agent.tool_routing_prompt,
         "tool_prompt_synced_at": agent.tool_prompt_synced_at,
         "prompt_is_stale": is_prompt_stale(agent, tools),
-        "tools": [
-            {
-                "uuid": tool["uuid"],
-                "tool_name": tool["tool_name"],
-                "description": tool["description"],
-                "table_name": tool["table_name"],
-                "datasource_name": tool["datasource_name"],
-                "db_type": tool["db_type"],
-            }
-            for tool in tools
-        ],
+        "tools": [_console_tool(tool) for tool in tools],
+        # Whether *any* source may have its whole result read. The console says one thing
+        # or the other about filtering depending on this, because "each tool runs a fixed
+        # query and takes no arguments" is only the whole truth when nothing is opted in —
+        # and half a truth here is what leaves an operator unable to explain why their
+        # agent refused to filter by month.
+        "has_readable_tools": any(
+            tool.get("allow_recursive_aggregate") for tool in tools
+        ),
         "unsupported_tools": find_unsupported_tools(tools),
+    }
+
+
+def _console_tool(tool: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    One row of the console's tool list.
+
+    **Two kinds arrive in ``collect_agent_tools``'s list and they do not share a source.**
+    A tool config reads one table of one datasource; a graph holds nodes that each read
+    their own, so it has no ``table_name``, no ``datasource_name`` and no ``db_type`` —
+    and its public identifier is ``graph_uuid``, because ``uuid`` in that entry would be
+    ambiguous about which of the two things it names.
+
+    Branched here rather than defaulted, for two reasons. Reading the tool-config keys off
+    a graph entry is what raised ``KeyError: 'uuid'`` on this page as soon as an agent had
+    a graph — a crash, but at least an obvious one. Defaulting them to ``""`` would have
+    been worse: the console would render "in ()" and read as a *broken tool config*,
+    sending the operator to check a datasource that was never involved.
+
+    ``find_unsupported_tools`` already skips graph entries for the same reason, and
+    ``prompt_builder`` already branches on ``kind`` — this was the one consumer of the
+    shared list that did not.
+    """
+    # Whether the agent may read this source's whole result and filter or total it. On the
+    # console because its absence is invisible and its consequence is not: an operator who
+    # has written "filter on created_at" into a description, and left the switch off, gets
+    # an agent that says it cannot filter by month — with nothing on the page connecting
+    # the two. See documentations/AGENT_RECURSIVE_DATAFRAMES.md.
+    readable = bool(tool.get("allow_recursive_aggregate"))
+
+    if tool.get("kind") == "graph":
+        return {
+            "kind": "graph",
+            "uuid": tool["graph_uuid"],
+            "tool_name": tool["tool_name"],
+            "description": tool.get("description"),
+            "node_count": tool.get("node_count") or 0,
+            "asks_questions": bool(tool.get("asks_questions")),
+            "whole_result_readable": readable,
+        }
+
+    return {
+        "kind": "tool_config",
+        "uuid": tool["uuid"],
+        "tool_name": tool["tool_name"],
+        "description": tool["description"],
+        "table_name": tool["table_name"],
+        "datasource_name": tool["datasource_name"],
+        "db_type": tool["db_type"],
+        "whole_result_readable": readable,
     }

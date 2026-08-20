@@ -18,7 +18,13 @@
 
     <div class="card-body">
         <p class="text-muted small mb-2"><em>{{ question }}</em></p>
-        <div class="mb-0" style="white-space: pre-wrap;">{{ answer }}</div>
+        {# Monospaced, and deliberately still the raw text. The agent now writes
+           Markdown (grounding rule 14) because the widget renders it; this console is
+           the operator's diagnostic view, where seeing exactly what the model produced
+           is worth more than seeing it prettified. A proportional font made a Markdown
+           table's columns wander, which is the one thing pre-wrap could not survive. #}
+        <div class="mb-0" style="white-space: pre-wrap; font-family: ui-monospace,
+             SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.85rem;">{{ answer }}</div>
     </div>
 
     <div class="card-footer bg-white small">

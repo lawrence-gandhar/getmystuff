@@ -17,7 +17,7 @@ field so the rebuilt table keeps showing the same subset.
 """
 
 import uuid
-from typing import Iterable, Optional
+from typing import Iterable, Optional, Sequence
 
 from litestar import Controller, get, post
 from litestar.background_tasks import BackgroundTask, BackgroundTasks
@@ -34,6 +34,7 @@ from app.models.tool_configs import (
 )
 from app.models.user import User
 from app.schemas.tool_configs import (
+    ChildToolOptionsResponse,
     SchemaCascadeQuery,
     TableColumnsResponse,
     ToolConfigCreateRequest,
@@ -44,7 +45,7 @@ from app.schemas.tool_configs import (
 )
 from app.services.data_agents import data_agent_service
 from app.services.deep_agents.prompt_sync_service import sync_tool_routing_prompt
-from app.services.tool_configs import tool_config_service
+from app.services.tool_configs import tool_chain_service, tool_config_service
 from app.utils.validators import parse_optional_uuid
 
 _ROWS_TEMPLATE = "tool_configs/partials/tool_config_rows_response.htm"
@@ -115,6 +116,28 @@ class ToolConfigController(Controller):
         )
 
     # --------------------------
+    # HELP
+    # --------------------------
+    @get("/help")
+    async def help_page(self, user: User) -> Template:
+        """
+        The Tool Configs help page — the browsable form of
+        documentations/TOOL_CONFIGS.md, opened in its own tab by the Help button on
+        the list page.
+
+        Static: it reads nothing and takes no query parameters, so there is no
+        service call and no schema to parse. It is a route rather than a link to the
+        markdown file because a help page has to arrive inside the application's own
+        layout, behind the same auth as the page it explains.
+
+        A literal path, so it cannot be confused with ``/{tool_config_id:uuid}/…``.
+        """
+        return Template(
+            template_name="tool_configs/help.htm",
+            context={"user": user, "active": "tool_configs"},
+        )
+
+    # --------------------------
     # FORMS (offcanvas bodies)
     # --------------------------
     @get("/new-form")
@@ -179,7 +202,7 @@ class ToolConfigController(Controller):
             db,
             user,
             datasource_id,
-            tool_config["table_name"],
+            tool_config["table_names"],
             tool_config["config"],
             tool_config["query_mode"],
         )
@@ -236,7 +259,7 @@ class ToolConfigController(Controller):
                 **options,
                 "datasource_id": str(selection) if selection else "",
                 "tables": table_names,
-                "selected_table": "",
+                "selected_tables": [],
                 "schema_error": schema_error,
             },
         )
@@ -252,7 +275,7 @@ class ToolConfigController(Controller):
         user: User,
     ) -> Template:
         """
-        Re-render the query builder against the columns of the table just picked.
+        Re-render the query builder against the columns of the tables just picked.
 
         The saved query is deliberately *not* carried over: a different table has
         different columns, so the previous selections — joins included — no longer
@@ -260,7 +283,7 @@ class ToolConfigController(Controller):
         """
         query = SchemaCascadeQuery.from_query(request)
         builder = await self._builder_context(
-            db, user, query.datasource_id, query.table, config={},
+            db, user, query.datasource_id, query.tables, config={},
         )
 
         return Template(template_name=_BUILDER_TEMPLATE, context=builder)
@@ -302,6 +325,48 @@ class ToolConfigController(Controller):
         ).payload()
 
     # --------------------------
+    # SCHEMA — tools this one may embed (JSON)
+    # --------------------------
+    @get("/child-options")
+    async def child_options(
+        self,
+        request: Request,
+        db: AsyncSession,
+        user: User,
+    ) -> dict:
+        """
+        The tools the Nested Tools picker may offer, with the columns each returns.
+
+        JSON rather than a partial because the picker is drawn client-side: choosing
+        a tool has to repopulate the column dropdown beside it without a round trip,
+        which needs the columns of *every* candidate up front.
+
+        Filtered by the rules that would refuse the link on save, so the picker can
+        never offer something the form then rejects — see
+        ``tool_chain_service.embeddable_tools``.
+        """
+        query = SchemaCascadeQuery.from_query(request)
+
+        if query.datasource_id is None:
+            return ChildToolOptionsResponse.failure("Pick a datasource first").payload()
+
+        try:
+            tools = await tool_chain_service.embeddable_tools(
+                db, user.id, query.datasource_id, query.exclude,
+            )
+            # Published graphs, offered in the same list. Not filtered by datasource —
+            # a graph's nodes each name their own — so they are appended rather than
+            # merged in, which keeps a picker whose first entries are the ones the
+            # operator was already used to.
+            tools += await tool_chain_service.embeddable_graphs(
+                db, user.id, query.exclude,
+            )
+        except HTTPException as exc:
+            return ChildToolOptionsResponse.failure(str(exc.detail)).payload()
+
+        return ChildToolOptionsResponse.build({"tools": tools, "error": None}).payload()
+
+    # --------------------------
     # CREATE
     # --------------------------
     @post("/create")
@@ -316,11 +381,14 @@ class ToolConfigController(Controller):
                 agent_id=payload.data_agent_id,
                 datasource_id=payload.datasource_id,
                 tool_name=payload.tool_name,
-                table_name=payload.table_name,
+                table_names=payload.table_names,
                 description=payload.description,
                 config_json=payload.config_json,
                 query_mode=payload.query_mode,
                 sql_query=payload.sql_query,
+                children=payload.children_json,
+                sql_params=payload.sql_params_json,
+                allow_recursive_aggregate=payload.allow_recursive_aggregate,
             )
             resync = {tool_config.data_agent_id}
         except HTTPException as exc:
@@ -350,11 +418,14 @@ class ToolConfigController(Controller):
                 agent_id=payload.data_agent_id,
                 datasource_id=payload.datasource_id,
                 tool_name=payload.tool_name,
-                table_name=payload.table_name,
+                table_names=payload.table_names,
                 description=payload.description,
                 config_json=payload.config_json,
                 query_mode=payload.query_mode,
                 sql_query=payload.sql_query,
+                children=payload.children_json,
+                sql_params=payload.sql_params_json,
+                allow_recursive_aggregate=payload.allow_recursive_aggregate,
             )
         except HTTPException as exc:
             error = str(exc.detail)
@@ -432,6 +503,7 @@ class ToolConfigController(Controller):
         """
         return {
             "base_table": "",
+            "selected_tables": [],
             "tables": [],
             "columns": [],
             "column_map": {},
@@ -453,14 +525,21 @@ class ToolConfigController(Controller):
         db: AsyncSession,
         user: User,
         datasource_id: Optional[uuid.UUID],
-        table_name: str,
+        table_names: Sequence[str],
         config: dict,
         query_mode: str = QUERY_MODE_BUILDER,
     ) -> dict:
         """
         Everything the query builder renders from: the base table's columns, the
-        other tables available to join, the columns of the tables already joined, and
-        the join types this datasource's dialect supports.
+        other tables available to join, the columns of every selected table, and the
+        join types this datasource's dialect supports.
+
+        ``table_names`` is the multi-select's value, primary first. The **first** one
+        is the base table, and the rest are the join candidates — so the Joins card
+        offers exactly what the operator said this tool reads, rather than every
+        object in the datasource. That is what keeps the two fields from disagreeing:
+        the service refuses a join onto a table that is not in the list, and this
+        makes it impossible to build one in the first place.
 
         ``query_mode`` rides along because the mode selector is rendered from the
         same context — a tool saved as SQL has to reopen showing its statement, not
@@ -470,8 +549,12 @@ class ToolConfigController(Controller):
         temporarily down must not make an existing tool config uneditable — so the
         form shows a warning above the saved values instead of an error page.
         """
+        selected = [str(name).strip() for name in table_names or [] if str(name).strip()]
+
         context = cls._builder_defaults()
-        context["base_table"] = (table_name or "").strip()
+        context["selected_tables"] = selected
+        context["base_table"] = selected[0] if selected else ""
+        context["join_tables"] = selected[1:]
         context["config"] = config or {}
         context["query_mode"] = query_mode or QUERY_MODE_BUILDER
 
@@ -485,28 +568,17 @@ class ToolConfigController(Controller):
                 await tool_config_service.get_join_options(db, user.id, datasource_id)
             )
 
-            tables = await tool_config_service.get_table_choices(
+            context["tables"] = await tool_config_service.get_table_choices(
                 db, user.id, datasource_id,
             )
-            context["tables"] = tables
-            # Every other object in the datasource is a join candidate; the base
-            # table is not, because a query already reads it.
-            context["join_tables"] = [
-                table for table in tables if table != context["base_table"]
-            ]
 
-            if not context["base_table"]:
+            if not selected:
                 return context
 
-            # The base table plus each table the saved query joins — the builder
-            # needs all of their columns to offer the references it stored.
-            joined = [
-                str(entry.get("table") or "")
-                for entry in (context["config"].get("joins") or [])
-                if isinstance(entry, dict)
-            ]
+            # Every selected table's columns: the base table's for the Columns card,
+            # and the joined ones' for the join rows and their qualified references.
             column_map = await tool_config_service.get_column_map(
-                db, user.id, datasource_id, [context["base_table"], *joined],
+                db, user.id, datasource_id, selected,
             )
             context["column_map"] = column_map
             context["columns"] = column_map.get(context["base_table"], [])

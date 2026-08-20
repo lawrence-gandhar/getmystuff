@@ -1,0 +1,109 @@
+{# One row per graph. Rendered by the table, which is rendered by the page and by
+   every mutation response — so there is one definition of what a row looks like.
+
+   A row holds no `<select>`: everything editable about a graph is in the Edit dialog.
+   The pickers that used to be here posted on `change` and were then replaced by the
+   refreshed table, which is only correct if the new markup reports the choice back —
+   and `get_graph_views` was not reporting it, so a saved attachment came back looking
+   unset. The dialog does not have that failure mode: it is not part of the table it
+   refreshes, so the row it rebuilds is the only thing that has to be right. #}
+{% for graph in graphs %}
+<tr id="graph-row-{{ graph.uuid }}">
+    <td>
+        <div class="fw-semibold">{{ graph.name }}</div>
+        {% if graph.description %}
+            <div class="small text-muted">{{ graph.description }}</div>
+        {% endif %}
+    </td>
+    <td>
+        {% if graph.is_active %}
+            <span class="badge bg-success">Published</span>
+        {% else %}
+            <span class="badge bg-secondary">Draft</span>
+        {% endif %}
+    </td>
+    <td class="small text-muted">
+        {# The size of the drawing, so a graph someone has not opened for a while is
+           identifiable without opening it. #}
+        {{ graph.node_count }} node{{ "" if graph.node_count == 1 else "s" }},
+        {{ graph.edge_count }} connection{{ "" if graph.edge_count == 1 else "s" }}
+    </td>
+    <td>
+        {# Which of the two attachments this graph has, as a statement rather than as a
+           control. At most one of the two names is ever set, so the column reads as one
+           answer to "who may call this" — and Edit is where it is changed, in a dialog
+           that can report a refusal without the row it lives in being replaced
+           underneath it. #}
+        {% if graph.agent_name %}
+            <span class="badge bg-primary-subtle text-primary-emphasis border border-primary-subtle">
+                <i class="las la-robot"></i> {{ graph.agent_name }}
+            </span>
+            <div class="form-text mt-1">One data agent</div>
+        {% elif graph.workspace_name %}
+            <span class="badge bg-info-subtle text-info-emphasis border border-info-subtle">
+                <i class="las la-layer-group"></i> {{ graph.workspace_name }}
+            </span>
+            <div class="form-text mt-1">Every agent in this workspace</div>
+        {% else %}
+            <span class="text-muted small">Not callable by an agent yet</span>
+        {% endif %}
+    </td>
+    <td class="small text-muted">
+        {{ graph.updated_at[:16].replace("T", " ") if graph.updated_at else "" }}
+    </td>
+    <td>
+        <div class="d-flex flex-wrap gap-1">
+            <a
+                class="btn btn-sm btn-outline-primary"
+                href="/graph-designer/{{ graph.uuid }}/edit"
+            >
+                <i class="las la-project-diagram"></i> Design
+            </a>
+
+            {# The record rather than the drawing: name, description, and who may call
+               it. The body is fetched per open so the dialog always shows what the
+               database holds — see `graph_form.htm`. #}
+            <button
+                class="btn btn-sm btn-outline-secondary"
+                type="button"
+                hx-get="/graph-designer/{{ graph.uuid }}/edit-form"
+                hx-target="#graphModalContent"
+                hx-swap="innerHTML"
+                data-bs-toggle="modal"
+                data-bs-target="#graphModal"
+            >
+                <i class="las la-pen"></i> Edit
+            </button>
+
+            {# Publishing validates the drawing, so this button can be refused — the
+               reason lands in the response area above the table. #}
+            <button
+                class="btn btn-sm {% if graph.is_active %}btn-outline-secondary{% else %}btn-outline-success{% endif %}"
+                hx-post="/graph-designer/{{ graph.uuid }}/set-active"
+                hx-vals='{"is_active": "{{ "false" if graph.is_active else "true" }}"}'
+                hx-target="#graph-designer-response"
+                hx-swap="innerHTML"
+            >
+                {% if graph.is_active %}Make Draft{% else %}Publish{% endif %}
+            </button>
+
+            <button
+                class="btn btn-sm btn-outline-danger"
+                hx-post="/graph-designer/{{ graph.uuid }}/delete"
+                hx-target="#graph-designer-response"
+                hx-swap="innerHTML"
+                hx-confirm="Delete the graph '{{ graph.name }}'?{% if graph.agent_name %} It is attached to {{ graph.agent_name }}, which will stop being able to call it.{% elif graph.workspace_name %} It is shared with {{ graph.workspace_name }}, so every data agent in that workspace will stop being able to call it.{% endif %} Its run history goes with it. This cannot be undone."
+            >
+                Delete
+            </button>
+        </div>
+    </td>
+</tr>
+{% else %}
+<tr>
+    <td colspan="6" class="text-center text-muted py-4">
+        <i class="las la-project-diagram fs-4 d-block mb-1"></i>
+        No graphs yet. Create one to design a flow of queries, loops and checks.
+    </td>
+</tr>
+{% endfor %}

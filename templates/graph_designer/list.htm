@@ -1,0 +1,146 @@
+{% extends "base/layout.htm" %}
+{% block title %}Graph Designer | GetMyStuff{% endblock %}
+
+{% block content %}
+<div class="container mt-4" style="max-width: 100%;">
+
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h5 class="fw-semibold mb-0">
+            <i class="las la-project-diagram text-primary"></i> Graph Designer
+        </h5>
+        <div class="d-flex gap-2">
+            <a href="/tool-graphs" class="btn btn-outline-secondary btn-sm">
+                <i class="las la-sitemap"></i> Tool Graphs
+            </a>
+            <button
+                class="btn btn-primary btn-sm"
+                type="button"
+                data-bs-toggle="modal"
+                data-bs-target="#newGraphModal"
+            >
+                <i class="las la-plus"></i> New Graph
+            </button>
+        </div>
+    </div>
+
+    <p class="text-muted small mb-3">
+        Draw a flow of work on a canvas and run it. A node can be a <strong>SQL
+        statement</strong>, a <strong>value</strong> (a list, an array or a dictionary),
+        or an existing <a href="/tool-configs">tool config</a>; connect them and the run
+        follows the chain you drew. You can <strong>branch</strong>, loop with
+        <strong>For each</strong> or <strong>Do until</strong>, stop to
+        <strong>ask a person</strong> mid-run, and end on a Success or a Failure node.
+        Every node, or any group of them, can be tested on its own, with the flow, the
+        state and a limited output shown below the canvas.
+        Publishing a graph makes it callable, and <strong>Edit</strong> is where you say
+        by whom: attach it to one <a href="/data-agents">data agent</a>, or share it with
+        a <a href="/workspaces">workspace</a> so every agent in that workspace can call
+        it — the <strong>Callable by</strong> column shows which it is. Publishing and an
+        attachment are both needed, so a graph can be parked mid-edit without losing
+        either — and a graph has one or the other, never both, because an agent cannot be
+        given the same tool twice.
+    </p>
+
+    <div id="graph-designer-response" class="mb-3"></div>
+
+    {% include "graph_designer/partials/graphs_table.htm" %}
+
+</div>
+
+<!-- ============================================
+     MODAL — NEW GRAPH
+     ============================================ -->
+<div
+    class="modal fade"
+    tabindex="-1"
+    id="newGraphModal"
+    aria-labelledby="newGraphModalLabel"
+    aria-hidden="true"
+>
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header border-bottom">
+                <h5 class="modal-title" id="newGraphModalLabel">
+                    <i class="las la-project-diagram text-primary"></i> New Graph
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            {# Closes itself only on success, by reading the `data-success` marker the
+               response carries — so a refused name leaves the form open with what the
+               user typed still in it. #}
+            <form
+                hx-post="/graph-designer/create"
+                hx-target="#graph-designer-response"
+                hx-swap="innerHTML"
+                hx-on::after-request="
+                    const el = document.getElementById('graph-designer-response');
+                    if (el && el.querySelector('[data-success=true]')) {
+                        this.reset();
+                        bootstrap.Modal.getInstance(document.getElementById('newGraphModal')).hide();
+                    }
+                "
+            >
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label for="newGraphName" class="form-label fw-semibold">
+                            Graph Name <span class="text-danger">*</span>
+                        </label>
+                        <input
+                            type="text"
+                            id="newGraphName"
+                            name="name"
+                            class="form-control"
+                            placeholder="e.g. Monthly revenue check"
+                            required
+                            maxlength="255"
+                            autocomplete="off"
+                        >
+                    </div>
+                    <div>
+                        <label for="newGraphDescription" class="form-label fw-semibold">
+                            Description
+                        </label>
+                        <textarea
+                            id="newGraphDescription"
+                            name="description"
+                            class="form-control"
+                            rows="2"
+                            maxlength="2000"
+                            placeholder="What this graph answers"
+                        ></textarea>
+                        <div class="form-text">
+                            Shown to a data agent when this graph is attached to one, so
+                            it is worth writing as what the graph answers.
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">
+                        Cancel
+                    </button>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="las la-save"></i> Create
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- ============================================
+     MODAL — EDIT GRAPH
+     Body fetched per open, so the dialog shows what the database holds and the option
+     lists are rendered once rather than once per row. Separate from the New Graph modal
+     above because the two forms differ: a graph is created as a draft, and a draft
+     cannot be made callable yet.
+     ============================================ -->
+<div class="modal fade" tabindex="-1" id="graphModal" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content" id="graphModalContent">
+            <div class="modal-body text-center text-muted py-4">
+                <i class="las la-spinner la-spin fs-4"></i> Loading…
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

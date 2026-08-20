@@ -106,12 +106,19 @@ def stub_datasource_reads(monkeypatch: pytest.MonkeyPatch) -> dict:
         "objects": ["orders", "customers"],
         "schema": [{"column": "id"}, {"column": "total"}],
         "raise_on": None,
+        # What the real service returns alongside the live objects. The status filter
+        # reads it from there rather than re-querying the row, so the stub carries it
+        # too — set it here *and* on the datasource row when a test needs both paths.
+        "configuration_data": None,
     }
 
     async def fake_objects(db, datasource_id, user_id):  # noqa: ANN001
         if state["raise_on"] == "objects":
             raise HTTPException(status_code=400, detail="connection failed")
-        return {"objects": list(state["objects"])}
+        return {
+            "objects": list(state["objects"]),
+            "configuration_data": state["configuration_data"],
+        }
 
     async def fake_schema(db, datasource_id, user_id, table_name):  # noqa: ANN001
         if state["raise_on"] == "schema":
@@ -207,8 +214,15 @@ class TestValidatedQueryConfigShape:
         assert result["filters"] == [{"column": "total", "operator": ">", "value": "10"}]
 
     def test_group_by_is_a_plain_list_of_column_names(self) -> None:
+        # The same columns are selected, because a grouped query that selects
+        # everything is refused — see TestGroupedSelection.
         result = validated_query_config(
-            config_json(group_by=["total", "id"]), "orders", "postgres"
+            config_json(
+                columns=[{"column": "total"}, {"column": "id"}],
+                group_by=["total", "id"],
+            ),
+            "orders",
+            "postgres",
         )
 
         assert result["group_by"] == ["total", "id"]
@@ -418,6 +432,113 @@ class TestValidatedQueryConfigRejection:
             )
 
 
+# ---------------------------------------------------------------------------
+# validated_query_config — the grouping rule
+#
+# MySQL (ONLY_FULL_GROUP_BY, on by default) and PostgreSQL both refuse a grouped
+# query that selects a column it neither groups nor aggregates. Such a config can
+# never run, so it is refused when the tool is saved rather than mid-conversation,
+# where it used to surface as a tool failing in front of a visitor.
+# ---------------------------------------------------------------------------
+class TestGroupedSelection:
+    def test_a_column_outside_the_grouping_is_refused(self) -> None:
+        with pytest.raises(HTTPException) as excinfo:
+            validated_query_config(
+                config_json(
+                    columns=[{"column": "customer_id"}],
+                    aggregations=[{"type": "count", "column": "id"}],
+                    group_by=["total"],
+                ),
+                "orders",
+                "postgres",
+            )
+
+        assert excinfo.value.status_code == 400
+        assert "customer_id" in excinfo.value.detail
+        assert "Group By" in excinfo.value.detail
+
+    def test_selecting_a_column_beside_an_aggregate_with_no_grouping_is_refused(
+        self,
+    ) -> None:
+        """The same refusal the database gives for SELECT name, COUNT(*)."""
+        with pytest.raises(HTTPException, match="selected but not grouped"):
+            validated_query_config(
+                config_json(
+                    columns=[{"column": "customer_id"}],
+                    aggregations=[{"type": "count", "column": "id"}],
+                ),
+                "orders",
+                "postgres",
+            )
+
+    def test_grouping_while_selecting_everything_is_refused(self) -> None:
+        """An empty Columns list means every column, which the executor expands —
+        so this is the same violation written shorter."""
+        with pytest.raises(HTTPException, match="selects every column"):
+            validated_query_config(
+                config_json(group_by=["total"]), "orders", "postgres",
+            )
+
+    def test_a_grouped_selection_passes(self) -> None:
+        result = validated_query_config(
+            config_json(
+                columns=[{"column": "total"}],
+                aggregations=[{"type": "count", "column": "id"}],
+                group_by=["total"],
+            ),
+            "orders",
+            "postgres",
+        )
+
+        assert result["group_by"] == ["total"]
+
+    def test_a_bare_column_and_a_qualified_grouping_are_one_column(self) -> None:
+        """The builder writes bare names until a join is added and qualified ones
+        afterwards, so a config mid-edit can hold both forms of the same column."""
+        result = validated_query_config(
+            config_json(
+                columns=[{"column": "total"}],
+                aggregations=[{"type": "count", "column": "id"}],
+                group_by=["orders.total"],
+            ),
+            "orders",
+            "postgres",
+        )
+
+        assert result["columns"][0]["column"] == "total"
+
+    def test_a_joined_column_is_measured_against_its_own_table(self) -> None:
+        with pytest.raises(HTTPException, match="customers.name"):
+            validated_query_config(
+                config_json(
+                    columns=[{"column": "customers.name"}],
+                    aggregations=[{"type": "count", "column": "orders.id"}],
+                    group_by=["orders.total"],
+                    joins=[JOIN_TO_CUSTOMERS],
+                ),
+                "orders",
+                "postgres",
+            )
+
+    def test_aggregations_alone_need_no_grouping(self) -> None:
+        result = validated_query_config(
+            config_json(aggregations=[{"type": "count", "column": "id"}]),
+            "orders",
+            "postgres",
+        )
+
+        assert result["columns"] == []
+
+    def test_a_query_that_neither_groups_nor_aggregates_is_untouched(self) -> None:
+        result = validated_query_config(
+            config_json(columns=[{"column": "total"}, {"column": "customer_id"}]),
+            "orders",
+            "postgres",
+        )
+
+        assert len(result["columns"]) == 2
+
+
 class TestOptionalAlias:
     @pytest.mark.parametrize("blank", [None, "", "   ", 0, False])
     def test_a_blank_alias_becomes_an_empty_string(self, blank) -> None:  # noqa: ANN001
@@ -584,6 +705,227 @@ class TestResolveAgentAndDatasource:
             await svc._resolve_agent(db, user.id, theirs.uuid)
 
         assert excinfo.value.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Several tables per tool
+# ---------------------------------------------------------------------------
+class TestAToolReadsSeveralTables:
+    """
+    A query over more than one table is the ordinary case in both modes, and the row
+    records all of them: ``table_name`` is the primary one, ``extra_tables`` the rest.
+
+    Before that, a SQL tool joining two tables recorded one — so the routing prompt
+    understated the tool's scope and nothing could check the others were still
+    switched on in Data Sources.
+    """
+
+    async def test_the_first_table_is_the_primary_one(
+        self, db, user, make_agent, make_datasource  # noqa: ANN001
+    ) -> None:
+        """Order carries meaning: the first is the base table a built query's joins
+        hang off and its bare column references mean, so the list is never sorted."""
+        agent = await make_agent(user, "reporter")
+        datasource = await make_datasource(user, "warehouse")
+
+        config = await svc.create_tool_config(
+            db,
+            user.id,
+            agent.uuid,
+            datasource.uuid,
+            "revenue_by_department",
+            ["projects", "project_details"],
+            query_mode="sql",
+            sql_query="SELECT p.id FROM projects p JOIN project_details pd ON p.id = pd.id",
+        )
+
+        assert config.table_name == "projects"
+        assert config.extra_tables == ["project_details"]
+
+    async def test_one_table_stores_no_extras(
+        self, db, user, make_agent, make_datasource  # noqa: ANN001
+    ) -> None:
+        agent = await make_agent(user, "reporter")
+        datasource = await make_datasource(user, "warehouse")
+
+        config = await svc.create_tool_config(
+            db, user.id, agent.uuid, datasource.uuid, "query_orders", ["orders"]
+        )
+
+        assert config.table_name == "orders"
+        assert config.extra_tables == []
+
+    async def test_a_bare_string_is_still_accepted(
+        self, db, user, make_agent, make_datasource  # noqa: ANN001
+    ) -> None:
+        """Every caller that only ever had one table — a test, an older call site —
+        keeps working without being rewritten."""
+        agent = await make_agent(user, "reporter")
+        datasource = await make_datasource(user, "warehouse")
+
+        config = await svc.create_tool_config(
+            db, user.id, agent.uuid, datasource.uuid, "query_orders", "orders"
+        )
+
+        assert config.table_name == "orders"
+        assert config.extra_tables == []
+
+    async def test_duplicates_are_dropped_rather_than_refused(
+        self, db, user, make_agent, make_datasource  # noqa: ANN001
+    ) -> None:
+        """A browser can post the same option twice; that is not the user's mistake."""
+        agent = await make_agent(user, "reporter")
+        datasource = await make_datasource(user, "warehouse")
+
+        config = await svc.create_tool_config(
+            db,
+            user.id,
+            agent.uuid,
+            datasource.uuid,
+            "query_orders",
+            ["orders", "customers", "orders"],
+        )
+
+        assert config.table_name == "orders"
+        assert config.extra_tables == ["customers"]
+
+    @pytest.mark.parametrize("empty", [[], None, "", ["", "  "]])
+    async def test_no_table_is_refused(
+        self, db, user, make_agent, make_datasource, empty  # noqa: ANN001
+    ) -> None:
+        agent = await make_agent(user, "reporter")
+        datasource = await make_datasource(user, "warehouse")
+
+        with pytest.raises(HTTPException, match="Table is required"):
+            await svc.create_tool_config(
+                db, user.id, agent.uuid, datasource.uuid, "query_orders", empty
+            )
+
+    async def test_an_unsafe_name_anywhere_in_the_list_is_refused(
+        self, db, user, make_agent, make_datasource  # noqa: ANN001
+    ) -> None:
+        """The names are interpolated, not parameterised — the second one is held to
+        the same rule as the first."""
+        agent = await make_agent(user, "reporter")
+        datasource = await make_datasource(user, "warehouse")
+
+        with pytest.raises(HTTPException, match="is not a valid name"):
+            await svc.create_tool_config(
+                db,
+                user.id,
+                agent.uuid,
+                datasource.uuid,
+                "query_orders",
+                ["orders", "customers; drop table users"],
+            )
+
+    async def test_a_join_onto_an_unselected_table_is_refused(
+        self, db, user, make_agent, make_datasource  # noqa: ANN001
+    ) -> None:
+        """The Tables field and the Joins card both say which tables a built query
+        reads. A join outside the list would make the recorded scope narrower than
+        what runs — the prompt would understate it and the run-time active check
+        would never look at it."""
+        agent = await make_agent(user, "reporter")
+        datasource = await make_datasource(user, "warehouse")
+
+        with pytest.raises(HTTPException, match="not one of the tables selected"):
+            await svc.create_tool_config(
+                db,
+                user.id,
+                agent.uuid,
+                datasource.uuid,
+                "query_orders",
+                ["orders"],
+                config_json=config_json(joins=[JOIN_TO_CUSTOMERS]),
+            )
+
+    async def test_a_join_within_the_selection_is_accepted(
+        self, db, user, make_agent, make_datasource  # noqa: ANN001
+    ) -> None:
+        agent = await make_agent(user, "reporter")
+        datasource = await make_datasource(user, "warehouse")
+
+        config = await svc.create_tool_config(
+            db,
+            user.id,
+            agent.uuid,
+            datasource.uuid,
+            "query_orders",
+            ["orders", "customers"],
+            config_json=config_json(joins=[JOIN_TO_CUSTOMERS]),
+        )
+
+        assert config.extra_tables == ["customers"]
+        assert config.config["joins"][0]["table"] == "customers"
+
+    async def test_a_sql_tool_is_not_held_to_the_join_rule(
+        self, db, user, make_agent, make_datasource  # noqa: ANN001
+    ) -> None:
+        """Nothing parses the statement, so what it reads is what the operator says
+        it reads — there is no join list here to contradict."""
+        agent = await make_agent(user, "reporter")
+        datasource = await make_datasource(user, "warehouse")
+
+        config = await svc.create_tool_config(
+            db,
+            user.id,
+            agent.uuid,
+            datasource.uuid,
+            "query_orders",
+            ["orders", "customers"],
+            query_mode="sql",
+            sql_query="SELECT o.id FROM orders o JOIN customers c ON c.id = o.customer_id",
+        )
+
+        assert config.extra_tables == ["customers"]
+
+    async def test_editing_down_to_one_table_clears_the_extras(
+        self, db, user, make_agent, make_datasource, make_tool_config  # noqa: ANN001
+    ) -> None:
+        """A tool edited from three tables to one must not keep reporting three."""
+        agent = await make_agent(user, "reporter")
+        datasource = await make_datasource(user, "warehouse")
+        tool = await make_tool_config(
+            agent,
+            datasource,
+            "query_orders",
+            table_name="orders",
+            extra_tables=["customers"],
+        )
+
+        await svc.update_tool_config(
+            db,
+            user.id,
+            tool.uuid,
+            agent.uuid,
+            datasource.uuid,
+            "query_orders",
+            ["orders"],
+        )
+        await db.refresh(tool)
+
+        assert tool.extra_tables == []
+
+
+class TestTablesRead:
+    """The one place the two columns are put back together — four consumers read it,
+    and a tool that reports its tables differently in any of them is a tool nobody can
+    reason about."""
+
+    def test_the_primary_table_comes_first(self) -> None:
+        assert svc.tables_read("orders", ["customers"]) == ["orders", "customers"]
+
+    @pytest.mark.parametrize("extras", [None, [], ["", "  "]])
+    def test_no_extras_is_just_the_primary_table(self, extras) -> None:
+        """``NULL`` is what every row written before the column existed holds, and it
+        means "one table", not "no tables"."""
+        assert svc.tables_read("orders", extras) == ["orders"]
+
+    def test_a_duplicated_extra_is_not_repeated(self) -> None:
+        assert svc.tables_read("orders", ["orders", "customers"]) == [
+            "orders", "customers",
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -1136,6 +1478,136 @@ class TestGetTableAndColumnChoices:
             await svc.get_column_map(db, user.id, datasource.uuid, ["orders"])
 
 
+class TestThePickersOnlyOfferWhatIsActive:
+    """
+    A tool config is a standing permission for an agent to read something, so a table
+    or column the user has switched off in Data Sources must not be offerable here —
+    otherwise the switch is advisory and the agent reads it anyway.
+
+    "Not recorded" means active: a datasource created before metadata collection
+    worked has an empty ``configuration_data``, and hiding everything for those users
+    would be the worse bug.
+    """
+
+    async def test_an_inactive_table_is_not_offered(
+        self, db, user, make_datasource, stub_datasource_reads  # noqa: ANN001
+    ) -> None:
+        stub_datasource_reads["configuration_data"] = {"orders": {"status": "inactive"}}
+        datasource = await make_datasource(user, "warehouse")
+
+        assert await svc.get_table_choices(db, user.id, datasource.uuid) == ["customers"]
+
+    async def test_an_all_inactive_datasource_says_so(
+        self, db, user, make_datasource, stub_datasource_reads  # noqa: ANN001
+    ) -> None:
+        """Not an empty dropdown: the user can fix this, but only if told what is
+        wrong with it."""
+        stub_datasource_reads["configuration_data"] = {
+            "orders": {"status": "inactive"},
+            "customers": {"status": "inactive"},
+        }
+        datasource = await make_datasource(user, "warehouse")
+
+        with pytest.raises(HTTPException, match="inactive"):
+            await svc.get_table_choices(db, user.id, datasource.uuid)
+
+    async def test_an_empty_datasource_is_still_just_empty(
+        self, db, user, make_datasource, stub_datasource_reads  # noqa: ANN001
+    ) -> None:
+        """Nothing to pick and everything switched off are different problems with
+        different fixes, so only the second one raises."""
+        stub_datasource_reads["objects"] = []
+        datasource = await make_datasource(user, "warehouse")
+
+        assert await svc.get_table_choices(db, user.id, datasource.uuid) == []
+
+    async def test_a_file_datasource_is_unaffected(
+        self, db, user, make_datasource, stub_datasource_reads  # noqa: ANN001
+    ) -> None:
+        """File datasources never get ``configuration_data`` populated, so every file
+        stays offered — which is why the check is name-based and tolerates a missing
+        entry."""
+        stub_datasource_reads["objects"] = [
+            {"name": "products.csv", "file_id": "abc"},
+        ]
+        datasource = await make_datasource(user, "uploaded", db_type="csv")
+
+        assert await svc.get_table_choices(db, user.id, datasource.uuid) == [
+            "products.csv",
+        ]
+
+    async def test_an_inactive_column_is_not_offered(
+        self, db, user, make_datasource, stub_datasource_reads  # noqa: ANN001
+    ) -> None:
+        datasource = await make_datasource(
+            user,
+            "warehouse",
+            configuration_data={
+                "orders": {
+                    "status": "active",
+                    "column_data": {"total": {"column_name": "total", "status": "inactive"}},
+                }
+            },
+        )
+
+        assert await svc.get_column_choices(
+            db, user.id, datasource.uuid, "orders"
+        ) == ["id"]
+
+    async def test_columns_of_an_inactive_table_are_refused_by_name(
+        self, db, user, make_datasource, stub_datasource_reads  # noqa: ANN001
+    ) -> None:
+        datasource = await make_datasource(
+            user, "warehouse", configuration_data={"orders": {"status": "inactive"}},
+        )
+
+        with pytest.raises(HTTPException, match="'orders' is inactive"):
+            await svc.get_column_choices(db, user.id, datasource.uuid, "orders")
+
+    async def test_a_table_with_every_column_off_says_so(
+        self, db, user, make_datasource, stub_datasource_reads  # noqa: ANN001
+    ) -> None:
+        datasource = await make_datasource(
+            user,
+            "warehouse",
+            configuration_data={
+                "orders": {
+                    "status": "active",
+                    "column_data": {
+                        "id": {"column_name": "id", "status": "inactive"},
+                        "total": {"column_name": "total", "status": "inactive"},
+                    },
+                }
+            },
+        )
+
+        with pytest.raises(HTTPException, match="Every column of 'orders'"):
+            await svc.get_column_choices(db, user.id, datasource.uuid, "orders")
+
+    async def test_the_column_map_filters_every_table(
+        self, db, user, make_datasource, stub_datasource_reads  # noqa: ANN001
+    ) -> None:
+        """The edit form loads the base table plus each joined one; the filter has to
+        apply to all of them, not just the first."""
+        datasource = await make_datasource(
+            user,
+            "warehouse",
+            configuration_data={
+                "orders": {
+                    "status": "active",
+                    "column_data": {"total": {"column_name": "total", "status": "inactive"}},
+                },
+                "customers": {"status": "active", "column_data": {}},
+            },
+        )
+
+        column_map = await svc.get_column_map(
+            db, user.id, datasource.uuid, ["orders", "customers"],
+        )
+
+        assert column_map == {"orders": ["id"], "customers": ["id", "total"]}
+
+
 # ---------------------------------------------------------------------------
 # SQL mode
 # ---------------------------------------------------------------------------
@@ -1396,3 +1868,592 @@ class TestSupportsSql:
     @pytest.mark.parametrize("db_type", ["mongodb", "csv", "", None])
     def test_everything_else_cannot(self, db_type) -> None:  # noqa: ANN001
         assert svc.supports_sql(db_type) is False
+
+
+# ---------------------------------------------------------------------------
+# Nesting, through the tool config's own CRUD
+#
+# The rules about what may be embedded live in tool_chain_service and are tested
+# there. What is asserted here is the wiring: that a save persists the nesting,
+# that a save which cannot persist it saves *nothing*, and that a tool something
+# embeds cannot be taken away from it.
+# ---------------------------------------------------------------------------
+class TestSavingNestedTools:
+    @pytest.fixture
+    async def pair(self, db, user, make_agent, make_datasource, make_tool_config):  # noqa: ANN001, ANN201
+        agent = await make_agent(user, "reporter")
+        datasource = await make_datasource(user, "warehouse")
+        child = await make_tool_config(
+            agent,
+            datasource,
+            "active_clients",
+            config={"columns": [{"column": "id", "alias": ""}]},
+        )
+        return {"agent": agent, "datasource": datasource, "child": child}
+
+    def child_entry(self, child) -> list:  # noqa: ANN001
+        return [{
+            "child_id": str(child.uuid),
+            "child_column": "id",
+            "parent_reference": "client_id",
+        }]
+
+    async def test_create_persists_the_nesting(self, db, user, pair) -> None:  # noqa: ANN001
+        created = await svc.create_tool_config(
+            db,
+            user.id,
+            agent_id=pair["agent"].uuid,
+            datasource_id=pair["datasource"].uuid,
+            tool_name="projects_by_client",
+            table_names=["projects"],
+            children=self.child_entry(pair["child"]),
+        )
+
+        views = {view["tool_name"]: view for view in
+                 await svc.get_tool_config_views(db, user.id)}
+
+        assert created.tool_name == "projects_by_client"
+        assert views["projects_by_client"]["chain"][0]["tool_name"] == "active_clients"
+        assert views["active_clients"]["embedded_in"] == ["projects_by_client"]
+
+    async def test_a_refused_child_leaves_no_tool_behind(
+        self, db, user, pair  # noqa: ANN001
+    ) -> None:
+        """The children are validated before the row is written, because the create
+        commits: refusing afterwards would leave a half-saved form."""
+        pair["child"].is_enabled = False
+        await db.commit()
+
+        with pytest.raises(HTTPException, match="is disabled"):
+            await svc.create_tool_config(
+                db,
+                user.id,
+                agent_id=pair["agent"].uuid,
+                datasource_id=pair["datasource"].uuid,
+                tool_name="projects_by_client",
+                table_names=["projects"],
+                children=self.child_entry(pair["child"]),
+            )
+
+        assert [view["tool_name"] for view in
+                await svc.get_tool_config_views(db, user.id)] == ["active_clients"]
+
+    async def test_update_replaces_the_nesting_wholesale(
+        self, db, user, pair  # noqa: ANN001
+    ) -> None:
+        parent = await svc.create_tool_config(
+            db,
+            user.id,
+            agent_id=pair["agent"].uuid,
+            datasource_id=pair["datasource"].uuid,
+            tool_name="projects_by_client",
+            table_names=["projects"],
+            children=self.child_entry(pair["child"]),
+        )
+
+        await svc.update_tool_config(
+            db,
+            user.id,
+            parent.uuid,
+            agent_id=pair["agent"].uuid,
+            datasource_id=pair["datasource"].uuid,
+            tool_name="projects_by_client",
+            table_names=["projects"],
+            children=[],
+        )
+
+        view = await svc.get_tool_config_view(db, user.id, parent.uuid)
+
+        assert view["children"] == []
+
+    async def test_the_edit_form_gets_the_children_back(
+        self, db, user, pair  # noqa: ANN001
+    ) -> None:
+        parent = await svc.create_tool_config(
+            db,
+            user.id,
+            agent_id=pair["agent"].uuid,
+            datasource_id=pair["datasource"].uuid,
+            tool_name="projects_by_client",
+            table_names=["projects"],
+            children=self.child_entry(pair["child"]),
+        )
+
+        view = await svc.get_tool_config_view(db, user.id, parent.uuid)
+
+        assert view["children"] == [{
+            "child_id": str(pair["child"].uuid),
+            # `child_kind` says which key the row posts back under, because a child may
+            # be a tool config or a published graph.
+            "child_kind": "tool",
+            "child_name": "active_clients",
+            "child_column": "id",
+            "parent_reference": "client_id",
+            "binding_mode": "in_list",
+            "value_alias": "",
+        }]
+
+    async def test_an_embedded_tool_cannot_be_deleted(
+        self, db, user, pair  # noqa: ANN001
+    ) -> None:
+        """Its parent would keep running with the filter gone — more rows than it
+        should return, and nothing saying so."""
+        await svc.create_tool_config(
+            db,
+            user.id,
+            agent_id=pair["agent"].uuid,
+            datasource_id=pair["datasource"].uuid,
+            tool_name="projects_by_client",
+            table_names=["projects"],
+            children=self.child_entry(pair["child"]),
+        )
+
+        with pytest.raises(HTTPException, match="embedded in projects_by_client"):
+            await svc.delete_tool_config(db, user.id, pair["child"].uuid)
+
+    async def test_an_embedded_tool_cannot_be_disabled(
+        self, db, user, pair  # noqa: ANN001
+    ) -> None:
+        await svc.create_tool_config(
+            db,
+            user.id,
+            agent_id=pair["agent"].uuid,
+            datasource_id=pair["datasource"].uuid,
+            tool_name="projects_by_client",
+            table_names=["projects"],
+            children=self.child_entry(pair["child"]),
+        )
+
+        with pytest.raises(HTTPException, match="cannot be disabled"):
+            await svc.set_tool_config_enabled(db, user.id, pair["child"].uuid, False)
+
+    async def test_it_can_be_disabled_once_it_is_not_embedded(
+        self, db, user, pair  # noqa: ANN001
+    ) -> None:
+        parent = await svc.create_tool_config(
+            db,
+            user.id,
+            agent_id=pair["agent"].uuid,
+            datasource_id=pair["datasource"].uuid,
+            tool_name="projects_by_client",
+            table_names=["projects"],
+            children=self.child_entry(pair["child"]),
+        )
+        await svc.update_tool_config(
+            db,
+            user.id,
+            parent.uuid,
+            agent_id=pair["agent"].uuid,
+            datasource_id=pair["datasource"].uuid,
+            tool_name="projects_by_client",
+            table_names=["projects"],
+            children=[],
+        )
+
+        assert await svc.set_tool_config_enabled(
+            db, user.id, pair["child"].uuid, False,
+        ) == {pair["agent"].id}
+
+    async def test_deleting_the_parent_frees_the_child(
+        self, db, user, pair  # noqa: ANN001
+    ) -> None:
+        """The link goes with the parent — it described *that* tool's query."""
+        parent = await svc.create_tool_config(
+            db,
+            user.id,
+            agent_id=pair["agent"].uuid,
+            datasource_id=pair["datasource"].uuid,
+            tool_name="projects_by_client",
+            table_names=["projects"],
+            children=self.child_entry(pair["child"]),
+        )
+
+        await svc.delete_tool_config(db, user.id, parent.uuid)
+
+        assert await svc.delete_tool_config(db, user.id, pair["child"].uuid) == {
+            pair["agent"].id,
+        }
+
+
+# ---------------------------------------------------------------------------
+# Agent-supplied filters
+# ---------------------------------------------------------------------------
+
+class TestAgentSuppliedFilters:
+    """
+    A filter whose *value* the agent provides at call time.
+
+    The validator is where the shape is decided, and the shape is what the rest of
+    the feature reads: `tool_factory` builds the tool's argument schema from these
+    keys and `query_executor` decides from them whether a missing value refuses the
+    query or drops a clause. A key normalised away here disables the feature
+    silently, which is why each one is asserted rather than assumed.
+    """
+
+    def _config(self, **overrides) -> str:
+        entry = {"column": "status", "operator": "=", "agent_supplied": True}
+        entry.update(overrides)
+        return json.dumps({"filters": [entry]})
+
+    def test_an_open_filter_stores_no_value_and_is_required_by_default(self) -> None:
+        """
+        Required is the safe default: an optional filter the model omits returns
+        every row, and a tool that silently widens is worse than one that refuses.
+        """
+        config = validated_query_config(self._config(), "projects", "postgresql")
+        entry = config["filters"][0]
+
+        assert entry["agent_supplied"] is True
+        assert entry["required"] is True
+        assert "value" not in entry
+
+    def test_the_parameter_name_defaults_to_the_column(self) -> None:
+        config = validated_query_config(
+            json.dumps({"filters": [
+                {"column": "created_at", "operator": ">", "agent_supplied": True},
+            ]}),
+            "projects", "postgresql",
+        )
+
+        assert config["filters"][0]["param"] == "created_at"
+
+    def test_a_checkbox_string_counts_as_ticked(self) -> None:
+        """
+        An HTML checkbox posts "on". Read as a plain truthy string this would be a
+        filter that stayed fixed while its form said otherwise.
+        """
+        config = validated_query_config(
+            self._config(agent_supplied="on"), "projects", "postgresql",
+        )
+
+        assert config["filters"][0]["agent_supplied"] is True
+
+    def test_a_fixed_filter_still_needs_a_value(self) -> None:
+        with pytest.raises(HTTPException) as caught:
+            validated_query_config(
+                json.dumps({"filters": [{"column": "status", "operator": "="}]}),
+                "projects", "postgresql",
+            )
+
+        assert "supplied by the agent" in caught.value.detail
+
+    def test_two_parameters_cannot_share_a_name(self) -> None:
+        """
+        They become fields on one Pydantic model, so a duplicate would silently
+        drop one filter's parameter and leave the model unable to set it.
+        """
+        with pytest.raises(HTTPException) as caught:
+            validated_query_config(
+                json.dumps({"filters": [
+                    {"column": "created_at", "operator": ">",
+                     "agent_supplied": True, "param": "on"},
+                    {"column": "updated_at", "operator": "<",
+                     "agent_supplied": True, "param": "on"},
+                ]}),
+                "projects", "postgresql",
+            )
+
+        assert "Give one of them a different name" in caught.value.detail
+
+    def test_a_parameter_name_is_reduced_to_an_identifier(self) -> None:
+        """It becomes a Pydantic field name, so it has to be one."""
+        config = validated_query_config(
+            self._config(param="Created At!"), "projects", "postgresql",
+        )
+
+        assert config["filters"][0]["param"] == "created_at"
+
+    def test_a_parameter_name_that_cannot_be_an_identifier_is_refused(self) -> None:
+        with pytest.raises(HTTPException):
+            validated_query_config(
+                self._config(param="!!!"), "projects", "postgresql",
+            )
+
+    def test_the_preview_shows_a_placeholder_not_the_word_none(self) -> None:
+        """
+        The preview goes into the routing prompt, so `status = 'None'` would be a
+        filter the model believes compares against the literal string "None".
+        """
+        config = validated_query_config(
+            self._config(param="wanted_status"), "projects", "postgresql",
+        )
+        preview = build_query_preview(config, "projects")
+
+        assert "status = :wanted_status" in preview
+        assert "None" not in preview
+
+
+class TestValueLessFilterOperators:
+    """
+    IS NULL, IS NOT NULL, IS BLANK and IS NOT BLANK compare against nothing.
+
+    Every layer that touches a filter assumed a value existed, so the interesting
+    assertions are the negative ones: the validator must not demand a value, and
+    must not store an empty one that later reads as meaningful.
+    """
+
+    def _config(self, operator: str, **extra) -> str:  # noqa: ANN003
+        entry = {"column": "technology", "operator": operator}
+        entry.update(extra)
+        return json.dumps({"filters": [entry]})
+
+    @pytest.mark.parametrize("operator", [
+        "IS NULL", "IS NOT NULL", "IS BLANK", "IS NOT BLANK",
+    ])
+    def test_no_value_is_required(self, operator: str) -> None:
+        config = validated_query_config(
+            self._config(operator), "project_details", "postgresql",
+        )
+
+        assert config["filters"] == [
+            {"column": "technology", "operator": operator},
+        ]
+
+    @pytest.mark.parametrize("operator", ["IS NULL", "IS NOT BLANK"])
+    def test_a_leftover_value_is_dropped_rather_than_stored(
+        self, operator: str,
+    ) -> None:
+        """
+        Switching an existing filter to IS NULL must not leave its old value behind.
+        The executor ignores it, so it would be inert — and a stored field that
+        provably cannot affect the query is one somebody reads as meaningful later.
+        """
+        config = validated_query_config(
+            self._config(operator, value="python"), "project_details", "postgresql",
+        )
+
+        assert "value" not in config["filters"][0]
+
+    def test_agent_supplied_is_dropped_too(self) -> None:
+        """There is no value for an agent to supply, so the flag cannot mean anything."""
+        config = validated_query_config(
+            self._config("IS NULL", agent_supplied=True, param="whatever"),
+            "project_details", "postgresql",
+        )
+
+        assert "agent_supplied" not in config["filters"][0]
+        assert "param" not in config["filters"][0]
+
+    def test_an_ordinary_operator_still_needs_its_value(self) -> None:
+        """The relaxation is scoped to the four, not to filters generally."""
+        with pytest.raises(HTTPException):
+            validated_query_config(
+                self._config("="), "project_details", "postgresql",
+            )
+
+    def test_the_operator_error_lists_the_new_ones(self) -> None:
+        """
+        The message used to name five operators by hand. Built from the tuple now,
+        so adding one cannot leave the error advertising the old set.
+        """
+        with pytest.raises(HTTPException) as caught:
+            validated_query_config(
+                self._config("BETWEEN"), "project_details", "postgresql",
+            )
+
+        assert "IS NOT BLANK" in caught.value.detail
+
+    @pytest.mark.parametrize("operator,expected", [
+        ("IS NULL", "technology IS NULL"),
+        ("IS NOT NULL", "technology IS NOT NULL"),
+        ("IS BLANK", "(technology IS NULL OR TRIM(technology) = '')"),
+        ("IS NOT BLANK", "(technology IS NOT NULL AND TRIM(technology) <> '')"),
+    ])
+    def test_the_preview_shows_the_sql_it_stands_for(
+        self, operator: str, expected: str,
+    ) -> None:
+        """
+        "IS BLANK" is a label on a dropdown, not something a database understands,
+        and this preview is read as SQL by an operator and by the model.
+        """
+        config = validated_query_config(
+            self._config(operator), "project_details", "postgresql",
+        )
+
+        assert expected in build_query_preview(config, "project_details")
+
+
+class TestTheBuilderAndTheExecutorAgreeOnOperators:
+    """
+    Three lists of operators exist — the model constants, the executor's builders and
+    the widget's JavaScript — and a filter that passes validation but has no builder
+    fails at the moment an agent calls it, in front of whoever asked.
+    """
+
+    def test_every_allowed_operator_has_an_executor_builder(self) -> None:
+        from app.models.tool_configs import FILTER_OPERATORS
+        from app.services.deep_agents.query_executor import _FILTER_BUILDERS
+
+        assert set(FILTER_OPERATORS) == set(_FILTER_BUILDERS)
+
+    def test_the_value_less_set_is_a_subset_of_the_allowed_set(self) -> None:
+        from app.models.tool_configs import (
+            FILTER_OPERATORS,
+            VALUELESS_FILTER_OPERATORS,
+        )
+
+        assert VALUELESS_FILTER_OPERATORS <= set(FILTER_OPERATORS)
+
+    def test_the_javascript_knows_the_same_value_less_set(self) -> None:
+        """
+        The builder hides the value box from this list. Out of step, an operator gets
+        a box the server then refuses to read, or none where the server demands one.
+        """
+        import pathlib
+        import re
+
+        from app.models.tool_configs import VALUELESS_FILTER_OPERATORS
+
+        source = pathlib.Path("static/js/tool_configs.js").read_text()
+        declared = re.search(r"var VALUELESS_OPERATORS = \[(.*?)\];", source, re.S)
+
+        assert declared, "VALUELESS_OPERATORS is not declared in tool_configs.js"
+
+        names = set(re.findall(r'"([^"]+)"', declared.group(1)))
+        assert names == set(VALUELESS_FILTER_OPERATORS)
+
+
+class TestAssistantSuppliedSqlValues:
+    """
+    ``validated_sql_params`` — the values a SQL-mode statement asks the model for.
+
+    Builder mode's equivalent is checked against the config it lives in. A statement
+    has no config, so the check that matters is the other direction: a declared name
+    must actually appear as a placeholder, or it is a field the model is asked to
+    fill on every call for no effect while the operator believes it filters
+    something.
+    """
+
+    def test_a_declared_value_the_statement_uses_is_kept(self) -> None:
+        assert svc.validated_sql_params(
+            [{"param": "department_id", "type": "number", "required": True,
+              "description": "Which department."}],
+            "SELECT name FROM projects WHERE department_id = :department_id",
+        ) == [{
+            "param": "department_id",
+            "type": "number",
+            "required": True,
+            "description": "Which department.",
+        }]
+
+    def test_a_name_the_statement_never_uses_is_refused(self) -> None:
+        with pytest.raises(HTTPException, match="does not use ':region'"):
+            svc.validated_sql_params(
+                [{"param": "region"}],
+                "SELECT name FROM projects",
+            )
+
+    def test_nothing_declared_is_null_rather_than_an_empty_list(self) -> None:
+        """NULL is what every row written before the column existed says, and it
+        says "no arguments" rather than "an empty list of them"."""
+        assert svc.validated_sql_params([], "SELECT 1") is None
+        assert svc.validated_sql_params(None, "SELECT 1") is None
+
+    def test_the_type_defaults_to_text(self) -> None:
+        """Which binds the string as it arrived — right for a text column and for
+        any comparison the database will coerce itself."""
+        declared = svc.validated_sql_params(
+            [{"param": "wanted"}], "SELECT 1 WHERE name = :wanted",
+        )
+
+        assert declared[0]["type"] == "text"
+        assert declared[0]["required"] is True
+
+    def test_an_unknown_type_is_refused(self) -> None:
+        with pytest.raises(HTTPException, match="text, a number, or"):
+            svc.validated_sql_params(
+                [{"param": "wanted", "type": "date"}],
+                "SELECT 1 WHERE name = :wanted",
+            )
+
+    def test_two_values_cannot_share_a_name(self) -> None:
+        with pytest.raises(HTTPException, match="Give one of them a different name"):
+            svc.validated_sql_params(
+                [{"param": "wanted"}, {"param": "wanted"}],
+                "SELECT 1 WHERE name = :wanted",
+            )
+
+    def test_a_placeholder_inside_a_string_does_not_count_as_used(self) -> None:
+        """Literals are blanked first, so a time in a pattern is not mistaken for a
+        parameter — the same rule the chain's own placeholder scan uses."""
+        with pytest.raises(HTTPException, match="does not use ':wanted'"):
+            svc.validated_sql_params(
+                [{"param": "wanted"}],
+                "SELECT name FROM projects WHERE tags LIKE '%a=:wanted%'",
+            )
+
+    def test_a_postgres_cast_is_not_a_placeholder(self) -> None:
+        with pytest.raises(HTTPException, match="does not use ':text'"):
+            svc.validated_sql_params(
+                [{"param": "text"}],
+                "SELECT id::text FROM projects",
+            )
+
+    async def test_saving_in_builder_mode_clears_them(
+        self, db, user, make_agent, make_datasource  # noqa: ANN001
+    ) -> None:
+        """
+        The same rule the two query columns already follow. Left behind, they would
+        have the model asked for a value a builder query has no use for.
+        """
+        agent = await make_agent(user, "reporter")
+        datasource = await make_datasource(user, "warehouse")
+
+        created = await svc.create_tool_config(
+            db,
+            user.id,
+            agent_id=agent.uuid,
+            datasource_id=datasource.uuid,
+            tool_name="asks_for_one",
+            table_names=["projects"],
+            query_mode="sql",
+            sql_query="SELECT name FROM projects WHERE department_id = :department",
+            sql_params=[{"param": "department", "type": "number"}],
+        )
+
+        assert created.sql_params[0]["param"] == "department"
+
+        await svc.update_tool_config(
+            db,
+            user.id,
+            created.uuid,
+            agent_id=agent.uuid,
+            datasource_id=datasource.uuid,
+            tool_name="asks_for_one",
+            table_names=["projects"],
+            query_mode="builder",
+            config_json=json.dumps({"columns": [{"column": "name", "alias": ""}]}),
+        )
+
+        reloaded = await svc.get_tool_config(db, user.id, created.uuid)
+
+        assert reloaded.sql_params is None
+        assert reloaded.sql_query is None
+
+    async def test_the_edit_form_gets_them_back(
+        self, db, user, make_agent, make_datasource  # noqa: ANN001
+    ) -> None:
+        agent = await make_agent(user, "reporter")
+        datasource = await make_datasource(user, "warehouse")
+
+        created = await svc.create_tool_config(
+            db,
+            user.id,
+            agent_id=agent.uuid,
+            datasource_id=datasource.uuid,
+            tool_name="asks_for_one",
+            table_names=["projects"],
+            query_mode="sql",
+            sql_query="SELECT name FROM projects WHERE department_id = :department",
+            sql_params=[{"param": "department", "type": "number",
+                         "description": "Which department."}],
+        )
+
+        view = await svc.get_tool_config_view(db, user.id, created.uuid)
+
+        assert view["sql_params"] == [{
+            "param": "department",
+            "type": "number",
+            "required": True,
+            "description": "Which department.",
+        }]

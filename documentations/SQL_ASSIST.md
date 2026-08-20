@@ -28,6 +28,60 @@ reach any further into the datasource than the first attempt did.
 
 ---
 
+# The active-column contract
+
+The structure the model is shown is not the whole schema — it is the part the user has left
+switched on in Data Sources (see
+[SERVICE_PATTERNS.md](SERVICE_PATTERNS.md#who-reads-the-status--apputilsdatasource_statuspy)).
+`_load_metadata` prunes the reflected metadata before `_build_prompts` ever sees it:
+
+* an inactive **table** named in the form post is refused by name — the picker no longer offers
+  it, but the field is a form field and can still carry it;
+* inactive **columns** are removed from `columns`;
+* inactive names are removed from `primary_key`, and any **foreign key** whose own column or
+  whose referenced column is inactive is dropped — otherwise the model is invited to join on a
+  column it may not select;
+* a table left with **no columns** is refused, naming that table.
+
+Pruning rather than post-checking is the design. A model cannot select, join on or filter by a
+column it was never told exists, and there is no SQL parser in this application to police its
+output if it were shown one. The system prompt says so in those terms: *a column that is not
+listed does not exist for you*.
+
+### The projection rule
+
+The prompt asks for every column, spelled out, and puts a literal per-table list ahead of the
+schema JSON so the model copies rather than derives it. Two carve-outs, both deliberate:
+
+* **Aggregates are exempt.** "Include every column" cannot hold for
+  `SELECT COUNT(*) … GROUP BY status` without changing what the query counts, and a rule the
+  model must break to answer the question is a rule it learns to ignore everywhere else. The
+  exemption has to be stated together with the grouping rule below: told to select every column
+  *and* to group, a model does both, and produces exactly the query the database refuses.
+* **`SELECT *` is banned outright**, not discouraged. `*` is the one selection whose column list
+  the database resolves at run time, so a query approved today starts returning a switched-off
+  column tomorrow without the query changing.
+
+### Enforced versus advised
+
+| Check | Where | Enforced? |
+|---|---|---|
+| The model only sees active tables and columns | `_load_metadata` pruning | **Enforced** — structurally, by omission |
+| No `SELECT *` / `table.*` in the generated query | `sql_guard.star_selection_violation`, via `_validated_sql` | **Enforced** — 502, query not shown |
+| A drafted tool config references only active columns | `_reference_resolver` against the pruned metadata | **Enforced** — 400, tool not created |
+| Only active columns are actually *read* | `query_executor` on every run | **Enforced** — see [DEEP_AGENTS.md](DEEP_AGENTS.md) |
+| The query includes *all* active columns | `sql_guard.missing_identifiers`, via `_omitted_columns` | **Advised** — reported as `omitted_columns` and shown as an amber note |
+| The grouping is one the database will accept | `sql_guard.group_by_violation`, via `_regrouped` | **Retried, then advised** — one regeneration, then a red note in `warnings` |
+
+The last row is a text search, not a parse: it cannot tell a SELECT list from a WHERE clause,
+and it cannot tell that a CTE's outer query legitimately narrows what the inner one read.
+Refusing on it would reject every aggregate and every CTE the panel exists to help write, so the
+user is told and the decision stays theirs. The only place requirement "all active columns" is
+*guaranteed* is the executor's builder mode, which builds the column list itself instead of
+asking a model for one.
+
+---
+
 # Why it is its own module
 
 The panel is opened from the Tool Configs page, but generating SQL from a schema needs a
@@ -100,10 +154,12 @@ left alone.
 # Service — `app/services/sql_assist/sql_assist_service.py`
 
 `generate_sql(db, user_id, datasource_id, table_names, prompt, llm_mode, llm_api_key_id,
-history_json)` → `{"draft", "history", "dialect", "tables"}`.
+history_json)` → `{"draft", "history", "dialect", "tables", "omitted_columns", "warnings"}`.
 
 The returned `history` **includes this turn**, ready to be posted back with the next
-refinement.
+refinement. `omitted_columns` names the active columns the query never mentions, and `warnings`
+carries anything that stops the query running at all — today only the grouping check, see
+[The grouping rule](#the-grouping-rule--_regrouped).
 
 ### `SqlDraft`
 
@@ -123,7 +179,8 @@ nothing else — because a model that believes it has seen the data will happily
 that do not exist. It then requires: only the tables and columns in the metadata; an empty
 `sql` plus an explanation when the request cannot be met; one read-only statement; joins on the
 given foreign keys, with anything else declared in `assumptions`; qualified columns once more
-than one table is involved; explicit column lists; and the target dialect's syntax.
+than one table is involved; explicit column lists; a grouping the database will accept; and the
+target dialect's syntax.
 
 ### Language model choice
 
@@ -223,7 +280,7 @@ The model's answer is not trusted as a config. `_validated_tool_draft`:
 | `orders.total` | Kept, after checking `orders` is in the query and really has `total`. |
 | `total`, and only `orders` has it | Qualified to `orders.total` (left bare when the query has no joins, matching the builder). |
 | `id`, and both tables have it | **Rejected as ambiguous**, naming both tables. |
-| `profit_margin`, in no table | **Rejected** — the model invented it. |
+| `profit_margin`, in no table | **Rejected** — the model invented it, *or* the column is switched off in Data Sources and so was never in the metadata. The message says both, because from here the two are indistinguishable and only the user knows which. |
 | `recent_orders.total`, not joined | **Rejected** — the query does not read that table. |
 
 "Rejected" above means *rejected as a builder config*, not rejected as a tool. Each of those
@@ -247,6 +304,20 @@ to maintain.
 
 A rejected name (already taken on that agent) re-renders the same form with the config and
 preview intact, so it can be fixed without converting the query again.
+
+**Which tables the tool records** is decided per mode, and neither is "everything the user
+selected in the panel":
+
+* **SQL mode** records every selected table, with the model's chosen primary one moved to the
+  front (`_primary_first`). The statement reads what it reads and nothing here parses it, so the
+  user's selection is the best record available — and it is what lets the routing prompt state
+  the tool's real scope and the executor check each table is still active.
+* **Builder mode** records the base table plus whatever its joins bring in — `query_tables` of
+  the validated config, not the selection. A built query reads exactly what it joins, and
+  recording a table it never touches would overstate the tool's scope as surely as the old
+  single-table record understated it.
+
+See [TOOL_QUERY_MODES.md](TOOL_QUERY_MODES.md#a-tool-records-every-table-it-reads).
 
 ### Edit shows what was created
 
@@ -293,6 +364,78 @@ after a `;` (refused by step 4); listing them would add nothing but false reject
 queries — a column named `call`, a table named `copy`.
 
 Word boundaries mean `created_at` is not a `CREATE` and `OFFSET` is not a `SET`.
+
+A sixth step runs after those five, and only here — not in Tool Configs, not in the executor:
+`star_selection_violation` refuses `SELECT *` and `table.*`, also as a 502. It matches on the
+literal-stripped text, so a filter value like `'select * from x'` cannot trip it, and it
+deliberately does **not** match `COUNT(*)` — an aggregate over all rows names no columns, and
+refusing it would break every "how many" question there is.
+
+---
+
+# The grouping rule — `_regrouped`
+
+The read-only guard asks whether a query *may* run. This asks whether it **can**. MySQL's
+default `sql_mode` includes `ONLY_FULL_GROUP_BY` and PostgreSQL enforces the same rule, so a
+grouped query that selects a column it neither aggregates nor groups is refused by the database:
+
+> SELECT list is not in GROUP BY clause and contains nonaggregated column
+> 'teamtracking.project_details.client_name' which is not functionally dependent on columns in
+> GROUP BY clause; this is incompatible with sql_mode=only_full_group_by
+
+That query never had a chance of running. Left alone it fails in front of the user, or — worse,
+once **Auto Create Tool** has saved it — in front of a visitor talking to an agent. Three things
+happen about it, in the order they take effect:
+
+**1. The prompt states the rule.** Two bullets in the system prompt, next to the aggregate
+carve-out: every column in a `GROUP BY` query must be aggregated or grouped, and a SELECT list
+may not mix an aggregate with a plain column even without a `GROUP BY`. Most attempts never
+break it.
+
+**2. A query that breaks it anyway is written again.** `_regrouped` runs
+`sql_guard.group_by_violation` over the draft, passing `_primary_keys(metadata)` so the shape
+both databases *do* allow — group by a table's key, select its other columns — is not treated as
+a fault. On a violation the model is called a second time with the failed statement, the
+offending column, and the three ways out (group it, aggregate it, drop it).
+
+**Asked again, never patched.** Adding the column to the `GROUP BY` here would be a change to
+what the query counts — one row per group becoming one row per pair — and the explanation beside
+it would then describe a different query than the one shown. Regenerating keeps the SQL and the
+words about it coming from the same place.
+
+**3. A second failure becomes a note, not a refusal.** The original draft is returned with a
+message in `warnings`, which `result.htm` renders as a red alert above the query: *"This query
+will not run as written."* The check is a heuristic and the panel does not execute anything, so
+the user reading the SQL with the problem named beside it is better off than a 502 that leaves
+them nothing to refine.
+
+One retry, not a loop. A second call is worth it; a third is a model that is not going to get
+there, and the user can say so faster by rewording the prompt.
+
+The **Auto Create Tool** path is covered from the other end: the conversion prompt is told to
+copy the query's own `GROUP BY`, and `tool_config_service.validated_query_config` refuses a
+builder config that selects an ungrouped column — which falls back to storing the statement as
+SQL rather than erroring, exactly as any other conversion failure does. See
+[TOOL_QUERY_MODES.md](TOOL_QUERY_MODES.md).
+
+---
+
+# Test Query
+
+The generated query's card header carries a **Test Query** button beside *Copy* and
+*Auto Create Tool*. It posts the statement to `/query-test`, which runs it once
+against the datasource and reports whether the database accepted it — see
+[QUERY_TEST.md](QUERY_TEST.md).
+
+This is the one thing in the panel that touches data, and it is worth being exact
+about what that does and does not change. The feature's promise is that **the model**
+is shown structure and never contents: the prompt is built from reflected metadata,
+no row is sampled, and nothing is run to produce the query. Pressing Test runs the
+finished query, because the user asked it to, and what comes back is the column names
+and the row count — never a value, and nothing that goes anywhere near a prompt. A
+query the model wrote is a query somebody is about to save as a tool, and the checks
+above it (read-only, no `SELECT *`, the grouping rule) can only rule things out. The
+database is what says yes.
 
 ---
 
@@ -345,7 +488,7 @@ when the user picked four.
 | `templates/sql_assist/panel.htm` | The offcanvas shell. **A second host page needs only this include plus a button pointing at `#sqlAssistOffcanvasContent`.** |
 | `partials/form.htm` | The panel body. One cascade (datasource → tables); the prompt box doubles as the refinement box. |
 | `partials/tables_field.htm` | Multi-select, so the AI can join. Options come from the same reflection the prompt's schema does, so the picker can never offer a table the model would not be shown. |
-| `partials/result.htm` | The query, the explanation, the assumptions, the hidden history field, and the **Auto Create Tool** button. |
+| `partials/result.htm` | The query, the explanation, the assumptions, the hidden history field, and the **Auto Create Tool** button. Also the two notes about the query itself: `omitted_columns` in amber, and `warnings` — a query the database would refuse — in red above it. |
 | `partials/tool_form.htm` | The drafted tool config: name (prefilled), agent, description, and the query as the builder will hold it. Or the reason it cannot be a tool. |
 | `partials/tool_created.htm` | Success, with an **Edit tool config** button, plus an out-of-band rebuild of the host page's tool-configs table. |
 | `partials/error.htm` | A failed turn, with the conversation preserved. |

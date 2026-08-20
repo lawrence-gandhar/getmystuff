@@ -62,7 +62,13 @@
             <input type="hidden" name="llm_mode" value="{{ llm_mode }}">
             <input type="hidden" name="llm_api_key_id" value="{{ llm_api_key_id }}">
             <input type="hidden" name="agent_filter" value="{{ agent_filter }}">
-            <input type="hidden" name="table_name" value="{{ table }}">
+            {# Every table the query reads, primary first — the same list the Tool
+               Configs form's multi-select posts, so a tool created here records its
+               scope exactly as a hand-made one does. Repeated inputs rather than one
+               joined value: the schema reads them with `getall`. #}
+            {% for name in tables %}
+            <input type="hidden" name="table_names" value="{{ name }}">
+            {% endfor %}
             {# Which of the two query fields below is the real one. The server
                validates the mode and the field it names; the other is discarded. #}
             <input type="hidden" name="query_mode" value="{{ mode }}">
@@ -151,7 +157,8 @@
 
                 <div class="col-12">
                     <p class="form-label fw-semibold mb-1">
-                        Reads <code>{{ table }}</code>
+                        Reads
+                        {% for name in tables %}<code>{{ name }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
                     </p>
                     <pre class="bg-dark text-light font-monospace small rounded p-3 mb-1 text-wrap">{{ preview }}</pre>
                     <div class="form-text">

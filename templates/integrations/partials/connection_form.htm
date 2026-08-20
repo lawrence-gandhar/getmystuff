@@ -1,0 +1,111 @@
+{# The edit dialog's body, fetched per open so it shows what the database holds.
+
+   **The credential field comes back empty**, with a note saying one is stored. Not
+   pre-filled and not masked-with-the-real-value: either would put the secret in the DOM
+   of a page anybody looking over a shoulder can read, and would round-trip it through a
+   form for no reason. Empty means "leave the stored one alone" when this saves, which is
+   what `update_connection` already does — so the commonest edit, fixing a typo in the
+   name, cannot accidentally clear a working credential. #}
+<div class="modal-header border-bottom">
+    <h5 class="modal-title">
+        <i class="las la-plug text-primary"></i> {{ connection.label }}
+    </h5>
+    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+</div>
+
+<form
+    hx-post="{{ form_action }}"
+    hx-target="#connections-response"
+    hx-swap="innerHTML"
+    hx-on::after-request="
+        const el = document.getElementById('connections-response');
+        if (el && el.querySelector('[data-success=true]')) {
+            bootstrap.Modal.getInstance(document.getElementById('connectionModal')).hide();
+        }
+    "
+>
+    <div class="modal-body">
+        <div class="row g-3">
+            <div class="col-md-6">
+                <label class="form-label fw-semibold">System</label>
+                <input
+                    type="text"
+                    class="form-control"
+                    value="{{ connection.connector_label or connection.connector_id }}"
+                    disabled
+                >
+                <div class="form-text">
+                    Cannot be changed. It decides how the credential is sent and what
+                    operations exist — add another connection instead.
+                </div>
+            </div>
+
+            <div class="col-md-6">
+                <label for="editConnectionLabel" class="form-label fw-semibold">
+                    Name <span class="text-danger">*</span>
+                </label>
+                <input
+                    type="text"
+                    id="editConnectionLabel"
+                    name="label"
+                    class="form-control"
+                    value="{{ connection.label }}"
+                    required
+                    maxlength="255"
+                    autocomplete="off"
+                >
+            </div>
+
+            <div class="col-12">
+                <label for="editConnectionBaseUrl" class="form-label fw-semibold">
+                    API address
+                </label>
+                <input
+                    type="url"
+                    id="editConnectionBaseUrl"
+                    name="base_url"
+                    class="form-control"
+                    value="{{ connection.base_url }}"
+                    maxlength="2048"
+                >
+            </div>
+
+            <div class="col-12">
+                <label for="editConnectionApiKey" class="form-label fw-semibold">
+                    API key
+                </label>
+                <input
+                    type="password"
+                    id="editConnectionApiKey"
+                    name="api_key"
+                    class="form-control"
+                    placeholder="Leave blank to keep the stored key"
+                    autocomplete="new-password"
+                    maxlength="4096"
+                >
+                <div class="form-text">
+                    A stored key is never shown again. Leave this blank and it stays as it
+                    is; type a new one and it replaces it. To remove it entirely, use
+                    <strong>Revoke</strong> — that says what it does.
+                </div>
+            </div>
+        </div>
+
+        {% if connection.needs_reauth %}
+            <div class="alert alert-danger mt-3 mb-0">
+                <i class="las la-exclamation-circle"></i>
+                This connection was rejected the last time a workflow used it. Supply a new
+                credential above to bring it back.
+            </div>
+        {% endif %}
+    </div>
+
+    <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">
+            Cancel
+        </button>
+        <button type="submit" class="btn btn-primary">
+            <i class="las la-save"></i> Save
+        </button>
+    </div>
+</form>

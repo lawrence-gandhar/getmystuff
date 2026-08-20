@@ -1,0 +1,253 @@
+/*
+ * Integrations — the workflow canvas, its steps, its connectors and the run dock.
+ *
+ * Deliberately a separate sheet from graph_designer.css rather than a shared one. The
+ * two canvases share their *geometry* through graph_canvas.js, which is stateless and
+ * genuinely common; their appearance is not the same problem — a workflow step shows a
+ * connection and an operation, a graph node shows a query — and one sheet serving both
+ * would mean every visual change to either being checked against the other.
+ *
+ * Three things in here are load-bearing rather than cosmetic and are commented where
+ * they appear: the pointer-events split between the canvas and its steps, the fixed
+ * canvas size the connector SVG is matched to, and the preview path's specificity.
+ */
+
+/* ============================================================
+   CANVAS
+   ============================================================ */
+
+.int-canvas-wrap {
+    position: relative;
+    width: 100%;
+    height: 56vh;
+    min-height: 340px;
+    overflow: auto;
+    border-radius: 6px;
+    background-color: #f8f9fa;
+    background-image: radial-gradient(#dee2e6 1px, transparent 1px);
+    background-size: 20px 20px;
+}
+
+/* The connector layer and the step layer are the same size and stacked. Both are
+   3000x2000 rather than sized to content, because a connector is drawn in canvas
+   coordinates: an SVG that resized as steps moved would reflow every curve on every
+   drag. */
+.int-edges {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 3000px;
+    height: 2000px;
+    pointer-events: none;
+}
+
+.int-nodes {
+    position: relative;
+    width: 3000px;
+    height: 2000px;
+    /* An empty canvas must not swallow clicks meant for the connector layer underneath —
+       a div's hit area is its whole box, not only where its children paint. Steps opt
+       back in below. Without this pair, no connector can be clicked or deleted. */
+    pointer-events: none;
+}
+
+.int-canvas-wrap.int-connecting { cursor: crosshair; }
+
+/* ============================================================
+   CONNECTORS
+   ============================================================ */
+
+.int-edges path {
+    fill: none;
+    stroke: #6c757d;
+    stroke-width: 2;
+    pointer-events: stroke;
+}
+
+.int-edges path.int-edge-error {
+    stroke: #dc3545;
+    stroke-dasharray: 6 4;
+}
+
+.int-edges path.int-edge-body {
+    stroke: #0d6efd;
+}
+
+/* The rubber band from a port to the cursor while a connector is being dragged out.
+   Dashed and unfilled so it never reads as a connector that already exists.
+
+   Written as `.int-edges path.…` rather than as a bare class because `.int-edges path`
+   above sets `pointer-events: stroke`, and this needs to lose that: the band ends exactly
+   under the cursor, so a hit-testable one answers the drop's own hit test instead of the
+   step beneath it. */
+.int-edges path.int-edge-preview {
+    stroke: #0d6efd;
+    stroke-width: 2;
+    stroke-dasharray: 5 4;
+    pointer-events: none;
+}
+
+.int-edge-delete {
+    fill: #fff;
+    stroke: #dc3545;
+    stroke-width: 1.5;
+    cursor: pointer;
+    pointer-events: all;
+}
+
+.int-edge-delete-x {
+    fill: #dc3545;
+    font-size: 11px;
+    font-weight: 700;
+    pointer-events: none;
+    user-select: none;
+}
+
+.int-edge-label {
+    fill: #6c757d;
+    font-size: 10px;
+    pointer-events: none;
+    user-select: none;
+}
+
+/* ============================================================
+   STEPS
+   ============================================================ */
+
+.int-node {
+    position: absolute;
+    width: 210px;
+    background: #fff;
+    border: 1px solid #dee2e6;
+    border-radius: 8px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, .08);
+    cursor: grab;
+    /* Opting back in — see .int-nodes above. */
+    pointer-events: auto;
+    user-select: none;
+}
+
+.int-node.int-selected {
+    border-color: #0d6efd;
+    box-shadow: 0 0 0 2px rgba(13, 110, 253, .25);
+}
+
+/* The step the last refusal named. Amber rather than red: the drawing is not broken,
+   it is unfinished, and red is reserved for a step that failed in a run. */
+.int-node.int-invalid {
+    border-color: #ffc107;
+    box-shadow: 0 0 0 2px rgba(255, 193, 7, .35);
+}
+
+.int-node-head {
+    padding: 6px 8px;
+    border-bottom: 1px solid #f1f3f5;
+    font-size: 12px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.int-node-body {
+    padding: 6px 8px;
+    font-size: 11px;
+    color: #6c757d;
+    min-height: 26px;
+    word-break: break-word;
+}
+
+.int-node-status {
+    margin-left: auto;
+    font-size: 10px;
+    padding: 1px 5px;
+    border-radius: 10px;
+}
+
+/* ============================================================
+   PORTS
+   ============================================================ */
+
+.int-ports {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 4px 8px 8px;
+}
+
+.int-port {
+    font-size: 10px;
+    line-height: 1;
+    padding: 3px 7px;
+    border: 1px solid #ced4da;
+    border-radius: 10px;
+    background: #f8f9fa;
+    color: #495057;
+    cursor: crosshair;
+}
+
+.int-port:hover { border-color: #0d6efd; color: #0d6efd; }
+.int-port.int-port-error { border-color: #f1aeb5; color: #b02a37; }
+.int-port.int-port-armed { border-color: #0d6efd; background: #cfe2ff; }
+
+/* The input dot. One per step, on the left, because a step has one way in — a second
+   inbound edge on one port is refused by the validator, so offering a second target
+   would be offering something that cannot be saved. */
+.int-target {
+    position: absolute;
+    left: -7px;
+    top: 16px;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #fff;
+    border: 2px solid #adb5bd;
+}
+
+.int-node.int-droppable .int-target { border-color: #0d6efd; background: #cfe2ff; }
+
+/* ============================================================
+   DOCK
+   ============================================================ */
+
+.int-counter {
+    font-size: 22px;
+    font-weight: 600;
+    line-height: 1.1;
+    font-variant-numeric: tabular-nums;
+}
+
+.int-step-line {
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+    padding: 2px 0;
+    border-bottom: 1px solid #f8f9fa;
+}
+
+.int-step-line .int-step-name { font-weight: 600; min-width: 140px; }
+.int-step-line .int-step-msg { color: #6c757d; }
+
+/* ============================================================
+   MAPPING GRID
+   ============================================================ */
+
+.int-map-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr 110px 32px;
+    gap: 6px;
+    align-items: center;
+    margin-bottom: 6px;
+}
+
+.int-map-head {
+    font-size: 11px;
+    font-weight: 600;
+    color: #6c757d;
+}
+
+/* A destination field the operation will not accept a record without, and nothing is
+   mapped to it. Publishing refuses this; the canvas says so first. */
+.int-map-missing {
+    border-color: #dc3545 !important;
+}

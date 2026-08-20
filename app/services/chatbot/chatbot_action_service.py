@@ -42,16 +42,13 @@ is timeout-bounded, and has its response body byte-capped before any of it is
 shown to a model.
 """
 
-import asyncio
-import ipaddress
 import json
 import logging
 import re
-import socket
 import uuid
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
-from urllib.parse import quote, urlparse
+from urllib.parse import quote
 
 import httpx
 from litestar.exceptions import HTTPException
@@ -74,6 +71,7 @@ from app.models.chatbot import (
 from app.services.ai_analytics.ai_analytics_service import answer_structured
 from app.services.chatbot.chatbot_ai_settings_service import LlmChoice
 from app.services.chatbot.chatbot_service import get_chatbot_key
+from app.utils import outbound_http, type_coercion
 from app.utils.crypto import decrypt_password, encrypt_password
 from app.utils.turn_recorder import record_action
 
@@ -393,63 +391,34 @@ def _validate_body_template(body: str, parameters: List[dict]) -> Optional[str]:
 # --------------------------------------------------------------------------
 
 def _validate_outbound_url_shape(url: str) -> Tuple[str, int]:
-    """Scheme/host checks that don't need DNS. Returns (host, port)."""
-    parsed = urlparse(url)
+    """
+    Scheme/host checks that don't need DNS. Returns (host, port).
 
-    if parsed.scheme != "https":
-        raise HTTPException(status_code=400, detail="Action URL must start with https://")
-    if not parsed.hostname:
-        raise HTTPException(status_code=400, detail="Action URL must include a hostname")
-    if parsed.username or parsed.password:
-        raise HTTPException(
-            status_code=400,
-            detail="Action URL must not contain a username or password — use a header instead",
-        )
-
-    return parsed.hostname, parsed.port or 443
+    The rule itself lives in ``app.utils.outbound_http`` — an action and an
+    integration connection must agree about what is reachable, and two copies of
+    an SSRF check are two things to keep in step. This wrapper survives because
+    the caller wants an ``HTTPException`` on a form, and because ``label`` puts
+    "Action URL" in the sentence rather than something generic.
+    """
+    try:
+        _, host, port = outbound_http.validate_outbound_url_shape(url, label="Action URL")
+    except outbound_http.EgressError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return host, port
 
 
 async def _assert_public_host(host: str, port: int) -> None:
     """
-    Reject a host that resolves to any non-public address — loopback, private
-    ranges, link-local (which is where cloud instance-metadata endpoints such as
-    169.254.169.254 live), multicast and reserved space.
+    Reject a host that resolves to any non-public address.
 
-    Note this is a check-then-request, so it narrows rather than fully closes
-    DNS rebinding: a hostile DNS server could answer differently for the actual
-    connection. Closing that completely means pinning the resolved IP at the
-    transport layer, which httpx does not expose directly.
+    See ``app.utils.outbound_http.assert_public_host`` for what is refused and for
+    the DNS-rebinding caveat. Actions pass no policy, so they get the default one:
+    no private address is reachable under any configuration.
     """
-    loop = asyncio.get_running_loop()
     try:
-        infos = await loop.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
-    except socket.gaierror:
-        raise HTTPException(
-            status_code=400,
-            detail=f"The host {host} could not be resolved. Check the action URL.",
-        )
-
-    for info in infos:
-        address = info[4][0]
-        try:
-            ip = ipaddress.ip_address(address)
-        except ValueError:
-            continue
-        if (
-            ip.is_private
-            or ip.is_loopback
-            or ip.is_link_local
-            or ip.is_reserved
-            or ip.is_multicast
-            or ip.is_unspecified
-        ):
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"The host {host} resolves to a private or internal address "
-                    f"({address}). Actions may only call public endpoints."
-                ),
-            )
+        await outbound_http.assert_public_host(host, port)
+    except outbound_http.EgressError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 # --------------------------------------------------------------------------
@@ -465,23 +434,13 @@ def _coerce_param(value: str, param_type: str) -> Tuple[str, str]:
     quotes, so a template writes "{{param.id}}" with quotes for a string and
     {{param.qty}} bare for a number/boolean — the usual JSON-template
     convention.
+
+    The conversion itself lives in ``app.utils.type_coercion`` so that integration
+    field mapping asks the same question of the same vocabulary. The wording of a
+    refusal is unchanged and deliberately still says "the AI supplied" — this path
+    only ever coerces a value a model produced.
     """
-    text = (value or "").strip()
-
-    if param_type == "number":
-        try:
-            float(text)
-        except ValueError:
-            raise ValueError(f"expected a number but the AI supplied {text!r}")
-        return text, text
-
-    if param_type == "boolean":
-        lowered = text.lower()
-        if lowered not in ("true", "false"):
-            raise ValueError(f"expected true or false but the AI supplied {text!r}")
-        return lowered, lowered
-
-    return text, json.dumps(text)[1:-1]
+    return type_coercion.coerce_to_url_and_body(value, param_type)
 
 
 def _render(text: str, variables: dict, params: dict, mode: str) -> str:

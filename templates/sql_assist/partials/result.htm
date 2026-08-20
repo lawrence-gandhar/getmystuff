@@ -34,6 +34,10 @@
     <input type="hidden" name="llm_api_key_id" value="{{ llm_api_key_id }}">
     <input type="hidden" name="agent_filter" value="{{ agent_filter }}">
     <input type="hidden" name="sql" value="{{ draft.sql }}">
+    {# The same statement under the name /query-test reads it by. Two names rather
+       than one endpoint guessing: this form serves both, and each field means the
+       thing its own schema declares. #}
+    <input type="hidden" name="sql_query" value="{{ draft.sql }}">
     {% for table in tables %}
     <input type="hidden" name="table_names" value="{{ table }}">
     {% endfor %}
@@ -46,6 +50,28 @@
             <span id="sqlAssistToolSpinner" class="htmx-indicator text-muted small">
                 <i class="las la-spinner la-spin"></i> Reading the query…
             </span>
+            <span id="sqlAssistTestSpinner" class="htmx-indicator text-muted small">
+                <i class="las la-spinner la-spin"></i> Running it…
+            </span>
+            {# Runs the generated statement once against the datasource — the same
+               endpoint and the same partial the Tool Configs form uses. The panel
+               never runs a query on its own (that is what "the AI never sees your
+               data" rests on); this runs it because the user asked it to, and reports
+               only whether it ran and which columns came back — never a value. #}
+            <button
+                type="button"
+                class="btn btn-sm btn-outline-primary"
+                hx-post="/query-test"
+                hx-include="#sqlAssistToolForm"
+                hx-vals='{"query_mode": "sql"}'
+                hx-target="#sqlAssistTestResult"
+                hx-swap="innerHTML"
+                hx-indicator="#sqlAssistTestSpinner"
+                hx-disabled-elt="this"
+                title="Run this query once against the datasource"
+            >
+                <i class="las la-vial"></i> Test Query
+            </button>
             <button
                 type="submit"
                 form="sqlAssistToolForm"
@@ -66,14 +92,45 @@
     <div class="card-body bg-dark text-light font-monospace small">
         <pre class="mb-0 text-wrap" id="sqlAssistSql">{{ draft.sql }}</pre>
     </div>
-    <div class="card-footer bg-transparent small text-muted">
-        Read-only, and not run — review it before you use it.
-        {% if tables %}
-        Written against {{ tables | join(", ") }}.
-        {% endif %}
-        <strong>Auto Create Tool</strong> saves it as a tool config an agent can run.
+    <div class="card-footer bg-transparent">
+        {# Where a test run's verdict lands. Inside the card so it reads as being
+           about this query and not about the panel. #}
+        <div id="sqlAssistTestResult" class="mb-2"></div>
+        <span class="small text-muted">
+            Read-only, and only run if you press <strong>Test Query</strong>, which
+            reads a single row to prove the database accepts it.
+            {% if tables %}
+            Written against {{ tables | join(", ") }}.
+            {% endif %}
+            <strong>Auto Create Tool</strong> saves it as a tool config an agent can
+            run.
+        </span>
     </div>
 </div>
+
+{# Something wrong with the query itself that the AI was asked to fix and did not —
+   today, only a grouping the database would refuse (see sql_assist_service._regrouped).
+   Shown above the query's own notes because it is the one thing here that stops the
+   query running at all. #}
+{% for warning in warnings or [] %}
+<div class="alert alert-danger small">
+    <i class="las la-exclamation-circle"></i>
+    <strong>This query will not run as written.</strong> {{ warning }}
+</div>
+{% endfor %}
+
+{# The active columns the query never mentions. A note rather than a refusal: an
+   aggregate legitimately selects only what it groups by, so this is information the
+   user acts on, not an error. #}
+{% if omitted_columns %}
+<div class="alert alert-warning small">
+    <i class="las la-columns"></i>
+    <strong>Not every active column is in this query.</strong>
+    Missing: <span class="font-monospace">{{ omitted_columns | join(", ") }}</span>.
+    That is expected for a count or a total; for a plain listing, ask again for every
+    column.
+</div>
+{% endif %}
 
 {# Where the Auto Create Tool draft lands: the parsed query plus the name to save it
    under, or the reason it cannot be represented as a tool. #}

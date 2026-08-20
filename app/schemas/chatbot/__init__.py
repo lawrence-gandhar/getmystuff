@@ -19,6 +19,7 @@ from app.schemas.chatbot.chatbot_schemas import (  # noqa: F401
     ChatbotTurnResponse,
     ChatbotUpdateRequest,
     PublicChatbotMessageRequest,
+    PublicChatbotStreamQuery,
     PublicWidgetConfigQuery,
     WidgetAppearanceRequest,
     WidgetConfigResponse,

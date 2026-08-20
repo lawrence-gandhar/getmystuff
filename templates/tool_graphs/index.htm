@@ -1,0 +1,126 @@
+{% extends "base/layout.htm" %}
+{% block title %}Tool Graphs | GetMyStuff{% endblock %}
+
+{% block extra_css %}
+<link href="/static/css/tool_graphs.css" rel="stylesheet">
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid mt-4 px-0">
+
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h5 class="fw-semibold mb-0">
+            <i class="las la-sitemap text-primary"></i> Tool Graphs
+        </h5>
+        {# The way out of a read-only page. This one draws graphs it derives from tool
+           configs; the Designer is where a graph is authored and run. #}
+        <a href="/graph-designer/" class="btn btn-primary btn-sm">
+            <i class="las la-draw-polygon"></i> Design a Graph
+        </a>
+    </div>
+
+    <p class="text-muted small mb-3">
+        Every tool config drawn as what it actually is. <strong>Tool Graph</strong> is the
+        chain a <a href="/tool-configs">nested tool</a> compiles to — the inner tools run
+        first, left to right, and their values restrict the one that follows.
+        <strong>SQL Graph</strong> is the same tools' joins as the sets they intersect.
+        Nothing on this page can be edited: pick a tool in
+        <a href="/tool-configs">Tool Configs</a> to change it, or open the
+        <a href="/graph-designer/">Graph Designer</a> to draw and run a graph of your own.
+    </p>
+
+    {# The whole feature is one component. Its root carries the two endpoints and the
+       selection the page was opened with, so tool_graphs.js needs nothing hardcoded
+       and the page can be deep-linked to a tool. #}
+    <div
+        class="row g-3"
+        data-tool-graph
+        data-graph-url="/tool-graphs/graph"
+        data-joins-url="/tool-graphs/joins"
+    >
+        <script type="application/json" data-graph-selection>
+            {
+                "workspace": {{ selected_workspace | tojson }},
+                "agent": {{ selected_agent | tojson }},
+                "tool": {{ selected_tool | tojson }}
+            }
+        </script>
+
+        <!-- ============================================
+             SIDE TREE — workspaces, their agents, their tools
+             ============================================ -->
+        <div class="col-12 col-xl-3">
+            <div class="card shadow-sm h-100">
+                <div class="card-header bg-white py-2">
+                    <span class="fw-semibold small">
+                        <i class="las la-layer-group text-primary"></i> Workspaces
+                    </span>
+                </div>
+                <div class="card-body p-2 tool-graph-tree">
+                    {% include "tool_graphs/partials/tree.htm" %}
+                </div>
+            </div>
+        </div>
+
+        <!-- ============================================
+             CANVAS — one pane per view, toggled client-side
+             ============================================ -->
+        <div class="col-12 col-xl-9">
+            <div class="card shadow-sm h-100">
+                <div class="card-header bg-white d-flex justify-content-between align-items-center py-2">
+                    <span class="fw-semibold small text-truncate" data-graph-scope>
+                        Nothing selected
+                    </span>
+
+                    {# The view switch. Both panes describe the same selection, so this
+                       changes how it is drawn and never what is drawn. #}
+                    <div class="btn-group btn-group-sm flex-shrink-0" role="group" aria-label="Graph view">
+                        <button
+                            type="button"
+                            class="btn btn-primary"
+                            data-graph-view="tool"
+                        >
+                            <i class="las la-project-diagram"></i> Tool Graph
+                        </button>
+                        <button
+                            type="button"
+                            class="btn btn-outline-primary"
+                            data-graph-view="sql"
+                        >
+                            <i class="las la-vector-square"></i> SQL Graph
+                        </button>
+                    </div>
+                </div>
+
+                <div class="card-body p-0 position-relative">
+                    <div class="tool-graph-message small" data-graph-message hidden></div>
+
+                    <div class="tool-graph-canvas" data-graph-pane="tool">
+                        <svg data-graph-svg role="img" aria-label="Tool chain graph"></svg>
+                    </div>
+
+                    <div class="tool-graph-canvas p-3" data-graph-pane="sql" hidden>
+                        <div data-graph-joins></div>
+                    </div>
+                </div>
+
+                <div class="card-footer bg-white py-2 small text-muted" data-graph-legend>
+                    <span class="tool-graph-key tool-graph-key-tool"></span> tool
+                    <span class="tool-graph-key tool-graph-key-terminal ms-3"></span> start / end
+                    <span class="tool-graph-key tool-graph-key-disabled ms-3"></span> disabled
+                    <span class="ms-3">Drag to pan, scroll to zoom.</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+{# D3 is used for the layout maths, the zoom behaviour and the curve generators.
+   Every third-party dependency in this application is loaded the same way (see
+   base/layout.htm) and only this page needs it, so it is requested here rather than
+   in the layout every other page inherits. #}
+<script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+<script src="/static/js/tool_graphs.js"></script>
+{% endblock %}

@@ -1,0 +1,1614 @@
+{# Tool Configs — the in-app help page, opened in its own tab from the Help button
+   on /tool-configs.
+
+   It is the browsable form of documentations/TOOL_CONFIGS.md: the same field
+   reference, the same fifteen worked scenarios, the same limits and the same
+   refusal messages, so an operator does not have to leave the application to find
+   out what a field does. Keep the two in step — when a validator's wording or a cap
+   changes, both say the new thing.
+
+   Deliberately static: no form, no HTMX, no context beyond what the layout needs.
+   That is why the whole body sits inside {% raw %} — every JSON and SQL example
+   below contains braces and colons that Jinja would otherwise try to read, and an
+   example is worth nothing if it has been escaped by hand into something that is no
+   longer the thing you would type. #}
+{% extends "base/layout.htm" %}
+{% block title %}Tool Configs Help | GetMyStuff{% endblock %}
+
+{% block extra_css %}
+<style>
+    /* Prose column: measured for reading rather than filling the viewport. */
+    .help-body { max-width: 900px; }
+
+    /* The fixed navbar is 110px tall, so an anchor jump would land under it. */
+    .help-section { scroll-margin-top: 130px; }
+
+    .help-toc {
+        position: sticky;
+        top: 130px;
+        max-height: calc(100vh - 160px);
+        overflow-y: auto;
+    }
+    .help-toc a {
+        display: block;
+        padding: 4px 10px;
+        font-size: 13px;
+        color: #4b5563;
+        text-decoration: none;
+        border-left: 2px solid #e5e7eb;
+    }
+    .help-toc a:hover {
+        color: #2563eb;
+        background: #f9fafb;
+        border-left-color: #93c5fd;
+    }
+    .help-toc .help-toc-group {
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: .04em;
+        color: #9ca3af;
+        padding: 12px 10px 4px;
+    }
+
+    .help-body pre {
+        background: #0f172a;
+        color: #e2e8f0;
+        border-radius: 8px;
+        padding: 14px 16px;
+        font-size: 12.5px;
+        line-height: 1.6;
+        overflow-x: auto;
+        margin-bottom: 0;
+    }
+    .help-body pre code { color: inherit; }
+    .help-body :not(pre) > code {
+        background: #f3f4f6;
+        color: #b91c1c;
+        padding: 1px 5px;
+        border-radius: 4px;
+        font-size: 12.5px;
+    }
+    .help-body table { font-size: 13.5px; }
+    .help-body h6 {
+        font-size: 12px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: .04em;
+        color: #6b7280;
+    }
+    .help-scenario .card-header { background: #f9fafb; }
+    .help-ask {
+        font-style: italic;
+        color: #4b5563;
+        border-left: 3px solid #93c5fd;
+        padding-left: 12px;
+        margin-bottom: 0;
+    }
+    .help-model pre { background: #f9fafb; color: #111827; border: 1px solid #e5e7eb; }
+</style>
+{% endblock %}
+
+{% block content %}
+{% raw %}
+<div class="container-fluid mt-4">
+
+    <div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
+        <h5 class="fw-semibold mb-0">
+            <i class="las la-question-circle text-primary"></i> Tool Configs — Help
+            <span class="text-muted small fw-normal ms-2">
+                every field, and one worked example per scenario
+            </span>
+        </h5>
+        <a href="/tool-configs" class="btn btn-outline-primary btn-sm">
+            <i class="las la-arrow-left"></i> Back to Tool Configs
+        </a>
+    </div>
+
+    <div class="row g-4">
+
+        <!-- ============ IN-PAGE NAV ============ -->
+        <div class="col-lg-3 d-none d-lg-block">
+            <nav class="help-toc">
+                <div class="help-toc-group">Start here</div>
+                <a href="#model">The mental model</a>
+                <a href="#fields">The fields, once</a>
+                <a href="#description">Writing the description</a>
+
+                <div class="help-toc-group">Builder scenarios</div>
+                <a href="#s1">1 · A single number</a>
+                <a href="#s2">2 · A filtered list</a>
+                <a href="#s3">3 · A grouped report</a>
+                <a href="#s4">4 · The agent fills in a value</a>
+                <a href="#s5">5 · "Has a value" / "is empty"</a>
+                <a href="#s6">6 · Two tables (a join)</a>
+
+                <div class="help-toc-group">SQL scenarios</div>
+                <a href="#s7">7 · When the builder cannot</a>
+                <a href="#s8">8 · A parameterised statement</a>
+                <a href="#s8b">8b · A real one: PHP-serialised columns</a>
+
+                <div class="help-toc-group">Nesting</div>
+                <a href="#s9">9 · A sub-query as two tools</a>
+                <a href="#s10">10 · A child feeding SQL</a>
+                <a href="#s11">11 · One run per value</a>
+
+                <div class="help-toc-group">Other</div>
+                <a href="#s12">12 · Whole-result grouping</a>
+                <a href="#s13">13 · CSV, Excel, Mongo</a>
+                <a href="#s14">14 · Let Ask AI write it</a>
+                <a href="#s15">15 · Living with existing tools</a>
+
+                <div class="help-toc-group">Reference</div>
+                <a href="#limits">Limits</a>
+                <a href="#errors">When a save is refused</a>
+                <a href="#library">A worked library</a>
+            </nav>
+        </div>
+
+        <!-- ============ CONTENT ============ -->
+        <div class="col-lg-9">
+            <div class="help-body">
+
+                <!-- ============ MENTAL MODEL ============ -->
+                <section id="model" class="help-section mb-5">
+                    <h6>Start here</h6>
+                    <h4 class="fw-semibold mb-3">The mental model</h4>
+
+                    <pre><code>Data Agent            one assistant, one job                    (Data Agents page)
+  └── Tool Config     one question it can answer with one query   ← this page
+        ├── Datasource + tables it may read
+        ├── The query — built, or written as SQL
+        ├── Optional: values the assistant fills in per call
+        └── Optional: other tools embedded as sub-queries</code></pre>
+
+                    <p class="mt-3">
+                        Three things follow from that, and every scenario below is a
+                        consequence of one of them.
+                    </p>
+
+                    <div class="row g-3">
+                        <div class="col-md-4">
+                            <div class="card h-100 border-0 bg-light">
+                                <div class="card-body">
+                                    <p class="fw-semibold small mb-1">
+                                        You write the query; the agent only chooses when to
+                                        call it
+                                    </p>
+                                    <p class="small text-muted mb-0">
+                                        A tool runs exactly as saved. The model never writes
+                                        SQL, never picks a column and never sees the
+                                        database — it sees a name, a description, and
+                                        whatever arguments you deliberately opened.
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="card h-100 border-0 bg-light">
+                                <div class="card-body">
+                                    <p class="fw-semibold small mb-1">
+                                        A tool is a standing permission
+                                    </p>
+                                    <p class="small text-muted mb-0">
+                                        Saving one says "this agent may read this, in this
+                                        shape, whenever it judges the question calls for
+                                        it." Hence tables switched off in Data Sources are
+                                        not offered at all, and a disabled tool is refused
+                                        rather than quietly skipped.
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="card h-100 border-0 bg-light">
+                                <div class="card-body">
+                                    <p class="fw-semibold small mb-1">
+                                        One tool = one question
+                                    </p>
+                                    <p class="small text-muted mb-0">
+                                        Ten narrow tools with good descriptions route far
+                                        better than one wide tool with a vague one. When a
+                                        query starts needing "and also", the answer is
+                                        usually a second tool — or a nested one.
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ============ FIELDS ============ -->
+                <section id="fields" class="help-section mb-5">
+                    <h4 class="fw-semibold mb-3">The fields, once</h4>
+
+                    <div class="table-responsive">
+                        <table class="table table-sm table-bordered align-middle">
+                            <thead class="table-light">
+                                <tr>
+                                    <th style="width:190px;">Field</th>
+                                    <th style="width:90px;">Required</th>
+                                    <th>Notes</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><strong>Data Agent</strong></td>
+                                    <td>Yes</td>
+                                    <td>
+                                        Who owns the tool. Managed on the
+                                        <a href="/data-agents">Data Agents</a> page.
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Tool Name</strong></td>
+                                    <td>Yes</td>
+                                    <td>
+                                        <code>a-z</code>, <code>0-9</code>,
+                                        <code>_</code>; starts with a letter; automatically
+                                        lowercased. Unique per agent, case-insensitively —
+                                        two agents may each have a <code>total_units</code>.
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Datasource</strong></td>
+                                    <td>Yes</td>
+                                    <td>
+                                        Inactive ones are still offered — a tool is often
+                                        defined before its datasource is switched on — but
+                                        flagged. Changing it resets the query: a query
+                                        belongs to the datasource it was written against.
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Tables</strong></td>
+                                    <td>Yes, ≥1</td>
+                                    <td>
+                                        Multi-select, max 25.
+                                        <strong>The first selection is the primary
+                                        table</strong> — in builder mode it is the base
+                                        table every join hangs off and every bare column
+                                        name means. Only tables left active in Data Sources
+                                        are offered.
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Description</strong></td>
+                                    <td>No — write one anyway</td>
+                                    <td>
+                                        Max 2000 characters. This is what the model routes
+                                        on. See below.
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Allow whole-result grouping</strong></td>
+                                    <td>No</td>
+                                    <td>Off by default. <a href="#s12">Scenario 12</a>.</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Query</strong></td>
+                                    <td>Yes</td>
+                                    <td>
+                                        <em>Query builder</em> or <em>SQL query</em>. SQL is
+                                        offered for relational datasources only.
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Nested Tools</strong></td>
+                                    <td>No</td>
+                                    <td>
+                                        Relational datasources only.
+                                        <a href="#s9">Scenarios 9–11</a>.
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="alert alert-light border small mb-0">
+                        <i class="las la-sync text-primary"></i>
+                        Saving anything regenerates the owning agent's routing prompt in the
+                        background, so an agent's description of its own tools never lags
+                        behind the library. Moving a tool to another agent regenerates
+                        <strong>both</strong> — the one it left is still describing it.
+                    </div>
+                </section>
+
+                <!-- ============ DESCRIPTION ============ -->
+                <section id="description" class="help-section mb-5">
+                    <h4 class="fw-semibold mb-3">Write the description as the question it answers</h4>
+
+                    <p>
+                        The name and the description are the entire basis on which the model
+                        decides to call a tool. Two rules cover most routing problems.
+                    </p>
+
+                    <pre><code>Bad   a summary            "Inventory data"
+Bad   an implementation    "SELECT with a GROUP BY on category"
+Good  the question         "How many units are in stock, broken down by product
+                            category. Use for stock levels and 'how much of X do
+                            we have' questions."</code></pre>
+
+                    <p class="mt-3 mb-0">
+                        Then say what it is <strong>not</strong> for, if a sibling tool is
+                        close by: <em>"Current stock only — for what was ordered, use
+                        <code>order_totals</code>."</em> That one sentence removes most of
+                        the wrong-tool calls in a library with overlapping tools.
+                    </p>
+                </section>
+
+                <hr class="my-5">
+
+                <!-- ============ SCENARIO 1 ============ -->
+                <section id="s1" class="help-section help-scenario mb-4">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="badge bg-primary-subtle text-primary-emphasis border border-primary-subtle">Query builder</span>
+                            <strong class="ms-1">1 · A single number</strong>
+                        </div>
+                        <div class="card-body">
+                            <p class="help-ask mb-3">"How many items do we have?"</p>
+
+                            <h6>What to fill in</h6>
+                            <table class="table table-sm table-bordered">
+                                <tbody>
+                                    <tr><th scope="row" class="fw-normal" style="width:150px;">Tables</th><td><code>inventory_items</code></td></tr>
+                                    <tr><th scope="row" class="fw-normal">Aggregations</th><td><code>COUNT</code> of <code>id</code>, alias <code>total_items</code></td></tr>
+                                </tbody>
+                            </table>
+
+                            <h6 class="mt-4">What gets stored</h6>
+                            <pre><code>{"columns": [],
+ "aggregations": [{"type": "count", "column": "id", "alias": "total_items"}],
+ "group_by": [], "filters": [], "joins": []}</code></pre>
+
+                            <h6 class="mt-4">What runs</h6>
+                            <pre><code>SELECT COUNT(id) AS total_items FROM inventory_items</code></pre>
+
+                            <div class="alert alert-info small mt-3 mb-0">
+                                <strong>The alias matters more than it looks.</strong> It is
+                                the key the model sees in the result, so
+                                <code>total_items</code> reads back as an answer where
+                                <code>count</code> reads as a column name. The agent calls
+                                <code>total_items()</code> with no arguments.
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ============ SCENARIO 2 ============ -->
+                <section id="s2" class="help-section help-scenario mb-4">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="badge bg-primary-subtle text-primary-emphasis border border-primary-subtle">Query builder</span>
+                            <strong class="ms-1">2 · A filtered list</strong>
+                        </div>
+                        <div class="card-body">
+                            <p class="help-ask mb-3">"Which items are out of stock?"</p>
+
+                            <h6>What to fill in</h6>
+                            <table class="table table-sm table-bordered">
+                                <tbody>
+                                    <tr><th scope="row" class="fw-normal" style="width:150px;">Tables</th><td><code>inventory_items</code></td></tr>
+                                    <tr><th scope="row" class="fw-normal">Columns</th><td><code>sku</code>, <code>name</code>, <code>category</code></td></tr>
+                                    <tr><th scope="row" class="fw-normal">Filters</th><td><code>qty</code> <code>=</code> <code>0</code></td></tr>
+                                </tbody>
+                            </table>
+
+                            <h6 class="mt-4">What gets stored</h6>
+                            <pre><code>{"columns": [{"column": "sku", "alias": ""},
+             {"column": "name", "alias": ""},
+             {"column": "category", "alias": ""}],
+ "aggregations": [], "group_by": [],
+ "filters": [{"column": "qty", "operator": "=", "value": "0"}],
+ "joins": []}</code></pre>
+
+                            <div class="alert alert-warning small mt-3 mb-0">
+                                <strong>Leaving Columns empty is legal and means every active
+                                column</strong> — but prefer naming them. A
+                                <code>SELECT *</code> tool sends the model columns it does
+                                not need, and any column switched off later in Data Sources
+                                makes the tool fail loudly rather than silently narrow.
+                                Filter values are <strong>bound parameters</strong>, never
+                                text spliced into SQL; max 500 characters.
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ============ SCENARIO 3 ============ -->
+                <section id="s3" class="help-section help-scenario mb-4">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="badge bg-primary-subtle text-primary-emphasis border border-primary-subtle">Query builder</span>
+                            <strong class="ms-1">3 · A grouped report</strong>
+                        </div>
+                        <div class="card-body">
+                            <p class="help-ask mb-3">"How many units per category?"</p>
+
+                            <h6>What to fill in</h6>
+                            <table class="table table-sm table-bordered">
+                                <tbody>
+                                    <tr><th scope="row" class="fw-normal" style="width:150px;">Tables</th><td><code>inventory_items</code></td></tr>
+                                    <tr><th scope="row" class="fw-normal">Columns</th><td><code>category</code></td></tr>
+                                    <tr><th scope="row" class="fw-normal">Aggregations</th><td><code>SUM</code> of <code>qty</code>, alias <code>units</code></td></tr>
+                                    <tr><th scope="row" class="fw-normal">Group By</th><td><code>category</code></td></tr>
+                                </tbody>
+                            </table>
+
+                            <h6 class="mt-4">What runs</h6>
+                            <pre><code>SELECT category, SUM(qty) AS units FROM inventory_items GROUP BY category</code></pre>
+
+                            <div class="alert alert-danger small mt-3 mb-0">
+                                <strong>The one rule that catches people here:</strong> once
+                                a query aggregates or groups, every plain column in Columns
+                                must also be in Group By. Add <code>name</code> to Columns
+                                without grouping it and the save is refused —
+                                <em>"Column 'name' is selected but not grouped…"</em>
+                                <br><br>
+                                It is refused rather than fixed, because grouping by
+                                <code>name</code> too is a <em>different</em> query — one row
+                                per name instead of one per category — and only you know
+                                which you meant. MySQL
+                                (<code>ONLY_FULL_GROUP_BY</code>) and PostgreSQL would both
+                                refuse it at run time, i.e. mid-conversation in front of a
+                                visitor. Grouping with Columns <em>and</em> Aggregations both
+                                empty is refused for the same reason: "every column,
+                                grouped" is the same violation written shorter.
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ============ SCENARIO 4 ============ -->
+                <section id="s4" class="help-section help-scenario mb-4">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="badge bg-primary-subtle text-primary-emphasis border border-primary-subtle">Query builder</span>
+                            <strong class="ms-1">4 · One tool, many questions — the agent fills in a value</strong>
+                        </div>
+                        <div class="card-body">
+                            <p class="help-ask mb-3">
+                                "Projects created in August" … "…and in September?"
+                            </p>
+
+                            <p class="small">
+                                Two configs would be wrong. Tick
+                                <strong>Agent fills in</strong> on the filter instead.
+                            </p>
+
+                            <h6>What to fill in</h6>
+                            <table class="table table-sm table-bordered">
+                                <tbody>
+                                    <tr><th scope="row" class="fw-normal" style="width:150px;">Tables</th><td><code>projects</code></td></tr>
+                                    <tr><th scope="row" class="fw-normal">Columns</th><td><code>name</code>, <code>status</code></td></tr>
+                                    <tr>
+                                        <td>Filters</td>
+                                        <td>
+                                            <code>created_at</code> <code>&gt;</code> —
+                                            <strong>Agent fills in</strong> ticked,
+                                            parameter <code>created_after</code>,
+                                            Required ✓, description
+                                            <em>"Only projects created after this date. ISO
+                                            format, e.g. 2026-08-01."</em>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+
+                            <h6 class="mt-4">What gets stored</h6>
+                            <pre><code>{"filters": [{"column": "created_at", "operator": "&gt;",
+              "agent_supplied": true, "required": true,
+              "param": "created_after",
+              "description": "Only projects created after this date. ISO format…"}]}</code></pre>
+
+                            <h6 class="mt-4">What the preview shows</h6>
+                            <pre><code>SELECT name, status FROM projects WHERE created_at &gt; :created_after</code></pre>
+
+                            <div class="alert alert-info small mt-3 mb-0">
+                                The tool's argument schema now has one field,
+                                <code>created_after</code>. What the model supplies is
+                                <strong>the value only</strong> — the column, the comparison
+                                and every other filter stay exactly as you set them, and the
+                                value is bound by the same code path that binds a stored one.
+                                The parameter name defaults to the column
+                                (<code>projects.created_at</code> →
+                                <code>created_at</code>).
+                                <br><br>
+                                Untick <strong>Required</strong> for an optional narrowing. A
+                                required value the user did not give makes the assistant
+                                <em>ask</em> rather than guess.
+                                <strong>Mix freely:</strong> three fixed filters and one
+                                agent-supplied is the common shape — the fixed ones are the
+                                policy, the open one is the question.
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ============ SCENARIO 5 ============ -->
+                <section id="s5" class="help-section help-scenario mb-4">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="badge bg-primary-subtle text-primary-emphasis border border-primary-subtle">Query builder</span>
+                            <strong class="ms-1">5 · "Has a value" / "is empty"</strong>
+                        </div>
+                        <div class="card-body">
+                            <p class="help-ask mb-3">"Which clients have no region set?"</p>
+
+                            <p class="small">
+                                Four operators compare against <strong>nothing</strong>, and
+                                picking the right one is the whole scenario.
+                            </p>
+
+                            <table class="table table-sm table-bordered">
+                                <thead class="table-light">
+                                    <tr><th style="width:180px;">Operator</th><th>Matches</th></tr>
+                                </thead>
+                                <tbody>
+                                    <tr><td><code>IS NULL</code></td><td>absent</td></tr>
+                                    <tr>
+                                        <td><code>IS NOT NULL</code></td>
+                                        <td>present — <strong>including <code>''</code> and <code>'   '</code></strong></td>
+                                    </tr>
+                                    <tr><td><code>IS BLANK</code></td><td>absent <strong>or</strong> empty <strong>or</strong> whitespace</td></tr>
+                                    <tr><td><code>IS NOT BLANK</code></td><td>actually has something in it</td></tr>
+                                </tbody>
+                            </table>
+
+                            <h6 class="mt-4">What gets stored, and what it becomes</h6>
+                            <pre><code>{"column": "region", "operator": "IS BLANK"}      ← no value at all
+
+(region IS NULL OR TRIM(region) = '')            ← the SQL it previews as</code></pre>
+
+                            <div class="alert alert-warning small mt-3 mb-0">
+                                Use <code>IS BLANK</code> / <code>IS NOT BLANK</code> for
+                                text. <code>IS NOT BLANK</code> is what "not empty" means
+                                when someone says it out loud, and it is what the older
+                                two-filter workaround could never express: the builder ANDs
+                                its conditions, so <code>region != ''</code> silently keeps
+                                every NULL row.
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ============ SCENARIO 6 ============ -->
+                <section id="s6" class="help-section help-scenario mb-4">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="badge bg-primary-subtle text-primary-emphasis border border-primary-subtle">Query builder</span>
+                            <span class="badge bg-light text-dark border">relational only</span>
+                            <strong class="ms-1">6 · Two tables (a join)</strong>
+                        </div>
+                        <div class="card-body">
+                            <p class="help-ask mb-3">
+                                "Which orders are for discontinued products?"
+                            </p>
+
+                            <h6>What to fill in</h6>
+                            <table class="table table-sm table-bordered">
+                                <tbody>
+                                    <tr>
+                                        <td style="width:150px;">Tables</td>
+                                        <td>
+                                            <code>orders</code>,
+                                            <code>inventory_items</code> —
+                                            <strong><code>orders</code> first</strong>, so it
+                                            is the base table
+                                        </td>
+                                    </tr>
+                                    <tr>
+                                        <td>Joins</td>
+                                        <td>
+                                            <code>INNER JOIN inventory_items</code> ON
+                                            <code>orders.product_sku</code> =
+                                            <code>inventory_items.sku</code>
+                                        </td>
+                                    </tr>
+                                    <tr><th scope="row" class="fw-normal">Columns</th><td><code>orders.order_ref</code>, <code>inventory_items.name</code></td></tr>
+                                    <tr><th scope="row" class="fw-normal">Filters</th><td><code>inventory_items.status</code> <code>=</code> <code>discontinued</code></td></tr>
+                                </tbody>
+                            </table>
+
+                            <div class="alert alert-danger small mt-3 mb-0">
+                                <strong>Once a query has a join, every column reference is
+                                qualified</strong> — <code>orders.order_ref</code>, not
+                                <code>order_ref</code>. With two tables in play a bare name
+                                is ambiguous. Configs saved before a join was added keep
+                                their bare names and still mean the base table, so adding a
+                                join to an existing tool means re-picking its columns.
+                                <br><br>
+                                The Joins card only offers tables that are in the Tables
+                                field, and the save refuses a join onto one that is not —
+                                <em>"The query joins 'clients', which is not one of the
+                                tables selected for this tool…"</em> The recorded table list
+                                is what the routing prompt reports and what the run-time
+                                active-table check looks at, so a tool reading three tables
+                                while reporting one understates its own scope.
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ============ SCENARIO 7 ============ -->
+                <section id="s7" class="help-section help-scenario mb-4">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="badge bg-dark-subtle text-dark border">SQL query</span>
+                            <strong class="ms-1">7 · The builder cannot express it</strong>
+                        </div>
+                        <div class="card-body">
+                            <p class="help-ask mb-3">
+                                "List every distinct technology we use, alphabetically."
+                            </p>
+
+                            <p class="small">
+                                <code>DISTINCT</code> and <code>ORDER BY</code> are outside
+                                the builder. Switch <strong>Query</strong> to
+                                <em>SQL query</em>.
+                            </p>
+
+                            <pre><code>SELECT DISTINCT technology
+FROM inventory_items
+WHERE technology IS NOT NULL AND TRIM(technology) &lt;&gt; ''
+ORDER BY technology</code></pre>
+
+                            <div class="alert alert-info small mt-3 mb-0">
+                                <strong>Still fill in Tables</strong>
+                                (<code>inventory_items</code>). Nothing parses the statement,
+                                so the table list is what <em>you</em> say it reads — and it
+                                is what the routing prompt reports and what the active-table
+                                check uses.
+                                <br><br>
+                                The rule is: <strong>if it is a valid read-only query, a tool
+                                can run it.</strong> <code>DISTINCT</code>,
+                                <code>ORDER BY</code>, <code>LIMIT</code>,
+                                <code>HAVING</code>, subqueries, CTEs, window functions,
+                                <code>UNION</code>, <code>CASE</code> — all fine. What is
+                                refused is anything that is not a single read.
+                                <br><br>
+                                Syntax is <em>not</em> checked and cannot honestly be —
+                                dialects differ. That is what
+                                <strong>Test Query</strong> is for: it runs the statement
+                                once against the datasource, reading a single row, so a
+                                statement the database refuses is found while the form is
+                                open rather than by a visitor months later. Max 8000
+                                characters, no trailing semicolon needed, results capped at
+                                200 rows.
+                                <br><br>
+                                <strong>Switching modes is free</strong> — both panels stay
+                                in the DOM, so a switch made by mistake costs nothing. But a
+                                <em>save</em> in one mode clears the other, so a tool never
+                                holds two queries.
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ============ SCENARIO 8 ============ -->
+                <section id="s8" class="help-section help-scenario mb-4">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="badge bg-dark-subtle text-dark border">SQL query</span>
+                            <strong class="ms-1">8 · A SQL tool the assistant parameterises</strong>
+                        </div>
+                        <div class="card-body">
+                            <p class="help-ask mb-3">
+                                "Show me the salary spread for engineering" … "…and for
+                                sales?"
+                            </p>
+
+                            <p class="small">
+                                SQL mode's equivalent of scenario 4. Write the placeholder
+                                yourself, then declare it in
+                                <strong>Values the assistant supplies</strong>.
+                            </p>
+
+                            <pre><code>SELECT department_id,
+       AVG(salary) AS avg_salary,
+       MAX(salary) - MIN(salary) AS spread
+FROM employees
+WHERE department_id = :department_id
+GROUP BY department_id</code></pre>
+
+                            <h6 class="mt-4">The declared value</h6>
+                            <table class="table table-sm table-bordered">
+                                <tbody>
+                                    <tr><th scope="row" class="fw-normal" style="width:150px;">Name</th><td><code>department_id</code></td></tr>
+                                    <tr><th scope="row" class="fw-normal">Type</th><td><strong>Number</strong></td></tr>
+                                    <tr><th scope="row" class="fw-normal">Required</th><td>✓</td></tr>
+                                    <tr><th scope="row" class="fw-normal">Description</th><td><em>"The department to report on."</em></td></tr>
+                                </tbody>
+                            </table>
+
+                            <pre><code>[{"param": "department_id", "type": "number",
+  "required": true, "description": "The department to report on."}]</code></pre>
+
+                            <div class="alert alert-warning small mt-3 mb-0">
+                                <strong>Type is not decoration.</strong> There is no
+                                reflected column to coerce against here, so you say what the
+                                value holds — asyncpg refuses <code>id = $1</code> with a
+                                string against an integer column, and that failure would
+                                otherwise happen mid-conversation. Text is the default and is
+                                correct wherever the database will coerce.
+                                <br><br>
+                                <strong>A declared name must appear in the statement</strong>,
+                                or the model is asked to fill a field that does nothing —
+                                <em>"The SQL query does not use ':region' anywhere, so a
+                                value for 'region' would go nowhere."</em>
+                                <br><br>
+                                <strong>The value is bound, never written into the
+                                SQL</strong>, so it can only ever be the right-hand side of a
+                                comparison you wrote. Max 5 values per tool — each is another
+                                field the model must fill correctly on every call. The
+                                <em>test value</em> beside each row is used by Test Query only
+                                and is never saved.
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ============ SCENARIO 8b ============ -->
+                <section id="s8b" class="help-section help-scenario mb-4">
+                    <div class="card border-primary-subtle">
+                        <div class="card-header">
+                            <span class="badge bg-dark-subtle text-dark border">SQL query</span>
+                            <span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle">from a real project</span>
+                            <strong class="ms-1">8b · A serialised column, and how to let the assistant choose the ids</strong>
+                        </div>
+                        <div class="card-body">
+                            <p class="help-ask mb-3">
+                                "Which projects are in the PHP department and use
+                                WordPress?" — where <code>projects.departments</code> holds a
+                                PHP-serialised blob rather than proper columns.
+                            </p>
+
+                            <h6>The query, as written by hand</h6>
+                            <pre><code>SELECT p.name, p.crm_id, pd.client_name, pd.client_email
+FROM projects p
+LEFT JOIN project_details pd ON p.crm_id = pd.crm_id
+WHERE
+    -- PHP Department
+    p.departments LIKE '%s:6:"depart";%'
+    AND p.departments LIKE '%s:1:"1"%'
+    -- WordPress Technology
+    AND p.departments LIKE '%s:4:"tech";%'
+    AND p.departments LIKE '%s:1:"7"%'
+ORDER BY p.name</code></pre>
+
+                            <h6 class="mt-4">What to fill in</h6>
+                            <table class="table table-sm table-bordered">
+                                <tbody>
+                                    <tr><th scope="row" class="fw-normal" style="width:150px;">Tool Name</th><td><code>php_wordpress_projects</code></td></tr>
+                                    <tr>
+                                        <td>Tables</td>
+                                        <td>
+                                            <code>projects</code>,
+                                            <code>project_details</code> —
+                                            <strong><code>projects</code> first</strong>
+                                        </td>
+                                    </tr>
+                                    <tr><th scope="row" class="fw-normal">Query</th><td><strong>SQL query</strong></td></tr>
+                                    <tr>
+                                        <td>Description</td>
+                                        <td>
+                                            <em>"Projects in the PHP department that use
+                                            WordPress, with the client's name and email.
+                                            Use for 'which PHP/WordPress projects…'
+                                            questions."</em>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+
+                            <div class="alert alert-success small mt-3">
+                                <strong>Why SQL mode:</strong> <code>ORDER BY</code> is
+                                outside the builder, and so is a <code>LEFT JOIN</code> whose
+                                <code>ON</code> is a business key rather than a foreign key.
+                                <br><br>
+                                <strong>The <code>;</code> inside the patterns is not a
+                                problem, and neither are the <code>--</code> comments.</strong>
+                                The read-only guard blanks string literals and comments
+                                <em>before</em> it looks for a second statement or a write
+                                verb, so <code>s:6:"depart";</code> reads as what it is — one
+                                character inside one string — and your notes stay in the
+                                saved statement where the next person will read them.
+                            </div>
+
+                            <hr class="my-4">
+
+                            <h6>Now make it answer more than one question</h6>
+                            <p class="small">
+                                As saved, that tool answers exactly one question: department
+                                <code>1</code>, technology <code>7</code>. To let the visitor
+                                name the department, the two ids have to become
+                                <strong>Values the assistant supplies</strong> — and this is
+                                the case where the obvious attempt does not work, because the
+                                ids sit <em>inside</em> a string.
+                            </p>
+
+                            <p class="small fw-semibold text-danger mb-1">
+                                This does not work — a <code>:name</code> in quotes is text,
+                                not a placeholder:
+                            </p>
+                            <pre><code>AND p.departments LIKE '%s:1:":department_id"%'</code></pre>
+                            <p class="small text-muted mt-2">
+                                The placeholder scan blanks quoted spans first, exactly as the
+                                read-only guard does — so it finds no placeholder here, and
+                                declaring one is refused with
+                                <em>"The SQL query does not use ':department_id' anywhere, so
+                                a value for 'department_id' would go nowhere."</em> Had it
+                                been accepted, the database would have gone looking for
+                                projects containing the literal text
+                                <code>:department_id</code>.
+                            </p>
+
+                            <p class="small fw-semibold text-success mb-1 mt-3">
+                                Build the pattern around the bound value instead. MySQL:
+                            </p>
+                            <pre><code>AND p.departments LIKE CONCAT('%s:', CHAR_LENGTH(:department_id), ':"', :department_id, '"%')</code></pre>
+
+                            <p class="small fw-semibold text-success mb-1 mt-3">
+                                PostgreSQL — same thing with <code>||</code>:
+                            </p>
+                            <pre><code>AND p.departments LIKE '%s:' || length(:department_id) || ':"' || :department_id || '"%'</code></pre>
+
+                            <div class="alert alert-warning small mt-3">
+                                <strong>Why the length function is there.</strong> PHP writes
+                                the string's length into the serialised form:
+                                <code>s:1:"7"</code> for <code>7</code>, but
+                                <code>s:2:"12"</code> for <code>12</code>. Hard-coding
+                                <code>s:1:</code> gives you a tool that works perfectly until
+                                the tenth department is added and then silently matches
+                                nothing.
+                            </div>
+
+                            <h6 class="mt-4">The whole statement, parameterised</h6>
+                            <pre><code>SELECT p.name, p.crm_id, pd.client_name, pd.client_email
+FROM projects p
+LEFT JOIN project_details pd ON p.crm_id = pd.crm_id
+WHERE
+    -- Department: the key is fixed, the id is supplied
+    p.departments LIKE '%s:6:"depart";%'
+    AND p.departments LIKE CONCAT('%s:', CHAR_LENGTH(:department_id), ':"', :department_id, '"%')
+    -- Technology: same shape
+    AND p.departments LIKE '%s:4:"tech";%'
+    AND p.departments LIKE CONCAT('%s:', CHAR_LENGTH(:technology_id), ':"', :technology_id, '"%')
+ORDER BY p.name</code></pre>
+
+                            <h6 class="mt-4">Values the assistant supplies — two rows</h6>
+                            <div class="table-responsive">
+                                <table class="table table-sm table-bordered align-middle">
+                                    <thead class="table-light">
+                                        <tr>
+                                            <th style="width:150px;">Name</th>
+                                            <th style="width:80px;">Type</th>
+                                            <th style="width:80px;">Required</th>
+                                            <th>Description</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td><code>department_id</code></td>
+                                            <td>Text</td>
+                                            <td>✓</td>
+                                            <td>
+                                                <em>"Department id, digits only. 1 = PHP,
+                                                2 = .NET, 3 = Mobile."</em>
+                                            </td>
+                                        </tr>
+                                        <tr>
+                                            <td><code>technology_id</code></td>
+                                            <td>Text</td>
+                                            <td>✓</td>
+                                            <td>
+                                                <em>"Technology id, digits only. 7 =
+                                                WordPress, 8 = Laravel."</em>
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            <p class="small">
+                                Rename the tool to match what it now does —
+                                <code>projects_by_department_and_technology</code> — because
+                                the name is half of how the model decides to call it.
+                            </p>
+
+                            <div class="alert alert-info small">
+                                <strong>Declare them as Text, not Number.</strong> The value
+                                is going into a string pattern, not being compared against a
+                                numeric column, so a numeric type buys nothing and costs a
+                                cast in some drivers. Use Number when the placeholder sits
+                                against an integer column — <code>WHERE id = :x</code> — which
+                                is the case <a href="#s8">scenario 8</a> shows.
+                                <br><br>
+                                <strong>The id mapping goes in the description</strong>, since
+                                that sentence is all the model has to turn "PHP" into
+                                <code>1</code>. Keep it short and only for a small, stable
+                                list — see the next box when the mapping lives in a table.
+                                <br><br>
+                                <strong>Ask for digits only, and mean it.</strong> The value
+                                is bound, so it can never become SQL — but
+                                <code>%</code> and <code>_</code> are wildcards to
+                                <code>LIKE</code>, so a value containing one would widen the
+                                match rather than break anything. Saying "digits only" in the
+                                description is what keeps the model from getting clever.
+                            </div>
+
+                            <h6 class="mt-4">Where should the id actually come from?</h6>
+                            <div class="table-responsive">
+                                <table class="table table-sm table-bordered align-middle">
+                                    <thead class="table-light">
+                                        <tr>
+                                            <th style="width:230px;">If…</th>
+                                            <th style="width:210px;">Do this</th>
+                                            <th>Why</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td>There are only a few combinations that anyone asks about</td>
+                                            <td>
+                                                Separate tools with the ids written as
+                                                literals — the statement at the top of this
+                                                scenario, once per pairing
+                                            </td>
+                                            <td>
+                                                Best routing there is: the tool name
+                                                <em>is</em> the question, and the model has no
+                                                value to get wrong.
+                                            </td>
+                                        </tr>
+                                        <tr>
+                                            <td>The visitor names one department, out of a short fixed list</td>
+                                            <td>
+                                                Assistant-supplied values, mapping in the
+                                                description — as above
+                                            </td>
+                                            <td>One tool, many questions, no lookup needed.</td>
+                                        </tr>
+                                        <tr>
+                                            <td>The mapping lives in a table, and you want <em>every</em> department</td>
+                                            <td>
+                                                A nested child returning the ids, bound with
+                                                <strong>run once per value</strong> and
+                                                <code>record the value as department_id</code>
+                                                (<a href="#s11">scenario 11</a>)
+                                            </td>
+                                            <td>
+                                                The parent runs once per id and the rows stay
+                                                attributable. This is precisely why the
+                                                iterating binding exists: an expanding
+                                                <code>IN</code> cannot go inside a
+                                                <code>CONCAT</code>.
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            <div class="alert alert-danger small">
+                                <strong>What you cannot do: have the assistant name the id on
+                                a nested child.</strong> An embedded tool is never called by
+                                the assistant — the tool that embeds it is — so a child runs
+                                exactly as saved, with no arguments. Embedding one that
+                                requires a value is refused when you save the link:
+                                <br><br>
+                                <em>"'department_by_name' needs 'name' to be supplied by the
+                                assistant, and an embedded tool is never called by the
+                                assistant — the tool that embeds it is. Make those values
+                                optional, or give the inner query fixed ones."</em>
+                                <br><br>
+                                So the division is: <strong>nesting gives you breadth</strong>
+                                (every department, from a lookup),
+                                <strong>assistant-supplied values give you
+                                selection</strong> (the one department the visitor named).
+                                Reach for the second when the question contains the choice.
+                            </div>
+
+                            <div class="alert alert-light border small mb-0">
+                                <strong>One honest caveat about this query, parameterised or
+                                not.</strong> <code>LIKE '%s:1:"1"%'</code> searches the whole
+                                blob, so it also matches a <em>technology</em> whose id is
+                                <code>1</code> — the department test and the technology test
+                                are not actually anchored to their own keys. Parameterising
+                                changes nothing about that either way. If you want it strict,
+                                put the value immediately after its key in one pattern:
+                                <br>
+                                <code>LIKE CONCAT('%s:6:"depart";%s:', CHAR_LENGTH(:department_id), ':"', :department_id, '"%')</code>
+                                <br>
+                                which relies on the value following the key in the serialised
+                                form. Try both with <strong>Test Query</strong> against real
+                                rows before saving — this is exactly the kind of pattern no
+                                validator here can check for you.
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ============ SCENARIO 9 ============ -->
+                <section id="s9" class="help-section help-scenario mb-4">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="badge bg-info-subtle text-info-emphasis border border-info-subtle">Nested</span>
+                            <strong class="ms-1">9 · A sub-query as two tools — <em>match any</em></strong>
+                        </div>
+                        <div class="card-body">
+                            <p class="help-ask mb-3">
+                                "Show me the projects of our active clients."
+                            </p>
+
+                            <p class="small">
+                                You could write one statement with an
+                                <code>IN (SELECT …)</code>. Nesting gets you the same result
+                                <em>plus</em> a reusable <code>active_clients</code> tool the
+                                agent can also call on its own.
+                            </p>
+
+                            <h6>First save the child</h6>
+                            <table class="table table-sm table-bordered">
+                                <tbody>
+                                    <tr><th scope="row" class="fw-normal" style="width:150px;">Name</th><td><code>active_clients</code></td></tr>
+                                    <tr><th scope="row" class="fw-normal">Tables</th><td><code>clients</code></td></tr>
+                                    <tr><th scope="row" class="fw-normal">Columns</th><td><code>id</code>, <code>name</code></td></tr>
+                                    <tr><th scope="row" class="fw-normal">Filters</th><td><code>is_active</code> <code>=</code> <code>true</code></td></tr>
+                                </tbody>
+                            </table>
+
+                            <h6 class="mt-4">Then the parent, with one Nested Tools row</h6>
+                            <pre><code>Run [active_clients] take [id] and filter [projects.client_id] [match any]</code></pre>
+
+                            <p class="small mt-3">
+                                Read the row as a sentence. At run time the child goes first,
+                                its <code>id</code> column becomes a list of values, and the
+                                parent's query gains
+                                <code>projects.client_id IN (…)</code> — one expanding bound
+                                parameter, one round trip, one result set. The parent still
+                                runs <strong>once</strong>.
+                            </p>
+
+                            <div class="alert alert-danger small mb-0">
+                                <strong>An empty child empties the parent.</strong> If
+                                <code>active_clients</code> returns nothing, the parent
+                                returns no rows and anything above it never runs. That is
+                                deliberate — the alternative is a parent silently dropping
+                                its restriction and returning <em>more</em> than it should.
+                                <ul class="mb-0 mt-2">
+                                    <li><strong>Children stay tools.</strong> They keep their
+                                        own name, description and callability, and the
+                                        parent's agent gains every transitive child.</li>
+                                    <li><strong>Order matters.</strong> Children run in the
+                                        order listed and the first empty one stops the chain
+                                        — put the cheapest or most selective first.</li>
+                                    <li><strong>Limits:</strong> same datasource, same owner,
+                                        enabled, no cycles; ≤5 children per tool, ≤5 levels
+                                        deep, ≤20 tools per chain, ≤2000 values crossing a
+                                        level (refused, never truncated).</li>
+                                    <li>The same child may feed a parent <strong>twice</strong>
+                                        on different targets — a client-id tool can restrict
+                                        both <code>owner_id</code> and
+                                        <code>billed_to_id</code>. What is refused is the
+                                        same child on the same target twice.</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ============ SCENARIO 10 ============ -->
+                <section id="s10" class="help-section help-scenario mb-4">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="badge bg-info-subtle text-info-emphasis border border-info-subtle">Nested</span>
+                            <span class="badge bg-dark-subtle text-dark border">SQL parent</span>
+                            <strong class="ms-1">10 · A nested child feeding a SQL parent</strong>
+                        </div>
+                        <div class="card-body">
+                            <p class="small mb-3">
+                                Same idea, parent in SQL mode. The target is a
+                                <strong>bind name</strong>, not a column, and the row's
+                                middle label changes to <em>fill</em>.
+                            </p>
+
+                            <pre><code>SELECT c.name, COUNT(p.id) AS project_count
+FROM projects p
+JOIN clients c ON c.id = p.client_id
+WHERE p.client_id IN :active_clients
+GROUP BY c.name
+ORDER BY project_count DESC</code></pre>
+
+                            <pre class="mt-3"><code>Run [active_clients] take [id] fill [active_clients] [match any]</code></pre>
+
+                            <div class="alert alert-info small mt-3 mb-0">
+                                The statement is <strong>never rewritten</strong> — the list
+                                is bound at execution as an expanding parameter. Which is
+                                exactly why <em>match any</em> needs the placeholder on the
+                                right of an <code>IN</code>: an expanding parameter always
+                                renders parenthesised, so
+                                <code>p.client_id = :active_clients</code> would be a syntax
+                                error. When your placeholder is not on the right of an
+                                <code>IN</code>, you want the next scenario.
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ============ SCENARIO 11 ============ -->
+                <section id="s11" class="help-section help-scenario mb-4">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="badge bg-info-subtle text-info-emphasis border border-info-subtle">Nested</span>
+                            <strong class="ms-1">11 · One run per value — <em>run once per value</em></strong>
+                        </div>
+                        <div class="card-body">
+                            <p class="help-ask mb-3">
+                                "For each active department, the highest-paid employee."
+                            </p>
+
+                            <p class="small">
+                                Some placeholders cannot take a list:
+                                <code>dd.id = :x</code>, or a value the database builds a
+                                string around —
+                                <code>LIKE CONCAT('%s:1:"', :x, '"%')</code>. Set the row's
+                                binding to <strong>run once per value</strong>.
+                            </p>
+
+                            <pre><code>Run [active_departments] take [id] fill [dept] [run once per value]
+      record the value as [department_id]</code></pre>
+
+                            <p class="small mt-3">
+                                The parent then runs <strong>once per value</strong>, each
+                                with a plain scalar bound, and the rows are concatenated.
+                            </p>
+
+                            <div class="alert alert-warning small mb-0">
+                                <strong>"record the value as" is how you keep the result
+                                readable.</strong> Rows from twenty runs of one statement are
+                                otherwise indistinguishable once concatenated — a statement
+                                filtering on a department without selecting it is perfectly
+                                ordinary SQL. Leave it blank only when the query already
+                                returns the value; asking for a name the query already
+                                returns is refused as a column collision rather than
+                                overwriting the database's answer.
+                                <br><br>
+                                <strong>At most one iterating child per parent.</strong> Two
+                                would be a cartesian product of two result sets, and the row
+                                cap would make that a <em>truncated</em> answer rather than a
+                                bigger one.
+                                <br><br>
+                                <em>match any</em> is one round trip; <em>run once per
+                                value</em> is N statements, each with its own planning and
+                                latency, inside a turn a visitor is waiting on. Prefer
+                                <em>match any</em> and reach for this when the SQL leaves you
+                                no choice.
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ============ SCENARIO 12 ============ -->
+                <section id="s12" class="help-section help-scenario mb-4">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="badge bg-light text-dark border">Option</span>
+                            <strong class="ms-1">12 · Grouping the database cannot do</strong>
+                        </div>
+                        <div class="card-body">
+                            <p class="help-ask mb-3">
+                                "Average deal size by region" — against a CSV or a Mongo
+                                collection, where there is no <code>GROUP BY</code> to write.
+                            </p>
+
+                            <p class="small">
+                                Tick <strong>Allow whole-result grouping</strong>. That lets
+                                the agent read <em>every</em> record the tool returns and fold
+                                them in memory — totals, averages, counts by category —
+                                instead of the 200 rows every other tool call is capped at.
+                            </p>
+
+                            <div class="alert alert-warning small mb-0">
+                                Off by default, and worth leaving off for a relational
+                                datasource: <code>GROUP BY</code> in the database is faster
+                                and equally exact, so
+                                <a href="#s3">scenario 3</a> is the better tool. Ticking it
+                                is a judgement about <strong>this query's result
+                                set</strong> — "reading every record this returns is
+                                acceptable" — not about the agent. Only aggregations with an
+                                exact fold are offered; the rest are refused rather than
+                                approximated.
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ============ SCENARIO 13 ============ -->
+                <section id="s13" class="help-section help-scenario mb-4">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="badge bg-light text-dark border">Datasource type</span>
+                            <strong class="ms-1">13 · A CSV, Excel, Parquet or Mongo datasource</strong>
+                        </div>
+                        <div class="card-body">
+                            <p class="small mb-3">Pick one and the form narrows itself.</p>
+
+                            <table class="table table-sm table-bordered align-middle">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th></th>
+                                        <th style="width:200px;">Relational<br>
+                                            <span class="fw-normal text-muted">PostgreSQL / MySQL / SQLite</span></th>
+                                        <th style="width:200px;">File or Mongo</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr><td>Query builder</td><td class="text-success">✓</td><td class="text-success">✓</td></tr>
+                                    <tr>
+                                        <td>SQL query mode</td>
+                                        <td class="text-success">✓</td>
+                                        <td class="text-muted">
+                                            — radio disabled, <em>"This datasource is not
+                                            relational, so it has no SQL to run"</em>
+                                        </td>
+                                    </tr>
+                                    <tr><td>Joins card</td><td class="text-success">✓</td><td class="text-muted">—</td></tr>
+                                    <tr><td>Nested Tools</td><td class="text-success">✓</td><td class="text-muted">—</td></tr>
+                                    <tr><td>Agent-supplied filter values</td><td class="text-success">✓</td><td class="text-success">✓</td></tr>
+                                    <tr>
+                                        <td>Whole-result grouping</td>
+                                        <td class="text-success">✓ <span class="text-muted small">(rarely needed)</span></td>
+                                        <td class="text-success">✓ <span class="text-muted small">(the main reason it exists)</span></td>
+                                    </tr>
+                                </tbody>
+                            </table>
+
+                            <div class="alert alert-info small mb-0">
+                                So on a file datasource you have columns, aggregations,
+                                grouping, filters, agent-supplied filter values and
+                                whole-result grouping. That is the whole surface — and it is
+                                enough for most "how many / how much / which ones" questions
+                                over a spreadsheet. The refusal happens at save time rather
+                                than on the agent's first call, because a tool that can never
+                                run is a configuration mistake and you are standing in front
+                                of the form.
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ============ SCENARIO 14 ============ -->
+                <section id="s14" class="help-section help-scenario mb-4">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="badge bg-light text-dark border">Shortcut</span>
+                            <strong class="ms-1">14 · Let Ask AI write it</strong>
+                        </div>
+                        <div class="card-body">
+                            <p class="small mb-0">
+                                Use the <strong>Ask AI</strong> button on the Tool Configs
+                                page: ask in plain English, read the SQL it produced, then
+                                <strong>Auto Create Tool</strong>. It lands in the query
+                                builder when the query fits it, and as the statement itself
+                                when it does not — held to exactly the same validators as
+                                anything typed by hand, because it goes through the same
+                                service. Then open it and check the name, the description and
+                                the table list, which are the parts a generator guesses at.
+                                Ask AI reads reflected schema, never your data.
+                            </p>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ============ SCENARIO 15 ============ -->
+                <section id="s15" class="help-section help-scenario mb-5">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="badge bg-light text-dark border">Day to day</span>
+                            <strong class="ms-1">15 · Living with tools that already exist</strong>
+                        </div>
+                        <div class="card-body">
+                            <div class="table-responsive">
+                                <table class="table table-sm table-bordered align-middle">
+                                    <thead class="table-light">
+                                        <tr>
+                                            <th style="width:230px;">You want to</th>
+                                            <th style="width:180px;">Do this</th>
+                                            <th>What happens</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td>Revoke a capability, keep the definition</td>
+                                            <td><strong>Disable</strong></td>
+                                            <td>
+                                                The tool stops being offered to the agent;
+                                                the query is untouched. Refused if another
+                                                tool embeds it — the parent would keep
+                                                running with its filter gone, returning
+                                                <em>more</em> rows, silently.
+                                            </td>
+                                        </tr>
+                                        <tr>
+                                            <td>Hand a tool to a different agent</td>
+                                            <td>Change <strong>Data Agent</strong> on the edit form</td>
+                                            <td>
+                                                Both agents' routing prompts regenerate — the
+                                                old one is still describing a tool it no
+                                                longer has.
+                                            </td>
+                                        </tr>
+                                        <tr>
+                                            <td>Point a tool at a different datasource</td>
+                                            <td>Change <strong>Datasource</strong></td>
+                                            <td>
+                                                The query resets. A query belongs to the
+                                                datasource it was written against.
+                                            </td>
+                                        </tr>
+                                        <tr>
+                                            <td>Remove it</td>
+                                            <td><strong>Delete</strong></td>
+                                            <td>
+                                                Agent and datasource untouched. Refused while
+                                                something embeds it, for the reason above.
+                                            </td>
+                                        </tr>
+                                        <tr>
+                                            <td>See what a tool actually runs</td>
+                                            <td>The <strong>Query</strong> column</td>
+                                            <td>
+                                                The rendered query for a builder tool, the
+                                                statement itself for a SQL tool, with a badge
+                                                saying which. Nested tools show their chain
+                                                indented; a child shows which tools embed it.
+                                            </td>
+                                        </tr>
+                                        <tr>
+                                            <td>Check a query before saving</td>
+                                            <td><strong>Test Query</strong></td>
+                                            <td>
+                                                Runs it once against the datasource through
+                                                the executor itself.
+                                            </td>
+                                        </tr>
+                                        <tr>
+                                            <td>Work on one agent's library</td>
+                                            <td><code>/tool-configs?agent=…</code></td>
+                                            <td>The filter survives every save.</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            <div class="alert alert-info small mb-0">
+                                <strong>A datasource being unreachable never makes a tool
+                                uneditable.</strong> The form shows a warning above the saved
+                                values and lets you edit them. Likewise, switching a column
+                                off in Data Sources does not block editing — it makes the
+                                tool fail loudly when <em>run</em>, which is where that check
+                                belongs.
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <hr class="my-5">
+
+                <!-- ============ LIMITS ============ -->
+                <section id="limits" class="help-section mb-5">
+                    <h6>Reference</h6>
+                    <h4 class="fw-semibold mb-3">Limits, in one place</h4>
+
+                    <div class="table-responsive">
+                        <table class="table table-sm table-bordered">
+                            <tbody>
+                                <tr><th scope="row" class="fw-normal" style="width:340px;">Tables per tool</th><td>25</td></tr>
+                                <tr><th scope="row" class="fw-normal">Columns / aggregations / group-by / filters</th><td>200 / 50 / 50 / 50</td></tr>
+                                <tr><th scope="row" class="fw-normal">Filter value</th><td>500 characters</td></tr>
+                                <tr><th scope="row" class="fw-normal">Description</th><td>2000 characters</td></tr>
+                                <tr><th scope="row" class="fw-normal">SQL statement</th><td>8000 characters</td></tr>
+                                <tr><th scope="row" class="fw-normal">Assistant-supplied values (SQL mode)</th><td>5</td></tr>
+                                <tr><th scope="row" class="fw-normal">Nested children per tool</th><td>5</td></tr>
+                                <tr><th scope="row" class="fw-normal">Chain depth / total tools in a chain</th><td>5 / 20</td></tr>
+                                <tr><th scope="row" class="fw-normal">Values crossing one chain level</th><td>2000 — refused, not truncated</td></tr>
+                                <tr><th scope="row" class="fw-normal">Rows returned to the model</th><td>200</td></tr>
+                                <tr>
+                                    <td>Rows the model may print</td>
+                                    <td>
+                                        100, plus an exact <code>COUNT(*)</code> and an offer
+                                        to download the rest
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <!-- ============ ERRORS ============ -->
+                <section id="errors" class="help-section mb-5">
+                    <h4 class="fw-semibold mb-3">When a save is refused</h4>
+
+                    <p class="small">
+                        Every message is written to be actionable. The ones worth
+                        recognising:
+                    </p>
+
+                    <div class="table-responsive">
+                        <table class="table table-sm table-bordered align-middle">
+                            <thead class="table-light">
+                                <tr><th style="width:52%;">Message</th><th>What to do</th></tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><em>Agent 'X' already has a tool named 'y'</em></td>
+                                    <td>Names are unique per agent, case-insensitively. Rename, or put it on another agent.</td>
+                                </tr>
+                                <tr>
+                                    <td><em>Select at least one table for this tool to read</em></td>
+                                    <td>Tables is required in both modes.</td>
+                                </tr>
+                                <tr>
+                                    <td><em>Column 'x' is selected but not grouped</em></td>
+                                    <td><a href="#s3">Scenario 3</a> — group it, aggregate it, or drop it.</td>
+                                </tr>
+                                <tr>
+                                    <td><em>This query groups rows but selects every column</em></td>
+                                    <td>Name the grouped columns and the aggregations you want.</td>
+                                </tr>
+                                <tr>
+                                    <td><em>The query joins 'x', which is not one of the tables selected</em></td>
+                                    <td>Add it to Tables, or remove the join.</td>
+                                </tr>
+                                <tr>
+                                    <td><em>Every filter needs a value to compare against, or must be marked as supplied by the agent</em></td>
+                                    <td>Fill the value, or tick <strong>Agent fills in</strong>.</td>
+                                </tr>
+                                <tr>
+                                    <td><em>The SQL query does not use ':x' anywhere</em></td>
+                                    <td>
+                                        Write the placeholder into the statement, or drop the
+                                        declared value. Check it is not inside quotes —
+                                        <a href="#s8b">scenario 8b</a>.
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><em>The SQL query uses ':x', which nothing fills</em></td>
+                                    <td>
+                                        The other direction: declare it as a value the
+                                        assistant supplies, embed a nested tool that fills it,
+                                        or take it out of the statement.
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><em>'y' needs 'x' to be supplied by the assistant, and an embedded tool is never called by the assistant</em></td>
+                                    <td>
+                                        Make the child's value optional, or give the inner
+                                        query a fixed one — <a href="#s8b">scenario 8b</a>.
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><em>The SQL query contains more than one statement</em> / <em>is not a read</em></td>
+                                    <td>One read-only statement — a <code>SELECT</code>, or a <code>WITH</code> that ends in one.</td>
+                                </tr>
+                                <tr>
+                                    <td><em>'X' is not a relational datasource, so it cannot run a SQL query</em></td>
+                                    <td><a href="#s13">Scenario 13</a>.</td>
+                                </tr>
+                                <tr>
+                                    <td><em>Every table in this datasource is switched off</em></td>
+                                    <td>Switch tables back on in <a href="/datasource">Data Sources</a>.</td>
+                                </tr>
+                                <tr>
+                                    <td><em>…cannot be disabled</em> / <em>cannot be deleted</em></td>
+                                    <td>Another tool embeds it; the message names which.</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="alert alert-warning small mb-0">
+                        Syntax errors and unknown columns in a SQL-mode statement are
+                        <strong>not</strong> in this list, by design: no parser here is
+                        strict enough to be trusted with them.
+                        <strong>Test Query</strong> is how you find those, and it reports what
+                        the database said.
+                    </div>
+                </section>
+
+                <!-- ============ LIBRARY ============ -->
+                <section id="library" class="help-section mb-5">
+                    <h4 class="fw-semibold mb-3">A worked library</h4>
+
+                    <p class="small">
+                        What a small, well-routed set looks like for one agent — narrow
+                        tools, explicit descriptions, nesting instead of one wide query.
+                    </p>
+
+                    <div class="table-responsive">
+                        <table class="table table-sm table-bordered align-middle">
+                            <thead class="table-light">
+                                <tr>
+                                    <th style="width:210px;">Tool</th>
+                                    <th style="width:90px;">Mode</th>
+                                    <th style="width:180px;">Reads</th>
+                                    <th>Answers</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><code>stock_by_category</code></td>
+                                    <td>builder</td>
+                                    <td><code>inventory_items</code></td>
+                                    <td>"How much of each category is in stock." Grouped totals</td>
+                                </tr>
+                                <tr>
+                                    <td><code>out_of_stock_items</code></td>
+                                    <td>builder</td>
+                                    <td><code>inventory_items</code></td>
+                                    <td>"Which specific items are at zero." SKU-level list</td>
+                                </tr>
+                                <tr>
+                                    <td><code>items_missing_technology</code></td>
+                                    <td>builder</td>
+                                    <td><code>inventory_items</code></td>
+                                    <td>"Items with no technology recorded." <code>IS BLANK</code></td>
+                                </tr>
+                                <tr>
+                                    <td><code>distinct_technologies</code></td>
+                                    <td>sql</td>
+                                    <td><code>inventory_items</code></td>
+                                    <td>"Every technology we use, alphabetically." Needs <code>DISTINCT</code></td>
+                                </tr>
+                                <tr>
+                                    <td><code>active_clients</code></td>
+                                    <td>builder</td>
+                                    <td><code>clients</code></td>
+                                    <td>"Our currently active clients." Also a child of the tool below</td>
+                                </tr>
+                                <tr>
+                                    <td><code>active_client_projects</code></td>
+                                    <td>builder</td>
+                                    <td><code>projects</code>, <code>clients</code></td>
+                                    <td>"Projects belonging to active clients." Embeds <code>active_clients</code></td>
+                                </tr>
+                                <tr>
+                                    <td><code>projects_since</code></td>
+                                    <td>builder</td>
+                                    <td><code>projects</code></td>
+                                    <td>"Projects created after a date the user names." Agent-supplied <code>created_after</code></td>
+                                </tr>
+                                <tr>
+                                    <td><code>department_salary_spread</code></td>
+                                    <td>sql</td>
+                                    <td><code>employees</code></td>
+                                    <td>"Salary spread for a department the user names." Agent-supplied <code>:department_id</code></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <p class="small text-muted mb-0">
+                        Eight tools, eight sentences, no overlap the model has to guess at.
+                    </p>
+                </section>
+
+                <div class="d-flex gap-2 mb-5">
+                    <a href="/tool-configs" class="btn btn-primary btn-sm">
+                        <i class="las la-arrow-left"></i> Back to Tool Configs
+                    </a>
+                    <a href="/data-agents" class="btn btn-outline-secondary btn-sm">
+                        <i class="las la-robot"></i> Data Agents
+                    </a>
+                    <a href="/datasource" class="btn btn-outline-secondary btn-sm">
+                        <i class="las la-database"></i> Data Sources
+                    </a>
+                </div>
+
+            </div>
+        </div>
+    </div>
+</div>
+{% endraw %}
+{% endblock %}

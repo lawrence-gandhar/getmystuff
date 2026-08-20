@@ -603,6 +603,28 @@ class PublicChatbotMessageRequest(JsonRequest):
     )
 
 
+class PublicChatbotStreamQuery(QueryRequest):
+    """
+    The same turn as :class:`PublicChatbotMessageRequest`, off the query string.
+
+    A separate schema because the source is genuinely different: ``EventSource`` can only
+    issue a GET, so a streamed turn arrives as query parameters rather than as a JSON
+    body. The bounds are the same ones — and they matter for the same reason, since this
+    is still an anonymous caller on someone else's website and every accepted message is a
+    model call the owner pays for.
+
+    No ``selected_value``: a button or dropdown reply is a Flow Builder answer, and a flow
+    turn does not stream (``chatbot_turn_service.stream_turn`` says why). Accepting the
+    field here would advertise something this endpoint cannot honour.
+    """
+
+    api_key: str = Field(default="", title="API key", max_length=MAX_NAME_LENGTH)
+    message: str = Field(default="", title="Message", max_length=MAX_MESSAGE_LENGTH)
+    session_id: str = Field(
+        default="", title="Session", max_length=MAX_SESSION_TOKEN_LENGTH
+    )
+
+
 class ChatbotTurnResponse(ResponseSchema):
     """
     One answered turn, as the widget reads it.
@@ -625,6 +647,11 @@ class ChatbotTurnResponse(ResponseSchema):
     options: list = Field(default_factory=list, title="Options")
     message: Optional[str] = Field(default=None, title="Message")
     response_time_ms: int = Field(default=0, title="Response time (ms)")
+    #: The export this turn started or reported on, already serialised by
+    #: ``DownloadNoticeView`` — carried as a plain dict for the same reason ``table``
+    #: is, so this schema need not import another feature's package. None on the
+    #: overwhelming majority of turns, and the widget renders nothing when it is.
+    download: Optional[dict] = Field(default=None, title="Download")
 
     @classmethod
     def from_turn(cls, result) -> "ChatbotTurnResponse":
@@ -651,6 +678,7 @@ class ChatbotTurnResponse(ResponseSchema):
             table=result.table,
             options=list(result.options or []),
             response_time_ms=result.response_time_ms,
+            download=result.download,
         )
 
     def payload(self) -> dict:

@@ -4,9 +4,19 @@
  * click-source-port-then-click-target connection creation, a right-side
  * properties panel per node type, and JSON save/load against the
  * FlowBuilderController routes.
+ *
+ * The stateless primitives — the Bezier maths, the port measurement, the escaping and
+ * the id generator — live in `static/js/graph_canvas.js`, shared with the Graph
+ * Designer's canvas. Everything that knows what a *flow* node means stays here:
+ * NODE_TYPES, the properties panel, the option rows, save/load. `graph_canvas.js` must
+ * therefore be loaded before this file (see templates/flow_builder/canvas.htm).
  */
 window.FlowBuilder = (function () {
     "use strict";
+
+    // The shared primitives. Aliased once so the call sites below read as they did
+    // before the extraction.
+    const GC = window.GraphCanvas;
 
     const NODE_TYPES = {
         start: { label: "Start", icon: "la-play-circle", outputs: function () { return [{ port: "default", label: "" }]; } },
@@ -23,10 +33,16 @@ window.FlowBuilder = (function () {
         ask_input: { label: "Ask for Input", icon: "la-keyboard", outputs: function () { return [{ port: "default", label: "" }]; } },
         send_message: { label: "Send Message", icon: "la-comment-dots", outputs: function () { return [{ port: "default", label: "" }]; } },
         ai_fallback: { label: "AI Fallback", icon: "la-robot", outputs: function () { return [{ port: "default", label: "" }]; } },
+        // Two ports on purpose. A graph that could not run must not leave by the same
+        // edge as one that succeeded, or the flow says "all done" about work that never
+        // happened. With no `error` edge drawn the engine signs off instead.
+        run_graph: { label: "Run Graph", icon: "la-project-diagram", outputs: function () {
+            return [{ port: "default", label: "done" }, { port: "error", label: "failed" }];
+        } },
         end: { label: "End Flow", icon: "la-flag-checkered", outputs: function () { return []; } },
     };
 
-    const SVG_NS = "http://www.w3.org/2000/svg";
+    const SVG_NS = GC.SVG_NS;
 
     const state = {
         nodes: [],
@@ -36,7 +52,6 @@ window.FlowBuilder = (function () {
         pending: null, // {nodeId, port}
         dragging: null, // {nodeId, offsetX, offsetY}
         reattaching: null, // {edgeId, end: "source"|"target"}
-        nextIdSeq: 1,
         // True whenever the in-browser graph has changed since the last
         // successful Save/Reload — every edit here (node properties, adding/
         // deleting nodes or connectors, dragging) only touches this client-side
@@ -50,13 +65,11 @@ window.FlowBuilder = (function () {
 
     /**
      * Generate a unique id for a new node/edge/option, scoped to this page load.
+     * Delegates to the shared generator; `state.nextIdSeq` is no longer read.
      * @param {string} prefix - short type tag, e.g. "n", "e", "opt"
      * @returns {string}
      */
-    function genId(prefix) {
-        const id = prefix + "_" + Date.now().toString(36) + "_" + (state.nextIdSeq++);
-        return id;
-    }
+    const genId = GC.makeIdGenerator();
 
     /**
      * Flag the in-browser graph as having unsaved changes and reveal the
@@ -86,9 +99,10 @@ window.FlowBuilder = (function () {
         switch (type) {
             case "if_else": return { variable_name: "", operator: "not_empty", compare_value: "" };
             case "goto": return { target_node_id: "" };
-            case "menu": case "dropdown": return { prompt_text: "", options: [] };
+            case "menu": case "dropdown": return { prompt_text: "", options: [], variable_name: "" };
             case "ask_input": return { prompt_text: "", variable_name: "" };
             case "send_message": return { message_text: "" };
+            case "run_graph": return { graph_id: "", variable_name: "" };
             case "ai_fallback": return {
                 guardrails: "",
                 prompt: "",
@@ -139,6 +153,7 @@ window.FlowBuilder = (function () {
             case "menu": case "dropdown": return d.prompt_text || "(no prompt)";
             case "ask_input": return d.prompt_text || "(no prompt)";
             case "send_message": return d.message_text || "(empty message)";
+            case "run_graph": return d.graph_id ? "Runs a saved graph" : "(no graph chosen)";
             case "ai_fallback":
                 const ctxLabel = { datasource: "attached datasource", knowledge_base: "knowledge base", prompt: "prompt only" }[d.context_source] || "attached datasource";
                 return "AI answers using " + ctxLabel;
@@ -285,16 +300,9 @@ window.FlowBuilder = (function () {
      * @returns {{x: number, y: number}|null}
      */
     function portAnchor(nodeId, portSelector) {
-        const nodeEl = document.getElementById("node-" + nodeId);
-        if (!nodeEl) return null;
-        const portEl = portSelector ? nodeEl.querySelector(portSelector) : nodeEl;
-        const target = portEl || nodeEl;
-        const wrapperRect = wrapperEl.getBoundingClientRect();
-        const rect = target.getBoundingClientRect();
-        return {
-            x: rect.left + rect.width / 2 - wrapperRect.left + wrapperEl.scrollLeft,
-            y: rect.top + rect.height / 2 - wrapperRect.top + wrapperEl.scrollTop,
-        };
+        return GC.portAnchor(
+            wrapperEl, document.getElementById("node-" + nodeId), portSelector,
+        );
     }
 
     // An edge's geometry is a cubic Bezier from the source port to the
@@ -310,14 +318,7 @@ window.FlowBuilder = (function () {
     function edgeGeometry(edge) {
         const from = portAnchor(edge.source, '.flow-node-port-out[data-port="' + cssEscape(edge.source_port || "default") + '"]');
         const to = portAnchor(edge.target, '[data-port-role="in"]') || portAnchor(edge.target, null);
-        if (!from || !to) return null;
-        const dx = Math.max(40, Math.abs(to.x - from.x) / 2);
-        return {
-            p0: from,
-            p1: { x: from.x + dx, y: from.y },
-            p2: { x: to.x - dx, y: to.y },
-            p3: to,
-        };
+        return GC.geometry(from, to);
     }
 
     /**
@@ -326,7 +327,7 @@ window.FlowBuilder = (function () {
      * @returns {string}
      */
     function geometryPathD(g) {
-        return "M " + g.p0.x + " " + g.p0.y + " C " + g.p1.x + " " + g.p1.y + ", " + g.p2.x + " " + g.p2.y + ", " + g.p3.x + " " + g.p3.y;
+        return GC.pathD(g);
     }
 
     /**
@@ -336,11 +337,7 @@ window.FlowBuilder = (function () {
      * @returns {{x: number, y: number}}
      */
     function bezierPointAt(g, t) {
-        const mt = 1 - t;
-        return {
-            x: mt * mt * mt * g.p0.x + 3 * mt * mt * t * g.p1.x + 3 * mt * t * t * g.p2.x + t * t * t * g.p3.x,
-            y: mt * mt * mt * g.p0.y + 3 * mt * mt * t * g.p1.y + 3 * mt * t * t * g.p2.y + t * t * t * g.p3.y,
-        };
+        return GC.pointAt(g, t);
     }
 
     /**
@@ -902,6 +899,7 @@ window.FlowBuilder = (function () {
         } else if (node.type === "menu" || node.type === "dropdown") {
             html +=
                 fieldHtml("Prompt text", '<textarea class="form-control form-control-sm" rows="2" data-field="prompt_text">' + escapeHtml(draft.prompt_text || "") + "</textarea>") +
+                fieldHtml("Store choice in variable (optional)", '<input class="form-control form-control-sm" data-field="variable_name" value="' + escapeAttr(draft.variable_name || "") + '">') +
                 '<label class="form-label fw-semibold small mt-2">Options</label><div id="fbOptionsList"></div>' +
                 '<button type="button" class="btn btn-outline-secondary btn-sm mt-1" id="fbAddOptionBtn"><i class="las la-plus"></i> Add option</button>';
         } else if (node.type === "ask_input") {
@@ -910,6 +908,8 @@ window.FlowBuilder = (function () {
                 fieldHtml("Store answer in variable", '<input class="form-control form-control-sm" data-field="variable_name" value="' + escapeAttr(draft.variable_name || "") + '">');
         } else if (node.type === "send_message") {
             html += fieldHtml("Message text", '<textarea class="form-control form-control-sm" rows="3" data-field="message_text">' + escapeHtml(draft.message_text || "") + "</textarea>");
+        } else if (node.type === "run_graph") {
+            html += runGraphFieldsHtml(draft);
         } else if (node.type === "ai_fallback") {
             html += aiFallbackFieldsHtml(draft);
         } else if (node.type === "end") {
@@ -1118,6 +1118,48 @@ window.FlowBuilder = (function () {
         return '<select class="form-select form-select-sm" data-field="llm_mode" id="fbLlmModeSelect">' + options.map(function (o) {
             return '<option value="' + o[0] + '"' + (o[0] === current ? " selected" : "") + ">" + o[1] + "</option>";
         }).join("") + "</select>";
+    }
+
+    /**
+     * The Run Graph node's fields: which published graph, and where to keep the count.
+     *
+     * Two things are said in the help text because neither is guessable from the canvas
+     * and both change how the conversation behaves. A graph containing an "Ask a human"
+     * node will put its question to the visitor and wait for their reply — this is the
+     * only block other than Ask for Input, Menu and Dropdown that can do that. And the
+     * variable holds *how many* rows the graph produced, not the rows themselves, because
+     * a variable is text that goes into a message.
+     */
+    function runGraphFieldsHtml(draft) {
+        const graphs = opts.graphs || [];
+
+        if (!graphs.length) {
+            return '<p class="text-muted small mb-0">No published graphs yet — ' +
+                'create one in the <a href="/graph-designer">Graph Designer</a> and ' +
+                "publish it, then it can be picked here.</p>";
+        }
+
+        const select = '<select class="form-select form-select-sm" data-field="graph_id">' +
+            '<option value="">Select a graph&hellip;</option>' +
+            graphs.map(function (g) {
+                return '<option value="' + escapeAttr(g.id) + '"' +
+                    (g.id === draft.graph_id ? " selected" : "") + ">" +
+                    escapeHtml(g.label) + "</option>";
+            }).join("") + "</select>";
+
+        return fieldHtml("Graph", select) +
+            fieldHtml(
+                "Store the number of results in",
+                '<input class="form-control form-control-sm" data-field="variable_name" value="' +
+                escapeAttr(draft.variable_name || "") + '">'
+            ) +
+            '<p class="text-muted small mb-0">The graph runs as one step and the flow ' +
+            "carries on — nothing is said to the visitor unless you say it with a Send " +
+            "Message block. The variable holds <strong>how many</strong> rows it found, " +
+            "so a later block can use it in a message or branch on it." +
+            "<br><br>If the graph contains an <strong>Ask a human</strong> block, its " +
+            "question is put to the visitor word for word and the flow waits for their " +
+            "reply before going on.</p>";
     }
 
     /**
@@ -1508,9 +1550,7 @@ window.FlowBuilder = (function () {
      * @returns {string}
      */
     function escapeHtml(str) {
-        const div = document.createElement("div");
-        div.textContent = str == null ? "" : String(str);
-        return div.innerHTML;
+        return GC.escapeHtml(str);
     }
     /**
      * HTML-escape a string for safe interpolation into a quoted HTML
@@ -1518,14 +1558,14 @@ window.FlowBuilder = (function () {
      * @param {*} str
      * @returns {string}
      */
-    function escapeAttr(str) { return escapeHtml(str).replace(/"/g, "&quot;"); }
+    function escapeAttr(str) { return GC.escapeAttr(str); }
     /**
      * Escape a string for safe use inside a CSS attribute-selector value.
      * @param {*} str
      * @returns {string}
      */
     function cssEscape(str) {
-        return String(str).replace(/[^a-zA-Z0-9_-]/g, function (c) { return "\\" + c; });
+        return GC.cssEscape(str);
     }
 
     // ---------------------------------------------------------------

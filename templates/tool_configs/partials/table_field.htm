@@ -1,17 +1,26 @@
-{# The Table field. Replaced wholesale (hx-swap="outerHTML") whenever the datasource
+{# The Tables field. Replaced wholesale (hx-swap="outerHTML") whenever the datasource
    changes, so its options are always the objects that really exist in the selected
    datasource — tables, collections or files, depending on its type.
 
-   Picking a table cascades once more, into the query builder, so the column
-   dropdowns offer that table's real fields. #}
+   A **multi-select**: a query over more than one table is the ordinary case in both
+   modes. The first selection is the primary table — the base table a built query's
+   joins hang off and its bare column references mean — and the order the browser
+   posts is document order, which is why the option list is what fixes it rather than
+   the order the user clicked in.
+
+   Picking tables cascades once more, into the query builder, so the column dropdowns
+   offer those tables' real fields and the Joins card offers exactly the tables named
+   here. #}
 <div class="col-md-6" id="toolTableField">
     <label for="toolTable" class="form-label fw-semibold">
-        Table <span class="text-danger">*</span>
+        Tables <span class="text-danger">*</span>
     </label>
     <select
         id="toolTable"
-        name="table_name"
+        name="table_names"
         class="form-select"
+        multiple
+        size="6"
         required
         {% if not tables %}disabled{% endif %}
         hx-get="/tool-configs/fields"
@@ -22,22 +31,26 @@
         hx-indicator="#toolSchemaSpinner"
     >
         {% if tables %}
-        <option value="">Select a table…</option>
         {% for table in tables %}
         <option
             value="{{ table }}"
-            {% if selected_table == table %}selected{% endif %}
+            {% if table in selected_tables %}selected{% endif %}
         >
             {{ table }}
         </option>
         {% endfor %}
-        {% else %}
-        <option value="">Select a datasource first</option>
         {% endif %}
     </select>
     {% if schema_error %}
     <div class="form-text text-danger">{{ schema_error }}</div>
+    {% elif not tables %}
+    <div class="form-text">Select a datasource first.</div>
     {% else %}
-    <div class="form-text">The table, collection or file this tool reads.</div>
+    <div class="form-text">
+        The tables, collections or files this tool reads. Hold
+        <kbd>Ctrl</kbd>/<kbd>Cmd</kbd> to pick more than one — the
+        <strong>first</strong> is the primary table, and in the query builder the rest
+        are the tables you can join to.
+    </div>
     {% endif %}
 </div>

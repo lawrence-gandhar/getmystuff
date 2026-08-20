@@ -32,4 +32,31 @@ from app.models.flow_builder import (  # noqa: F401
 from app.models.ai_inbuilt import KnowledgeChunk  # noqa: F401
 from app.models.workspaces import Workspace  # noqa: F401
 from app.models.data_agents import DataAgent  # noqa: F401
-from app.models.tool_configs import ToolConfig  # noqa: F401
+from app.models.tool_configs import ToolConfig, ToolConfigLink  # noqa: F401
+from app.models.downloader_agents import (  # noqa: F401
+    DownloadExport,
+    DownloadExportPart,
+    DownloadJob,
+)
+from app.models.graph_designer import (  # noqa: F401
+    ToolGraph,
+    ToolGraphRun,
+    ToolGraphRunStep,
+)
+from app.models.integrations import (  # noqa: F401
+    IntegrationConnection,
+    IntegrationCredential,
+    IntegrationCredentialEvent,
+    IntegrationCursor,
+    IntegrationFlow,
+    IntegrationFlowVersion,
+    IntegrationOAuthState,
+    IntegrationRateCounter,
+    IntegrationRestOperation,
+    IntegrationRun,
+    IntegrationRunJob,
+    IntegrationRunRecord,
+    IntegrationRunStep,
+    IntegrationSyncKey,
+    IntegrationTrigger,
+)

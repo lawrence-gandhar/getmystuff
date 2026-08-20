@@ -1,0 +1,363 @@
+/*
+ * Graph Designer — the canvas, the nodes, the connectors, and the run dock.
+ *
+ * A real stylesheet rather than a <style> block in the template, following
+ * static/css/tool_graphs.css. The Flow Builder canvas keeps its 200 lines inline for
+ * historical reasons; there is no reason for a second canvas to.
+ *
+ * Two things in here are load-bearing rather than cosmetic and are commented where they
+ * appear: the pointer-events split between the canvas and its nodes, and the fixed
+ * canvas size the connector SVG is matched to.
+ */
+
+/* ============================================================
+   CANVAS
+   ============================================================ */
+
+#gd-canvas-wrapper {
+    position: relative;
+    width: 100%;
+    height: 56vh;
+    min-height: 320px;
+    overflow: auto;
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+    background-color: #f8f9fa;
+    background-image: radial-gradient(#dee2e6 1px, transparent 1px);
+    background-size: 20px 20px;
+}
+
+/* The connector layer and the node layer are the same size and stacked. Both are
+   3000x2000 rather than sized to content because a connector is drawn in canvas
+   coordinates: an SVG that resized as nodes moved would reflow every curve on every
+   drag. */
+#gd-edges {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 3000px;
+    height: 2000px;
+    pointer-events: none;
+}
+
+#gd-canvas {
+    position: relative;
+    width: 3000px;
+    height: 2000px;
+    /* Empty canvas must not swallow clicks meant for the connector layer underneath —
+       a div's hit area is its whole box, not only where its children paint. Nodes opt
+       back in below. Without this pair, no connector can be clicked or deleted. */
+    pointer-events: none;
+}
+
+#gd-canvas-wrapper.gd-reattaching { cursor: grabbing; }
+#gd-canvas-wrapper.gd-connecting { cursor: crosshair; }
+
+/* The rubber band, from the port to the cursor, while a connector is being dragged out.
+   Dashed and unfilled so it never reads as a connector that already exists.
+
+   Written as `#gd-edges path.…` rather than as a bare class because `#gd-edges path` below
+   sets `pointer-events: stroke` and an id beats a class: as one class this rule lost, the
+   band stayed hit-testable, and since it ends exactly under the cursor it could answer the
+   drop's own hit test instead of the node beneath it. */
+#gd-edges path.gd-edge-preview {
+    fill: none;
+    stroke: #0d6efd;
+    stroke-width: 2;
+    stroke-dasharray: 5 4;
+    pointer-events: none;
+    cursor: crosshair;
+}
+
+/* ============================================================
+   CONNECTORS
+   ============================================================ */
+
+#gd-edges path {
+    fill: none;
+    stroke: #6c757d;
+    stroke-width: 2;
+    pointer-events: stroke;
+    cursor: pointer;
+}
+
+#gd-edges path.gd-edge-selected {
+    stroke: #dc3545;
+    stroke-width: 3;
+}
+
+/* An error connector is drawn differently because it means something different: it is
+   the path taken only when the node it leaves could not do its work. */
+#gd-edges path.gd-edge-error {
+    stroke: #dc3545;
+    stroke-dasharray: 5 4;
+}
+
+#gd-edges path.gd-edge-loop {
+    stroke: #6f42c1;
+}
+
+.gd-edge-label {
+    fill: #6c757d;
+    font-size: 10px;
+    paint-order: stroke;
+    stroke: #f8f9fa;
+    stroke-width: 3px;
+    pointer-events: none;
+}
+
+.gd-edge-delete-btn { cursor: pointer; pointer-events: auto; }
+.gd-edge-delete-btn circle { fill: #fff; stroke: #dc3545; stroke-width: 1.5; }
+.gd-edge-delete-btn text { fill: #dc3545; font-size: 11px; font-weight: 700; }
+.gd-edge-delete-btn:hover circle { fill: #dc3545; }
+.gd-edge-delete-btn:hover text { fill: #fff; }
+
+.gd-edge-handle {
+    fill: #fff;
+    stroke: #6c757d;
+    stroke-width: 2;
+    cursor: grab;
+    pointer-events: auto;
+}
+.gd-edge-handle:hover { stroke: #0d6efd; fill: #cfe2ff; }
+
+/* ============================================================
+   NODES
+   ============================================================ */
+
+.gd-node {
+    /* The header's height is pinned rather than left to its content, because the outgoing
+       port stack is positioned from it. A port row carries an opaque label, so any overlap
+       hides the Settings and Delete buttons underneath it — see `.gd-node-ports-out`. */
+    --gd-header-h: 30px;
+    --gd-port-size: 12px;
+    --gd-port-gap: 6px;
+    position: absolute;
+    width: 200px;
+    background: #fff;
+    border: 2px solid #adb5bd;
+    border-radius: 8px;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, .08);
+    font-size: 12px;
+    user-select: none;
+    cursor: default;
+    pointer-events: auto;   /* the other half of the rule on #gd-canvas */
+}
+
+.gd-node.gd-node-selected {
+    border-color: #0d6efd;
+    box-shadow: 0 0 0 3px rgba(13, 110, 253, .25);
+}
+
+/* Chosen for a test run. Distinct from selected-for-editing: a user can pick several
+   nodes to test while none of them is the one whose properties are open. */
+.gd-node.gd-node-picked {
+    border-color: #6f42c1;
+    box-shadow: 0 0 0 3px rgba(111, 66, 193, .25);
+}
+
+.gd-node.gd-drop-target {
+    outline: 2px dashed #0d6efd;
+    outline-offset: 2px;
+}
+
+.gd-node-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: var(--gd-header-h);
+    box-sizing: border-box;
+    padding: 0 8px;
+    border-bottom: 1px solid #e9ecef;
+    font-weight: 600;
+    cursor: grab;
+    background: #f1f3f5;
+    border-radius: 6px 6px 0 0;
+}
+
+.gd-node-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gd-node-header-icons { display: flex; align-items: center; gap: 4px; flex: none; }
+
+.gd-node-icon-btn {
+    border: none;
+    background: none;
+    color: #6c757d;
+    font-size: 13px;
+    line-height: 1;
+    padding: 2px 3px;
+    cursor: pointer;
+    border-radius: 3px;
+}
+.gd-node-icon-btn:hover { color: #0d6efd; background: rgba(13, 110, 253, .1); }
+.gd-node-icon-btn-danger:hover { color: #dc3545; background: rgba(220, 53, 69, .1); }
+
+.gd-node-body { padding: 6px 8px; min-height: 24px; color: #495057; cursor: pointer; }
+
+.gd-node-preview {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    font-family: var(--bs-font-monospace, monospace);
+    font-size: 11px;
+}
+
+.gd-node-kind {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    color: #6c757d;
+}
+
+/* ---------- run status ----------
+   Painted from the run's step rows as frames arrive, which is what makes the canvas a
+   monitor rather than a diagram. One ring per node showing its latest pass. */
+.gd-node[data-status="running"] {
+    border-color: #0d6efd;
+    animation: gd-pulse 1.4s ease-in-out infinite;
+}
+.gd-node[data-status="succeeded"] { border-color: #198754; }
+.gd-node[data-status="failed"] { border-color: #dc3545; }
+.gd-node[data-status="awaiting_input"] { border-color: #fd7e14; }
+.gd-node[data-status="skipped"] { border-color: #ced4da; opacity: .6; }
+
+@keyframes gd-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(13, 110, 253, .35); }
+    50% { box-shadow: 0 0 0 6px rgba(13, 110, 253, 0); }
+}
+
+/* A long build with a static frame reads as a stuck one, so the running ring moves —
+   but not for anyone who has asked the system not to animate. */
+@media (prefers-reduced-motion: reduce) {
+    .gd-node[data-status="running"] { animation: none; box-shadow: 0 0 0 3px rgba(13, 110, 253, .3); }
+}
+
+.gd-node-status-badge {
+    font-size: 10px;
+    padding: 0 4px;
+    border-radius: 3px;
+    flex: none;
+}
+
+/* ---------- ports ---------- */
+
+.gd-node-port {
+    position: absolute;
+    width: var(--gd-port-size);
+    height: var(--gd-port-size);
+    border-radius: 50%;
+    background: #fff;
+    border: 2px solid #6c757d;
+    cursor: crosshair;
+    z-index: 2;
+}
+
+/* Centred on the body, not on the whole node: half the header's height below the node's
+   midpoint puts it in the middle of what is left once the header is taken out. */
+.gd-node-port-in {
+    left: -7px;
+    top: calc(50% + var(--gd-header-h) / 2);
+    transform: translateY(-50%);
+}
+
+/* Below the header, never across it. The labels are opaque (they have to be, or a
+   connector passing behind one is unreadable), so a row that reached into the header would
+   simply cover the Settings and Delete buttons — which is what it did. `renderNode` grows
+   the node's min-height with its port count so the stack cannot spill past the bottom
+   either; between the two, the header stays clickable on every node type. */
+.gd-node-ports-out {
+    position: absolute;
+    right: -7px;
+    top: calc(var(--gd-header-h) + var(--gd-port-gap));
+    display: flex;
+    flex-direction: column;
+    gap: var(--gd-port-gap);
+    align-items: flex-end;
+}
+
+.gd-node-port-out-row { display: flex; align-items: center; gap: 4px; }
+
+.gd-node-port-out-label {
+    font-size: 10px;
+    color: #6c757d;
+    background: #fff;
+    padding: 0 3px;
+    border-radius: 3px;
+    white-space: nowrap;
+}
+
+.gd-node-port.gd-port-pending { background: #0d6efd; border-color: #0d6efd; }
+.gd-node-port.gd-drop-target { background: #0d6efd; border-color: #0d6efd; }
+
+/* The error port is the one a user should not wire by accident, so it looks unlike the
+   others rather than merely sitting lower down. */
+.gd-node-port[data-port="error"] { border-color: #dc3545; }
+.gd-node-port-out-row[data-port-kind="error"] .gd-node-port-out-label { color: #dc3545; }
+
+.gd-palette-btn { width: 100%; text-align: left; margin-bottom: 6px; }
+
+/* ============================================================
+   RUN DOCK
+   ============================================================ */
+
+#gd-dock {
+    border: 1px solid #dee2e6;
+    border-top: none;
+    border-radius: 0 0 6px 6px;
+    background: #fff;
+}
+
+/* Resizable by dragging its header, and bounded so it can neither vanish nor cover the
+   canvas it describes. */
+#gd-dock-body {
+    height: 26vh;
+    min-height: 120px;
+    max-height: 60vh;
+    overflow: auto;
+}
+
+#gd-dock-resize {
+    height: 6px;
+    cursor: ns-resize;
+    background: #f1f3f5;
+    border-bottom: 1px solid #dee2e6;
+}
+#gd-dock-resize:hover { background: #dee2e6; }
+
+.gd-dock-table { font-size: 12px; }
+.gd-dock-table th { position: sticky; top: 0; background: #f8f9fa; z-index: 1; }
+.gd-dock-table td { vertical-align: top; }
+
+.gd-dock-json {
+    font-family: var(--bs-font-monospace, monospace);
+    font-size: 11px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    margin: 0;
+}
+
+.gd-log-line {
+    font-family: var(--bs-font-monospace, monospace);
+    font-size: 11px;
+    padding: 1px 0;
+    border-bottom: 1px solid #f1f3f5;
+}
+.gd-log-line-failed { color: #dc3545; }
+.gd-log-line-skipped { color: #adb5bd; }
+.gd-log-line-awaiting { color: #fd7e14; }
+
+.gd-status-pill {
+    font-size: 11px;
+    padding: 1px 6px;
+    border-radius: 10px;
+}
+
+/* The prompt a paused run puts up. Deliberately prominent: a run that is waiting and
+   does not look like it is waiting is indistinguishable from one that has hung. */
+#gd-question {
+    border: 1px solid #fd7e14;
+    background: #fff8f0;
+    border-radius: 6px;
+    padding: 10px 12px;
+}

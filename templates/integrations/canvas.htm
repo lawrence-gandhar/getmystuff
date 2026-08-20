@@ -1,0 +1,206 @@
+{% extends "base/layout.htm" %}
+{% block title %}{{ flow.name }} | Integrations{% endblock %}
+
+{% block extra_css %}
+<link href="/static/css/integrations.css" rel="stylesheet">
+{% endblock %}
+
+{% block content %}
+<div class="mt-3" style="max-width: 100%;">
+
+    <!-- ============================================
+         HEADER
+         ============================================ -->
+    <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
+        <div class="d-flex align-items-center gap-2">
+            <a href="/integrations/" class="btn btn-sm btn-outline-secondary">
+                <i class="las la-arrow-left"></i>
+            </a>
+            <h6 class="fw-semibold mb-0">
+                <i class="las la-exchange-alt text-primary"></i> {{ flow.name }}
+            </h6>
+            {% if is_published %}
+                <span class="badge bg-success" id="intVersionBadge">v{{ version_number }}</span>
+            {% else %}
+                <span class="badge bg-secondary" id="intVersionBadge">Draft</span>
+            {% endif %}
+            <span id="intUnsavedBadge" class="badge bg-warning text-dark" style="display:none;">
+                Unsaved changes
+            </span>
+        </div>
+
+        <div class="d-flex align-items-center gap-1 flex-wrap">
+            <button class="btn btn-sm btn-outline-primary" type="button"
+                    data-bs-toggle="offcanvas" data-bs-target="#intPalette">
+                <i class="las la-plus"></i> Add step
+            </button>
+            <button id="intSaveBtn" class="btn btn-sm btn-primary" type="button">
+                <i class="las la-save"></i> Save
+            </button>
+            <button id="intPublishBtn" class="btn btn-sm btn-outline-success" type="button">
+                <i class="las la-check-double"></i> Publish
+            </button>
+
+            <span class="vr mx-1"></span>
+
+            {# Dry run first and to the left, because it is the one to press first: every
+               request is built and validated and nothing is sent anywhere. #}
+            <button id="intDryRunBtn" class="btn btn-sm btn-outline-success" type="button">
+                <i class="las la-vial"></i> Dry run
+            </button>
+            <button id="intRunBtn" class="btn btn-sm btn-success" type="button">
+                <i class="las la-play"></i> Run
+            </button>
+            <button id="intStopBtn" class="btn btn-sm btn-outline-danger" type="button" disabled>
+                <i class="las la-stop"></i> Stop
+            </button>
+
+            <span class="vr mx-1"></span>
+
+            <button class="btn btn-sm btn-outline-secondary" type="button"
+                    data-bs-toggle="offcanvas" data-bs-target="#intSchedule">
+                <i class="las la-clock"></i> Schedule
+            </button>
+            <a href="/integrations/{{ flow.uuid }}/runs" class="btn btn-sm btn-outline-secondary">
+                <i class="las la-history"></i> Runs
+            </a>
+        </div>
+    </div>
+
+    <div id="intBanner" class="mb-2"></div>
+
+    <!-- ============================================
+         CANVAS
+         ============================================ -->
+    <div class="card shadow-sm mb-2">
+        <div id="intCanvasWrap" class="int-canvas-wrap">
+            <svg id="intEdges" class="int-edges"></svg>
+            <div id="intNodes" class="int-nodes"></div>
+        </div>
+        <div class="card-footer py-1 small text-muted">
+            Drag from a step's output dot to another step to connect them, or click one dot
+            then the other. Click a connection's middle to delete it. Cancelling a run stops
+            it at the next record boundary — a step already waiting on another system
+            finishes that call first.
+        </div>
+    </div>
+
+    <!-- ============================================
+         DOCK — counters, then steps
+         ============================================ -->
+    <div class="card shadow-sm">
+        <div class="card-header py-2 d-flex justify-content-between align-items-center">
+            <div class="d-flex align-items-center gap-2">
+                <strong class="small">Run</strong>
+                <span id="intRunStatus" class="badge bg-secondary">no run yet</span>
+                <span id="intRunMode" class="badge bg-light text-dark border" style="display:none;"></span>
+            </div>
+            <div class="small text-muted" id="intRunStarted"></div>
+        </div>
+
+        {# **The counters strip, and it is the point of this dock.** The interesting state
+           of a fifty-thousand-record run is four numbers moving, not a step list
+           scrolling. Every frame carries whole totals rather than deltas, so a frame the
+           browser missed cannot leave these wrong. #}
+        <div class="card-body py-2 border-bottom">
+            <div class="row text-center g-2">
+                <div class="col">
+                    <div class="int-counter" id="intCountRead">0</div>
+                    <div class="small text-muted">read</div>
+                </div>
+                <div class="col">
+                    <div class="int-counter text-success" id="intCountWritten">0</div>
+                    <div class="small text-muted">written</div>
+                </div>
+                <div class="col">
+                    <div class="int-counter text-danger" id="intCountFailed">0</div>
+                    <div class="small text-muted">failed</div>
+                </div>
+                <div class="col">
+                    <div class="int-counter text-warning" id="intCountSkipped">0</div>
+                    <div class="small text-muted">skipped</div>
+                </div>
+            </div>
+            <div id="intTruncatedNote" class="small text-warning mt-2" style="display:none;">
+                <i class="las la-exclamation-triangle"></i>
+                More records failed than the log keeps. The counters above are exact; the
+                list below is the first part of it.
+            </div>
+        </div>
+
+        <div class="card-body py-2" style="max-height: 260px; overflow-y: auto;">
+            <div id="intSteps" class="small text-muted">No run yet.</div>
+        </div>
+    </div>
+</div>
+
+<!-- ============================================
+     OFFCANVAS — PALETTE
+     offcanvas-end, not -start: the sidebar owns the left edge.
+     ============================================ -->
+<div class="offcanvas offcanvas-end" tabindex="-1" id="intPalette">
+    <div class="offcanvas-header border-bottom">
+        <h6 class="offcanvas-title fw-semibold">
+            <i class="las la-shapes text-primary"></i> Add a step
+        </h6>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+    </div>
+    <div class="offcanvas-body" id="intPaletteBody">
+        <!-- populated by integrations.js from the server's vocabulary -->
+    </div>
+</div>
+
+<!-- ============================================
+     OFFCANVAS — STEP SETTINGS
+     ============================================ -->
+<div class="offcanvas offcanvas-end" tabindex="-1" id="intProperties" style="width: 560px;">
+    <div class="offcanvas-header border-bottom">
+        <h6 class="offcanvas-title fw-semibold">
+            <i class="las la-sliders-h text-primary"></i> Step settings
+        </h6>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+    </div>
+    <div class="offcanvas-body" id="intPropertiesBody">
+        <!-- populated by integrations.js -->
+    </div>
+</div>
+
+<!-- ============================================
+     OFFCANVAS — SCHEDULE
+     ============================================ -->
+<div class="offcanvas offcanvas-end" tabindex="-1" id="intSchedule" style="width: 480px;">
+    <div class="offcanvas-header border-bottom">
+        <h6 class="offcanvas-title fw-semibold">
+            <i class="las la-clock text-primary"></i> Schedule
+        </h6>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+    </div>
+    <div class="offcanvas-body" id="intScheduleBody">
+        <!-- populated by integrations.js -->
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+{# The drawing, the vocabulary, the connections and the schedule are handed over as JSON
+   in the page so the canvas draws on first paint instead of flashing empty — and so
+   nothing about the step vocabulary is duplicated in JavaScript. The server's lists are
+   exactly what the validator accepts, which is what makes "the palette cannot offer a
+   step the validator refuses" true rather than merely intended. #}
+<script type="application/json" id="intGraphData">{{ graph_data_json | safe }}</script>
+<script type="application/json" id="intVocabulary">{{ vocabulary_json | safe }}</script>
+<script type="application/json" id="intConnections">{{ connections_json | safe }}</script>
+<script type="application/json" id="intTriggers">{{ triggers_json | safe }}</script>
+
+{# Shared primitives first: integrations.js reads window.GraphCanvas at module scope. #}
+<script src="/static/js/graph_canvas.js"></script>
+<script src="/static/js/integrations.js"></script>
+<script>
+    IntegrationsCanvas.init({
+        flowUuid: {{ flow.uuid | tojson }},
+        isPublished: {{ is_published | tojson }},
+        defaultBatchSize: {{ flow.default_batch_size | tojson }},
+        openRun: {{ open_run | tojson }},
+    });
+</script>
+{% endblock %}

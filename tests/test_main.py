@@ -82,17 +82,39 @@ class TestHttpExceptionHandler:
 
 
 class TestLifecycleHooks:
-    async def test_startup_creates_tables_seeds_a_user_and_preloads_models(self) -> None:
+    async def test_startup_migrates_seeds_a_user_and_preloads_models(self) -> None:
         with (
-            patch.object(main, "engine") as engine,
+            patch.object(main, "upgrade_to_head", new=AsyncMock()) as migrate,
             patch.object(main, "create_fake_user", new=AsyncMock()) as seed,
             patch.object(main.ollama_client, "preload_models", new=AsyncMock()) as preload,
         ):
-            engine.begin.return_value.__aenter__.return_value = AsyncMock()
             await main.on_startup()
 
+        migrate.assert_awaited_once()
         seed.assert_awaited_once()
         preload.assert_awaited_once()
+
+    async def test_startup_stops_if_the_database_cannot_be_migrated(self) -> None:
+        """
+        A schema that cannot be brought up to date must abort startup, not be served
+        around. The app used to boot clean and fail per-query instead, which is the
+        whole reason create_all was replaced.
+        """
+        with (
+            patch.object(
+                main,
+                "upgrade_to_head",
+                new=AsyncMock(side_effect=RuntimeError("no version table")),
+            ),
+            patch.object(main, "create_fake_user", new=AsyncMock()) as seed,
+            patch.object(main.ollama_client, "preload_models", new=AsyncMock()) as preload,
+        ):
+            with pytest.raises(RuntimeError, match="no version table"):
+                await main.on_startup()
+
+        # Nothing downstream of the migration should have run.
+        seed.assert_not_awaited()
+        preload.assert_not_awaited()
 
     async def test_shutdown_releases_the_pooled_http_client(self) -> None:
         with patch.object(main.ollama_client, "close_client", new=AsyncMock()) as close:

@@ -7,13 +7,53 @@
    runs — the badge next to it says which of the two is being read.
 
    `agent_filter` travels with every mutation as a hidden hx-val so the rebuilt
-   table keeps showing the same subset the user was looking at. #}
+   table keeps showing the same subset the user was looking at.
+
+   Nesting is shown **inside the tool's own row** rather than as child rows: every
+   tool keeps exactly one row, so the filter, the enable toggle and delete go on
+   meaning what they did, and a tool embedded by two parents is not listed twice.
+   `chain` is what this tool embeds, indented by depth; `embedded_in` names the
+   tools that embed it — it is still callable on its own, which is why it is a row
+   of its own at all. #}
 {% for tool in tool_configs %}
 <tr id="tool-config-row-{{ tool.uuid }}">
     <td>
-        <div class="fw-semibold font-monospace small">{{ tool.tool_name }}</div>
+        <div class="fw-semibold font-monospace small">
+            {{ tool.tool_name }}
+            {% if tool.chain %}
+            <span class="badge bg-primary-subtle text-primary-emphasis border border-primary-subtle">
+                nested
+            </span>
+            {% endif %}
+        </div>
         {% if tool.description %}
         <div class="text-muted small">{{ tool.description }}</div>
+        {% endif %}
+
+        {% if tool.chain %}
+        <div class="small text-muted mt-1">
+            {% for step in tool.chain %}
+            <div class="font-monospace text-break" style="padding-left: {{ (step.depth - 1) * 12 }}px">
+                ↳ <span class="fw-semibold">{{ step.tool_name }}</span>.{{ step.child_column }}
+                → {{ step.parent_reference }}
+                {# An iterating link changes how many times the parent runs, which is
+                   the one thing about a link that is not visible from the names. #}
+                {% if step.iterates %}
+                <span class="badge bg-info-subtle text-info-emphasis border">once per value{% if step.value_alias %} as {{ step.value_alias }}{% endif %}</span>
+                {% endif %}
+                {% if not step.is_enabled %}
+                <span class="text-danger">(disabled)</span>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        {% if tool.embedded_in %}
+        <div class="small text-muted mt-1">
+            <i class="las la-level-up-alt"></i>
+            embedded in <span class="font-monospace">{{ tool.embedded_in | join(", ") }}</span>
+        </div>
         {% endif %}
     </td>
     <td>
@@ -31,6 +71,11 @@
         <span class="badge bg-light text-dark border">
             <i class="las la-database"></i> {{ tool.datasource_name }}
         </span>
+        {# Every table the tool reads, not just the primary one. A SQL tool joining
+           two tables used to show one, which read as a narrower tool than it was. #}
+        <div class="small text-muted font-monospace text-break mt-1">
+            {{ tool.table_names | join(", ") }}
+        </div>
         {% if not tool.datasource_is_active %}
         <div class="small text-danger">Datasource inactive</div>
         {% endif %}

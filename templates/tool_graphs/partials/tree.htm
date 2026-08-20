@@ -1,0 +1,136 @@
+{# The side tree: workspace → data agent → tool config.
+
+   Rendered server-side rather than fetched, because it is a list of things the user
+   owns and nothing about it needs a renderer — only the canvas beside it does.
+
+   Every selectable row is a <button data-graph-select> carrying its scope and its
+   public uuid. tool_graphs.js reads those two attributes and nothing else, so the
+   three levels behave identically without the script knowing this markup.
+
+   Empty branches are kept. A workspace with no agents, or an agent with no tools, is
+   how someone notices the thing they just created is empty — and hiding it would
+   make this tree disagree with the Data Agents page about what exists. #}
+
+{% if not tree %}
+<p class="text-muted small mb-0 p-2">
+    No workspaces yet. Create one in <a href="/workspaces">Workspaces</a>, then add a
+    <a href="/data-agents">data agent</a> and its tools.
+</p>
+{% endif %}
+
+{% for workspace in tree %}
+{% set workspace_key = workspace.uuid or 'unassigned' %}
+<div class="tool-graph-branch">
+
+    <div class="d-flex align-items-center gap-1">
+        <button
+            class="btn btn-sm btn-link text-muted p-0 tool-graph-caret"
+            type="button"
+            data-bs-toggle="collapse"
+            data-bs-target="#tg-ws-{{ workspace_key }}"
+            aria-expanded="true"
+            aria-label="Toggle {{ workspace.name }}"
+        >
+            <i class="las la-angle-down"></i>
+        </button>
+
+        {# A workspace with no uuid is the Unassigned bucket — a grouping, not a row,
+           so there is nothing to select and no scope to send. #}
+        {% if workspace.uuid %}
+        <button
+            class="btn btn-sm tool-graph-node text-start flex-grow-1"
+            type="button"
+            data-graph-select
+            data-scope="workspace"
+            data-id="{{ workspace.uuid }}"
+        >
+            <i class="las la-layer-group text-primary"></i>
+            <span class="fw-semibold">{{ workspace.name }}</span>
+            {% if not workspace.is_active %}
+            <span class="badge bg-secondary-subtle text-secondary-emphasis">off</span>
+            {% endif %}
+        </button>
+        {% else %}
+        <span class="small text-muted fw-semibold flex-grow-1 py-1">
+            <i class="las la-layer-group"></i> {{ workspace.name }}
+        </span>
+        {% endif %}
+    </div>
+
+    <div class="collapse show ps-3" id="tg-ws-{{ workspace_key }}">
+        {% if not workspace.agents %}
+        <p class="text-muted small mb-1 ps-2">No data agents here yet.</p>
+        {% endif %}
+
+        {% for agent in workspace.agents %}
+        <div class="tool-graph-branch">
+
+            <div class="d-flex align-items-center gap-1">
+                <button
+                    class="btn btn-sm btn-link text-muted p-0 tool-graph-caret"
+                    type="button"
+                    data-bs-toggle="collapse"
+                    data-bs-target="#tg-agent-{{ agent.uuid }}"
+                    aria-expanded="true"
+                    aria-label="Toggle {{ agent.name }}"
+                >
+                    <i class="las la-angle-down"></i>
+                </button>
+
+                <button
+                    class="btn btn-sm tool-graph-node text-start flex-grow-1"
+                    type="button"
+                    data-graph-select
+                    data-scope="agent"
+                    data-id="{{ agent.uuid }}"
+                >
+                    <i class="las la-robot text-primary"></i>
+                    {{ agent.name }}
+                    <span class="text-muted">({{ agent.tool_count }})</span>
+                    {% if not agent.is_active %}
+                    <span class="badge bg-secondary-subtle text-secondary-emphasis">off</span>
+                    {% endif %}
+                </button>
+            </div>
+
+            <div class="collapse show ps-3" id="tg-agent-{{ agent.uuid }}">
+                {% if not agent.tools %}
+                <p class="text-muted small mb-1 ps-2">No tool configs yet.</p>
+                {% endif %}
+
+                {% for tool in agent.tools %}
+                <button
+                    class="btn btn-sm tool-graph-node text-start w-100 {% if not tool.is_enabled %}tool-graph-node-off{% endif %}"
+                    type="button"
+                    data-graph-select
+                    data-scope="tool"
+                    data-id="{{ tool.uuid }}"
+                >
+                    <i class="las la-tools text-primary"></i>
+                    <span class="font-monospace">{{ tool.tool_name }}</span>
+
+                    {# The same two words the Tool Configs list uses, so the badge means
+                       the same thing in both places. #}
+                    {% if tool.has_children %}
+                    <span class="badge bg-primary-subtle text-primary-emphasis border border-primary-subtle">
+                        nested
+                    </span>
+                    {% endif %}
+                    {% if tool.is_embedded %}
+                    <span class="badge bg-light text-dark border">embedded</span>
+                    {% endif %}
+                    {% if not tool.is_enabled %}
+                    <span class="badge bg-danger-subtle text-danger-emphasis border border-danger-subtle">
+                        disabled
+                    </span>
+                    {% endif %}
+                </button>
+                {% endfor %}
+            </div>
+
+        </div>
+        {% endfor %}
+    </div>
+
+</div>
+{% endfor %}
