@@ -815,7 +815,7 @@ async def _validated_graph_link(
             status_code=400,
             detail=(
                 f"The graph '{graph.name}' is still a draft, so it cannot be embedded. "
-                "Publish it in the Graph Designer first."
+                "Publish it in Pipelines first."
             ),
         )
 

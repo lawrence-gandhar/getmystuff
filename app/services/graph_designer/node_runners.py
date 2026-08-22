@@ -26,6 +26,7 @@ returned ``None`` on failure and ``None`` on "no rows" would make those two
 indistinguishable, and they are the two states most worth telling apart.
 """
 
+import asyncio
 import logging
 import time
 import uuid as uuid_pkg
@@ -39,6 +40,7 @@ from app.models.graph_designer import (
     BINDING_MODE_VALUES,
     NODE_BRANCH,
     NODE_DO_UNTIL,
+    NODE_EMAIL,
     NODE_FAILURE,
     NODE_FOR_EACH,
     NODE_HUMAN,
@@ -46,12 +48,24 @@ from app.models.graph_designer import (
     NODE_SQL_UNION,
     NODE_START,
     NODE_SUCCESS,
+    NODE_TIMER,
     NODE_TOOL_CONFIG,
+    NODE_TYPE_VALUES,
     NODE_VALUE,
+    NODE_WAIT,
     STEP_FAILED,
     STEP_SUCCEEDED,
+    TIMER_PAUSE,
+    TIMER_RESUME,
+    TIMER_START,
+    TIMER_STOP,
 )
-from app.services.graph_designer import graph_state, run_store
+from app.services.graph_designer import (
+    graph_state,
+    node_variables,
+    run_store,
+    timers,
+)
 from app.services.graph_designer.graph_service import (
     DEFAULT_MAX_ITERATIONS,
     VALUELESS_OPERATORS,
@@ -119,13 +133,42 @@ async def run_node(
         # why it failed but whose log does not show which node failed is a log with a
         # hole exactly where somebody would look.
         _require_available_sources(node, context.available)
-        update = await runner(node, state, context)
+        # After the dependency check, so "you left this node out of the selection" beats
+        # "that node produced nothing" — the first is the truth and the second is only
+        # its symptom. `render_node` returns a *copy*; the drawing must not be edited,
+        # because the compiler captures each node in a closure once per run and a loop
+        # body re-enters the same closure on every pass.
+        prepared = node_variables.render_node(node, state)
+        update = await runner(prepared, state, context)
     except NodeFailure as exc:
         await run_store.finish_step(
             step_id,
             STEP_FAILED,
             duration_ms=_elapsed_ms(started),
             message=str(exc),
+            state_preview=graph_state.state_preview(state),
+        )
+        raise
+    except asyncio.CancelledError:
+        # Somebody pressed Stop while this node was still going.
+        #
+        # `CancelledError` derives from `BaseException`, so without this it sails past
+        # the `except Exception` below, past `_guarded`, out of `ainvoke`, and the step
+        # row it opened is never closed — leaving a node spinning forever in the dock
+        # underneath a run the list already shows as cancelled. That was true of every
+        # node before the `wait` node existed; a node that sleeps just makes it easy to
+        # hit rather than a matter of timing.
+        #
+        # Written as a failed step rather than a new `cancelled` status: the row is
+        # honest either way, and a sixth step status would need every consumer of the
+        # log to learn it for no extra information. The row is closed and the
+        # cancellation is re-raised untouched — swallowing it would tell asyncio the
+        # task declined to stop.
+        await run_store.finish_step(
+            step_id,
+            STEP_FAILED,
+            duration_ms=_elapsed_ms(started),
+            message="The run was stopped while this step was running.",
             state_preview=graph_state.state_preview(state),
         )
         raise
@@ -229,8 +272,8 @@ def referenced_nodes(node: dict) -> Set[str]:
     """
     Every other node this node's settings read a value from.
 
-    Collected in one place because four node types do it in four different fields, and a
-    fifth would otherwise be able to introduce a reference that nothing checks. Public
+    Collected in one place because six node types do it in six different fields, and a
+    seventh would otherwise be able to introduce a reference that nothing checks. Public
     because the compiler needs the same answer when it decides what a selection covers.
     """
     from app.models.graph_designer import LOOP_NODE_TYPES
@@ -269,6 +312,21 @@ def referenced_nodes(node: dict) -> Set[str]:
     # report no dependency at all for the other.
     for binding in bindings_of(data).values():
         referenced.add(str(binding["node"]))
+
+    # The timer a pause, resume or stop acts on. A `start` names nothing — it *is* the
+    # timer — so this is empty for it, which is what makes a lone `start` testable on
+    # its own.
+    if node_type == NODE_TIMER:
+        timer_node = str(data.get("timer_node") or "").strip()
+        if timer_node:
+            referenced.add(timer_node)
+
+    # Both variable maps: a node's own `variables`, and an Email node's
+    # `variable_bindings`. The second was missing here, which made an Email node's
+    # upstream invisible to a selection run — it passed this check and then failed
+    # inside the resolver claiming the node had been "deleted, or skipped by a branch",
+    # which is the wrong thing to tell somebody who simply did not tick that box.
+    referenced |= node_variables.source_nodes(data)
 
     # A node never counts as reading itself. `do_until` conditions routinely test their
     # own cursor (`index`), and flagging that as a missing dependency would make every
@@ -929,6 +987,200 @@ async def _run_do_until(
     }
 
 
+async def _run_email(
+    node: dict,
+    state: Mapping[str, Any],
+    context: RunContext,
+) -> dict:
+    """
+    Queue one email, and put what was queued in the outputs.
+
+    The implementation is in ``app/services/email_dispatch/nodes/graph_designer_runner.py``
+    — a new module does not put its files inside another feature's folder, so what lives
+    here is the dispatch and the failure translation and nothing else.
+
+    **Queues; does not send.** Waiting on SMTP inside a node would make the run's
+    wall-clock depend on somebody else's mail server and turn a greylisting relay into a
+    failed graph. The queue already owns retrying. So the output says ``queued``, and
+    whether it arrived is a question for the delivery log.
+
+    Imported inside the function rather than at module scope, the same call this module
+    already makes for ``graph_service``: the email module imports the integrations path
+    reader, and a module-scope import here would put that whole chain behind every import
+    of the graph runners — including in tests that never touch email.
+    """
+    from app.services.email_dispatch.nodes import graph_designer_runner
+
+    try:
+        queued = await graph_designer_runner.run_email_node(
+            node, state, user_id=context.user_id, run_ref=str(context.run_id),
+        )
+    except Exception as exc:  # noqa: BLE001 — translated into this module's own failure
+        raise NodeFailure(graph_designer_runner.wrap_failure(exc)) from exc
+
+    return {"outputs": {str(node.get("id")): queued}}
+
+
+async def _run_timer(
+    node: dict,
+    state: Mapping[str, Any],
+    context: RunContext,
+) -> dict:
+    """
+    Start, pause, resume or stop a stopwatch, and report where it has got to.
+
+    Two things are written. The shared record goes into the ``timers`` channel under the
+    **starting** node's id, so all four boxes act on one stopwatch. The reportable
+    snapshot goes into ``outputs`` under **this** node's id, so a later node — usually an
+    email — can bind to ``elapsed_human`` or ``started_at`` the way it binds to anything
+    else.
+
+    The clock is read **once**, at the top, and threaded through. Reading it again for
+    the snapshot would let the record and the log disagree by the microseconds between
+    two calls, which is the kind of difference nobody can explain a week later.
+    """
+    data = node.get("data") or {}
+    node_id = str(node.get("id") or "")
+    label = node_label(node)
+    action = str(data.get("action") or "").strip().lower()
+
+    key = node_id if action == TIMER_START else str(data.get("timer_node") or "").strip()
+    record = (state.get("timers") or {}).get(key)
+    moment = timers.now()
+
+    try:
+        updated = _timer_transition(action, record, label, node_id, moment, context)
+    except timers.TimerError as exc:
+        raise NodeFailure(str(exc)) from exc
+
+    if updated is None:
+        raise NodeFailure(
+            f"'{label}' has no action chosen. A Timer node must Start, Pause, Resume "
+            "or Stop a timer."
+        )
+
+    snapshot = timers.snapshot(updated, action)
+
+    return {
+        "timers": {key: updated},
+        "outputs": {node_id: snapshot},
+        "_message": _timer_message(action, snapshot),
+    }
+
+
+def _timer_transition(
+    action: str,
+    record: Optional[Mapping[str, Any]],
+    label: str,
+    node_id: str,
+    moment: Any,
+    context: RunContext,
+) -> Optional[dict]:
+    """
+    Which transition this action is, and whether the timer's phase allows it.
+
+    A second *start* is the one case that depends on where the box sits. Inside a loop
+    body it means "this pass begins now" and the timer restarts, carrying what earlier
+    passes measured; anywhere else it is the author starting a timer twice, which is a
+    mistake with no sensible reading. The difference is not guessed — ``enclosing_loop``
+    is set by the compiler, which is the only thing that knows the drawing's nesting.
+    """
+    if action == TIMER_START:
+        if record is None:
+            return timers.started(label, node_id, moment)
+
+        if context.enclosing_loop:
+            return timers.restarted(record, moment)
+
+        raise timers.TimerError(
+            f"The timer '{label}' has already been started. A timer is started once — "
+            "use a Timer set to Stop to end it, or Resume if you paused it."
+        )
+
+    if record is None:
+        raise timers.TimerError(
+            f"'{label}' acts on a timer that has not been started on this path. It may "
+            "be on a branch this run did not take."
+        )
+
+    if action == TIMER_PAUSE:
+        return timers.paused(record, moment)
+
+    if action == TIMER_RESUME:
+        return timers.resumed(record, moment)
+
+    if action == TIMER_STOP:
+        return timers.stopped(record, moment)
+
+    return None
+
+
+def _timer_message(action: str, snapshot: Mapping[str, Any]) -> str:
+    """What the log says this box did. The elapsed time where there is one worth reading."""
+    name = snapshot.get("timer") or "timer"
+
+    if action == TIMER_START:
+        restarts = int(snapshot.get("restarts") or 0)
+        return f"Started '{name}' (pass {restarts + 1})." if restarts else f"Started '{name}'."
+
+    if action == TIMER_PAUSE:
+        return f"Paused '{name}' at {snapshot.get('elapsed_human')}."
+
+    if action == TIMER_RESUME:
+        return f"Resumed '{name}'."
+
+    return f"Stopped '{name}' at {snapshot.get('elapsed_human')}."
+
+
+async def _run_wait(
+    node: dict,
+    state: Mapping[str, Any],
+    context: RunContext,
+) -> dict:
+    """
+    Pause the run for a fixed number of seconds.
+
+    **The wait does not survive a restart.** ``stop_all_runs`` cancels every live run on
+    shutdown, so a deploy landing inside one leaves the run cancelled and nothing resumes
+    it. That is the price of not building a second scheduler for a node whose common case
+    is thirty seconds, and it is why the ceiling is fifteen minutes rather than hours —
+    anything longer belongs in an Integrations schedule, which is persisted.
+
+    The duration is re-validated rather than trusted from the save, the same call
+    ``_run_value`` makes about its JSON: ``graph_data`` is JSONB and can be edited by
+    hand, and there is no ``asyncio.wait_for`` around a runner in this package to catch
+    it if this number is wrong.
+
+    Cancellation is not caught here. ``run_node`` closes the step row and re-raises, so
+    a stopped run leaves a log that says how far it got.
+    """
+    data = node.get("data") or {}
+    label = node_label(node)
+
+    try:
+        seconds = timers.validated_wait_seconds(data.get("seconds"), label)
+    except timers.TimerError as exc:
+        raise NodeFailure(str(exc)) from exc
+
+    started_at = timers.now()
+    monotonic = time.monotonic()
+
+    await timers.sleep(seconds)
+
+    waited = round(time.monotonic() - monotonic, 3)
+
+    return {
+        "outputs": {
+            str(node.get("id")): {
+                "waited_seconds": waited,
+                "started_at": started_at.isoformat(),
+                "ended_at": timers.now().isoformat(),
+            },
+        },
+        "_message": f"Waited {seconds}s.",
+    }
+
+
 async def _run_success(
     node: dict,
     state: Mapping[str, Any],
@@ -979,9 +1231,21 @@ _RUNNERS: Dict[str, Callable] = {
     NODE_BRANCH: _run_branch,
     NODE_FOR_EACH: _run_for_each,
     NODE_DO_UNTIL: _run_do_until,
+    NODE_EMAIL: _run_email,
+    NODE_TIMER: _run_timer,
+    NODE_WAIT: _run_wait,
     NODE_SUCCESS: _run_success,
     NODE_FAILURE: _run_failure,
 }
+
+# A node type in the vocabulary with no runner would save, validate, compile, and then
+# fail at the one moment it matters. Asserted at import so the mistake stops the
+# application rather than one graph — the same call `variable_sources` makes about its
+# resolvers and `node_variables` about its field table.
+assert set(_RUNNERS) == set(NODE_TYPE_VALUES), (
+    "the node runners and the node vocabulary disagree: "
+    f"{set(_RUNNERS) ^ set(NODE_TYPE_VALUES)}"
+)
 
 
 # --------------------------------------------------------------------------

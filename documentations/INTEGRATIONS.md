@@ -10,6 +10,16 @@ The Integration Platform — a workflow somebody drew, moving records between sy
 > exactly that moment had never executed, and two of them were broken. Those changes are
 > recorded inline below as **Reconciled** notes.
 >
+> **Brevo has since landed too, and it is the first connector that writes**:
+> [BREVO_CONNECTOR.md](BREVO_CONNECTOR.md). Its contacts half needed no runtime changes at
+> all, which is the claim the Shopify work was making. It arrived with the **Apps gallery**
+> — see §The Apps gallery — which is where the feature now opens.
+>
+> **Its eCommerce half then needed exactly one**: `OperationSpec.rate_limits` and
+> `rate_limit_group`, because Brevo meters the endpoints behind a single connection at rates
+> that differ by 180× and one connector-wide figure has to be wrong for most of them. See
+> §Rate limits and the connector's own page.
+>
 > Still specification: GoHighLevel, inbound webhooks, SAP, the `agent` node, and **Shopify
 > writes** (its mutations take no idempotency key). The sections describing them — §Webhooks
 > and the OAuth half of §Credentials — say so where they begin.
@@ -222,7 +232,7 @@ that runs first and conflating them reports an unsent optional field as a type e
 app/services/integrations/
   errors.py            NodeFailure, IntegrationFailure, RunCancelled
   engine/              the run: state, rules, compiler, runners, queue, scheduler
-  connectors/          spec.py, registry.py, rest_generic/, shopify/, gohighlevel/, sap_odata/
+  connectors/          spec.py, registry.py, rest_generic/, shopify/, brevo/, gohighlevel/, sap_odata/
   runtime/             the HTTP layer: pooling, request building, rate limits, retries, paging
   credentials/         encryption per column, token refresh
   mapping/             paths, field maps, record validation, dedupe
@@ -340,6 +350,75 @@ never had a token.
 
 `integration_oauth_states` stores `sha256(state)` and never the state value, so reading the
 database does not let you complete somebody's install.
+
+---
+
+# The Apps gallery
+
+The feature has three pages, and one nav entry that lands on the first of them:
+
+| tab | route | what it is |
+|---|---|---|
+| **Apps** | `/integrations/apps/` | The connectors in this build, as tiles. Connect one from here |
+| **Connections** | `/integrations/connections/` | The connections you have. Test, edit, revoke, delete |
+| **Workflows** | `/integrations/` | The workflows, their last run, and the canvas |
+
+**An app is not a fourth kind of thing.** It is a `ConnectorSpec` from the registry with this
+user's connection counts beside it, and connecting one calls the same
+`connection_service.create_connection` the Connections page calls. There is no app table, no
+app model, and no second way to store a credential — which is the only reason a gallery is
+worth having at all. The route file is
+[app/routes/integrations/app_routes.py](../app/routes/integrations/app_routes.py) and the
+service function is `connection_service.list_apps`.
+
+## Three counts, not a "connected" flag
+
+A connection whose credential was revoked still has a row — deliberately, because workflows
+point at it by uuid and deleting it would turn "reconnect this" into a step whose connection
+no longer exists. So a tile that read "connected" off the existence of a row would tell
+somebody their sync is fine while it fails every night.
+
+`list_apps` therefore returns `connection_count` plus **three** buckets that add up to it:
+
+| bucket | what is in it |
+|---|---|
+| `ready_count` | active, switched on, and nothing to do |
+| `attention_count` | `needs_reauth` or `revoked` — no button here fixes either |
+| `paused_count` | switched off by its owner |
+
+Switched off is its own bucket rather than folded into attention, and that is the decision
+worth carrying elsewhere: parking a connection is something somebody chose, and a page that
+nagged about it would train people to ignore the one badge that means a token was revoked.
+
+## The icon comes from the connector, not from the template
+
+`ConnectorSpec` carries `icon` (a Line Awesome class) and `accent` (a brand colour), both
+with defaults, both passed through `describe_connectors()`. A mapping in the template keyed
+by `connector_id` would be a second list of every connector, in markup, falling behind the
+registry — which shows up as a new app rendering as a blank square. Neither field says
+anything about where a request goes, which is why they may reach a browser at all.
+
+## The connect dialog is rendered per app, not switched by script
+
+`GET /integrations/apps/{connector_id}/connect-form` returns the dialog's body for that one
+connector: an API address for generic REST, a shop domain for Shopify, neither for Brevo. A
+field that does not apply is **absent**, not hidden — nothing disabled to re-enable, nothing
+empty to post.
+
+This is the opposite choice from the Connections page's Add dialog, and both are right. There
+the user picks the system *inside* the form, so the fields have to rearrange in the browser
+and `static/js/integration_connections.js` does it from `data-` attributes. Here the app was
+already chosen by clicking its tile, so the server knows which questions it has.
+
+**The connector comes from the path and cannot be talked out of it.** The handler passes
+`connector_id` to `ConnectionCreateRequest.from_form` as an *override*, and overrides are
+applied after the body — so a form posting a different `connector_id` still creates the
+tile's connector or nothing. Without that, the Brevo dialog (which asks for no address)
+could store a credential under generic REST's rules, where a typed base URL is allowed.
+
+A refusal is a **200** carrying the sentence and no `data-success` marker, so the dialog stays
+open with what was typed still in it; the tiles ride back out-of-band on success because the
+counts on them have just changed.
 
 ---
 
@@ -643,10 +722,15 @@ the run moved.
 ## An operation is data, not a function
 
 A connector is a code-side `ConnectorSpec`; an operation within it is a frozen
-`OperationSpec` describing a method, a path, its parameters, how the response paginates and
-where the records are in it. Generic REST stores its operations as `integration_rest_operations`
-rows whose columns *are* those fields, and `load_operation()` returns the same frozen
-dataclass either way. **The runtime has one code path.**
+`OperationSpec` describing a method, a path, its parameters, how the response paginates,
+where the records are in it and — optionally — the send rate it is allowed. Generic REST
+stores its operations as `integration_rest_operations` rows whose columns *are* those
+fields, and `load_operation()` returns the same frozen dataclass either way. **The runtime
+has one code path.**
+
+The allowance is the one field that is deliberately *not* in that correspondence: no column
+backs `rate_limits`, and `load_operation` does not read it. See §Rate limits for why a row
+must not be able to set its own.
 
 Three reasons, in order of weight.
 
@@ -701,6 +785,33 @@ requests per day per location**. That counter is persisted in `integration_rate_
 an atomic upsert, and requests are refused locally at 95% of the cap. An in-memory daily
 counter resets on every deploy, and a marketplace app that blows its daily cap gets suspended.
 This is the single most account-endangering item in the module.
+
+**An operation may declare its own allowance, and name the family it shares one with.**
+`OperationSpec.rate_limits` and `rate_limit_group`, both optional and both `None`/empty for
+almost every operation — in which case the call spends the connector's single figure from a
+bucket keyed on the connection alone, exactly as before the fields existed.
+
+Brevo is why they exist. One connection reaches endpoints it meters at 10/second (contacts),
+5/second (order writes), 2/second (product writes) and **100 per hour** (everything else).
+One connector-wide figure has to be one of those: the slowest throttles an order sync to a
+record every 36 seconds, and the fastest exhausts the retry engine's three attempts against
+the hourly ceiling and fails the run.
+
+Two properties are worth knowing before declaring one:
+
+* **The group names the bucket, not the operation.** A vendor quota is usually shared by a
+  *family* of endpoints rather than granted per endpoint — Brevo's hundred-an-hour covers
+  four of its operations — so a bucket each would spend four times the allowance and read as
+  correct until the 429s. `validated()` refuses a group that names no allowance, because that
+  combination reads like an operation with its own budget and silently has not got one.
+* **It is not in `canonical()`, and not loadable from a row.** Not hashed, because a limit
+  decides *when* a request leaves and never what it says — retuning one when a vendor
+  publishes new figures must not move every fingerprint at once and make every prior run look
+  like it ran something else. Not loadable, because an `integration_rest_operations` row is a
+  form somebody filled in, and an operation that could set its own send rate would let that
+  form decide how fast we hammer a third party from our egress address.
+
+The daily cap stays connector-wide: it is an account-level ceiling, not a per-endpoint one.
 
 **Pagination is declarative**, seven kinds, with three rules that are each somebody's
 afternoon:
@@ -1141,6 +1252,11 @@ Each of these is a decision, not an oversight.
 
 # Related
 
+* [SHOPIFY_CONNECTOR.md](SHOPIFY_CONNECTOR.md) — the first vendor connector, read-only, and
+  the four runtime changes it forced
+* [BREVO_CONNECTOR.md](BREVO_CONNECTOR.md) — the first connector that writes, why one
+  literal (`updateEnabled`) is what makes its writes retry-safe, and why its eCommerce
+  section forced per-operation rate limits
 * [GRAPH_DESIGNER.md](GRAPH_DESIGNER.md) — the drawn LangGraph this module is not, and the
   source of most of its structural decisions
 * [DOWNLOADER_AGENTS.md](DOWNLOADER_AGENTS.md) — the table-as-a-queue, the heartbeat, the

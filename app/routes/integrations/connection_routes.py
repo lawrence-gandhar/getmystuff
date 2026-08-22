@@ -85,6 +85,7 @@ class IntegrationConnectionController(Controller):
                     registry.describe_connectors()
                 ),
                 "active": "integrations",
+                "tab": "connections",
             },
         )
 

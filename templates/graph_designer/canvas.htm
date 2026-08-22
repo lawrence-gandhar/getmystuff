@@ -1,5 +1,5 @@
 {% extends "base/layout.htm" %}
-{% block title %}{{ graph.name }} | Graph Designer{% endblock %}
+{% block title %}{{ graph.name }} | Pipelines{% endblock %}
 
 {% block extra_css %}
 <link href="/static/css/graph_designer.css" rel="stylesheet">
@@ -35,6 +35,14 @@
         </div>
 
         <div class="d-flex align-items-center gap-1 flex-wrap">
+            {# Own tab, and deliberately here as well as on the library page: the canvas is
+               where somebody needs to know what a port or a binding mode means, and going
+               back for it would mean leaving unsaved work. #}
+            <a class="btn btn-sm btn-outline-secondary" href="/graph-designer/help"
+               target="_blank" rel="noopener"
+               title="Every node explained, with a worked example per scenario">
+                <i class="las la-question-circle"></i> Help
+            </a>
             <button class="btn btn-sm btn-outline-primary" type="button"
                     data-bs-toggle="offcanvas" data-bs-target="#gdPalette">
                 <i class="las la-plus"></i> Add Node
@@ -207,7 +215,7 @@
         saveUrl: "/graph-designer/{{ graph.uuid }}/save",
         graphUrl: "/graph-designer/{{ graph.uuid }}/graph",
         runsUrl: "/graph-designer/{{ graph.uuid }}/runs",
-        nodeOptionsUrl: "/graph-designer/node-options",
+        nodeOptionsUrl: "/graph-designer/{{ graph.uuid }}/node-options",
         openRun: {{ selected_run | tojson }},
     });
 </script>

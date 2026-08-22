@@ -1,0 +1,117 @@
+{# One email in full: what was sent, and every attempt at sending it.
+
+   This is the pane that answers "why was this an hour late" — which a counter on
+   the row cannot, and which is the whole reason email_message_attempts is its own
+   table. #}
+<dl class="row mb-3 small">
+    <dt class="col-sm-3">Subject</dt>
+    <dd class="col-sm-9 fw-semibold">{{ message.subject }}</dd>
+
+    <dt class="col-sm-3">From</dt>
+    <dd class="col-sm-9">{{ message.from_email }}</dd>
+
+    <dt class="col-sm-3">To</dt>
+    <dd class="col-sm-9">{{ message.to_addresses | join(', ') }}</dd>
+
+    {% if message.cc_addresses %}
+    <dt class="col-sm-3">Cc</dt>
+    <dd class="col-sm-9">{{ message.cc_addresses | join(', ') }}</dd>
+    {% endif %}
+
+    {% if message.bcc_addresses %}
+    <dt class="col-sm-3">Bcc</dt>
+    <dd class="col-sm-9">{{ message.bcc_addresses | join(', ') }}</dd>
+    {% endif %}
+
+    <dt class="col-sm-3">Sent through</dt>
+    <dd class="col-sm-9">{{ message.smtp_host or 'Unknown' }}</dd>
+
+    <dt class="col-sm-3">Came from</dt>
+    <dd class="col-sm-9">
+        {{ message.source_label }}
+        {% if message.source_ref %}<code class="small">{{ message.source_ref }}</code>{% endif %}
+    </dd>
+
+    <dt class="col-sm-3">Template</dt>
+    <dd class="col-sm-9">{{ message.template_name or 'Deleted since' }}</dd>
+
+    {% if message.error_message %}
+    <dt class="col-sm-3 text-danger">Problem</dt>
+    <dd class="col-sm-9 text-danger">{{ message.error_message }}</dd>
+    {% endif %}
+
+    {% if message.smtp_response %}
+    <dt class="col-sm-3">Server said</dt>
+    <dd class="col-sm-9"><code class="small">{{ message.smtp_response }}</code></dd>
+    {% endif %}
+</dl>
+
+<h6 class="fw-semibold">Attempts</h6>
+{% if message.attempts %}
+<div class="table-responsive mb-3">
+    <table class="table table-sm align-middle mb-0">
+        <thead class="table-light">
+            <tr>
+                <th style="width:60px;">#</th>
+                <th style="width:100px;">Outcome</th>
+                <th>Detail</th>
+                <th style="width:90px;">Took</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for attempt in message.attempts %}
+            <tr>
+                <td>{{ attempt.attempt }}</td>
+                <td>
+                    {% if attempt.status == 'sent' %}
+                    <span class="badge bg-success-subtle text-success">Sent</span>
+                    {% else %}
+                    <span class="badge bg-danger-subtle text-danger">Failed</span>
+                    {% endif %}
+                </td>
+                <td class="small">
+                    {{ attempt.error_message or attempt.smtp_response or '—' }}
+                    {% if attempt.status != 'sent' %}
+                    <div class="text-muted">
+                        {% if attempt.retryable %}Worth retrying{% else %}Not retried{% endif %}
+                    </div>
+                    {% endif %}
+                </td>
+                <td class="small">
+                    {% if attempt.duration_ms is not none %}{{ attempt.duration_ms }} ms{% else %}—{% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<p class="text-muted small">Not tried yet — it is still waiting in the queue.</p>
+{% endif %}
+
+<h6 class="fw-semibold">What was sent</h6>
+{# Shown as source, never injected as live markup: an operator can put anything in a
+   template body, and rendering it here would run it with their session — a stored-XSS
+   hole opened by the log viewer rather than by the email itself. #}
+<ul class="nav nav-pills mb-2" role="tablist">
+    <li class="nav-item">
+        <button class="nav-link active" data-bs-toggle="pill" data-bs-target="#sentHtml"
+                type="button">HTML</button>
+    </li>
+    {% if message.body_text %}
+    <li class="nav-item">
+        <button class="nav-link" data-bs-toggle="pill" data-bs-target="#sentText"
+                type="button">Plain text</button>
+    </li>
+    {% endif %}
+</ul>
+<div class="tab-content">
+    <div class="tab-pane fade show active" id="sentHtml">
+        <pre class="border rounded bg-light p-3 small mb-0" style="white-space: pre-wrap; max-height: 300px; overflow:auto;">{{ message.body_html }}</pre>
+    </div>
+    {% if message.body_text %}
+    <div class="tab-pane fade" id="sentText">
+        <pre class="border rounded bg-light p-3 small mb-0" style="white-space: pre-wrap; max-height: 300px; overflow:auto;">{{ message.body_text }}</pre>
+    </div>
+    {% endif %}
+</div>

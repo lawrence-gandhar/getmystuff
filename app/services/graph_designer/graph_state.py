@@ -86,6 +86,21 @@ class GraphState(TypedDict, total=False):
         cursor changes on every pass — the same reason ``agent_values`` travels in
         ``ChainState`` rather than being captured.
 
+    ``timers``
+        One stopwatch per ``timer`` node set to *start*, keyed by that node's id:
+        ``{"started_at": ..., "segments": [...], "phase": ..., "carried_seconds": ...}``.
+        Its own channel rather than a corner of ``outputs`` for two reasons. A *pause*
+        box writing the shared record into ``outputs`` would have to write it under the
+        **start** node's key — misreporting what that node produced, since a step row's
+        ``output_preview`` is built from exactly that key. And the pause box needs the
+        record to survive under the start node's name while each box still reports its
+        own snapshot, which one map cannot do for two purposes.
+
+        Merged like ``loops``, and last-write-wins per key is right for the same reason:
+        a transition returns the whole updated record, so the newest one is the current
+        one. Read as ``state.get("timers") or {}`` everywhere — a run checkpointed
+        before this key existed has no such entry.
+
     ``answers``
         What a human supplied, keyed by the ``human`` node's id. Separate from
         ``outputs`` even though a human node also writes there, because a resumed run
@@ -125,6 +140,7 @@ class GraphState(TypedDict, total=False):
 
     outputs: Annotated[Dict[str, Any], _merge]
     loops: Annotated[Dict[str, Any], _merge]
+    timers: Annotated[Dict[str, Any], _merge]
     answers: Annotated[Dict[str, Any], _merge]
     errors: Annotated[Dict[str, str], _merge]
     inputs: Dict[str, Any]
@@ -143,6 +159,7 @@ def initial_state(run_uuid: Any, inputs: Optional[Mapping[str, Any]] = None) -> 
     return {
         "outputs": {},
         "loops": {},
+        "timers": {},
         "answers": {},
         "errors": {},
         "inputs": dict(inputs or {}),
@@ -331,6 +348,16 @@ def state_preview(state: Mapping[str, Any]) -> dict:
                 "total": len((loop or {}).get("items") or []),
             }
             for node_id, loop in (state.get("loops") or {}).items()
+        },
+        # Shape only, like the outputs above: whether it is still running and how long
+        # it has counted. The segment list stays out — it grows with every pause and
+        # is available in full on the timer node's own `output_preview`.
+        "timers": {
+            node_id: {
+                "phase": str((timer or {}).get("phase") or ""),
+                "elapsed_seconds": (timer or {}).get("elapsed_seconds"),
+            }
+            for node_id, timer in (state.get("timers") or {}).items()
         },
         "answers": {
             node_id: _capped_scalar(answer)

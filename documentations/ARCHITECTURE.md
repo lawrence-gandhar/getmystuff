@@ -27,23 +27,30 @@ db/          shared infra (base.py, db_sessions.py, db_utils.py, models.py) + pe
 routes/      per-feature subfolders (auth/, dashboard/, datasource/, ai_settings/, ai_analytics/,
              chatbot/, chatbot_analytics/, flow_builder/, workspaces/, data_agents/,
              tool_configs/, tool_graphs/, graph_designer/, sql_assist/, query_test/,
-             deep_agents/, downloader_agents/, agent_recursive_dataframes/)
+             deep_agents/, downloader_agents/, agent_recursive_dataframes/, integrations/,
+             email_dispatch/ — four authenticated controllers under /emails plus one
+             unauthenticated one under /public/emails for inbound webhooks)
 services/    per-feature subfolders (datasource/, ai_settings/, ai_analytics/, chatbot/,
              chatbot_analytics/, flow_builder/, ai_inbuilt/, workspaces/, data_agents/,
              tool_configs/, tool_graphs/, graph_designer/, sql_assist/, query_test/,
              deep_agents/, downloader_agents/ — itself split into base/, csv/, xls/,
-             parquet/ — agent_recursive_dataframes/)
+             parquet/ — agent_recursive_dataframes/, email_dispatch/ — with nodes/ holding
+             one runner per canvas, so the Email node's behaviour lives with the email
+             module rather than inside the three features that call it)
 models/      per-feature subfolders (user/, datasource/, ai_settings/, chatbot/, ai_analytics/,
              subscriptions/, flow_builder/, ai_inbuilt/, workspaces/, data_agents/,
-             tool_configs/, downloader_agents/, graph_designer/)
+             tool_configs/, downloader_agents/, graph_designer/, integrations/,
+             email_dispatch/)
 schemas/     shared infra (base.py, common.py) + per-feature subfolders (auth/, datasource/,
              workspaces/, data_agents/, tool_configs/, ai_settings/, ai_analytics/, chatbot/,
              chatbot_analytics/, flow_builder/, sql_assist/, query_test/, tool_graphs/,
              graph_designer/, deep_agents/, downloader_agents/,
-             agent_recursive_dataframes/)
+             agent_recursive_dataframes/, integrations/, email_dispatch/)
 utils/       flat helper modules (crypto.py, file_utils.py, validators.py, query_joins.py,
              sql_guard.py, datasource_status.py, http_responses.py, csv_to_db.py,
-             csv_to_parquet.py, turn_recorder.py)
+             csv_to_parquet.py, turn_recorder.py, outbound_http.py, type_coercion.py,
+             events.py — the in-process event bus, here rather than in the feature that
+             consumes it because the publishers are graph and integration runs)
 templates/
 static/
 ```
@@ -88,7 +95,12 @@ each refusal message means. It supersedes nothing — each page below stays the 
 its own feature — but it is the one page to read first, and the one to give somebody who has
 to operate this without reading the source.
 
-Feature deep-dives: [FLOW_BUILDER.md](FLOW_BUILDER.md),
+Feature deep-dives: [FLOW_BUILDER.md](FLOW_BUILDER.md) (the drawn conversation the widget
+walks before the AI gets a turn — eleven blocks, the two switches that make one live, and the
+flat string map that is the whole of a visitor's session; also served in-app at
+`/flow-builder/help`, from `templates/flow_builder/help.htm`, the third instance of the
+help-page shape, whose central point is the one thing operators reliably assume wrongly:
+message text is sent verbatim and does not interpolate `{{VARIABLES}}`),
 [CHATBOT_AI_SETTINGS.md](CHATBOT_AI_SETTINGS.md) (per-agent prompt, prompt variables,
 language-model choice, webhook actions and flow attachment),
 [CHATBOT_ANALYTICS.md](CHATBOT_ANALYTICS.md) (per-turn performance logging and the
@@ -134,7 +146,10 @@ it once, values bound rather than written in either way; and once published, **f
 can run it — a data agent as one of its tools, every agent in a workspace it is shared with,
 a tool config that embeds it as a nested child, or a Run Graph step in a conversation flow,
 with the pause a question causes propagating into all four because a pause is an outcome
-rather than an error),
+rather than an error — also served in-app at `/graph-designer/help`, from
+`templates/graph_designer/help.htm`, the operator-facing form of that page: every node, one
+worked example per scenario, the limits and every refusal with its fix, linked from both the
+library and the canvas so nobody has to leave a drawing to find out what a port means),
 [DEEP_AGENTS.md](DEEP_AGENTS.md) (running a data agent's tool configs as real queries so a
 chatbot answers from tool results and the language model never reads the database),
 [DOWNLOADER_AGENTS.md](DOWNLOADER_AGENTS.md) (an answer capped at 100 printed rows plus the
@@ -180,6 +195,27 @@ before the fix read as an empty page and ended the run *green*, making a refused
 empty store indistinguishable. Also the shop domain as the module's sharpest security control,
 checked twice, because it is user-supplied text that becomes the host of a request carrying the
 merchant's token),
+[BREVO_CONNECTOR.md](BREVO_CONNECTOR.md) (the second vendor connector and the **first one that
+writes** — Brevo's v3 REST API across two sections, contacts and eCommerce, on a fixed
+address that a stored base URL cannot override and an account key in an `api-key` header. Worth
+reading for the property Shopify lacks and this one earns with a single literal: `updateEnabled:
+true` makes the contact create an upsert matched on the email address, which is what makes
+`idempotent=True` a fact rather than a claim — a create that timed out *after* reaching Brevo
+lands on the same contact when the engine retries it, and a re-run of yesterday's sync updates
+people instead of failing on every one of them. The eCommerce half — orders, products and
+categories — is the application's first real *destination*, and repeats that argument three
+times with the twist that Brevo upserts orders natively and needs the flag for the other two, so
+one of the three writes deliberately does not send it. Also why transactional email is not an
+operation on it: a send cannot be made idempotent, and every retry is another copy in somebody's
+inbox. The contacts half needed no runtime changes at all, which is the claim the Shopify work
+was making; the eCommerce half needed exactly one, `OperationSpec.rate_limits` plus a
+`rate_limit_group`, because Brevo meters the endpoints behind one connection at rates differing
+by 180× — and the group matters more than the per-operation part, since its hundred-an-hour is
+one shared pool and a bucket per endpoint would spend four times it while reading as correct.
+It also arrived with the **Apps gallery**, where an "app" is a registry `ConnectorSpec`
+plus this user's connection counts rather than a new entity, and a tile counts *working*,
+*needs attention* and *switched off* as three separate numbers because a revoked connection
+still has a row and a parked one is not a problem to report),
 [INTEGRATIONS_AI.md](INTEGRATIONS_AI.md) (the AI layer of that platform, kept on its own page
 because the interesting part is what a model is *not* allowed to write: the honest reading of
 "always act as Agent AI" for an engine that has to be deterministic, the catalogue built from
@@ -187,6 +223,25 @@ real rows so a connector the user has not connected is simply absent from the pr
 layers of validation a draft passes before anybody sees it, why resolution *replaces* a model's
 spelling with a real uuid and why there is no fuzzy matching, and the measurement showing the
 in-built local model cannot do the task at its shipped context size),
+[EMAIL_DISPATCH.md](EMAIL_DISPATCH.md) (the platform's first outbound notification path —
+before it, every workflow this application can build ended silently. SMTP servers, templates
+with declared `{{PLACEHOLDERS}}`, an Email node on all three canvases, event and webhook
+triggers, and one permanent row per message. Worth reading for the five decisions it turns
+on: a table rather than a broker for the third time; rendering at *enqueue* so the log says
+what was actually sent and a retry is byte-identical; a dead worker that **fails** its
+message rather than resuming it, because the relay may already have delivered it and nobody
+can tell; sending serialised per SMTP server *inside the claim*, because a burst of parallel
+connections gets a sending domain blocked and that is not something a retry fixes; and a
+binding that finds nothing yielding nothing, so the template's own default or required flag
+decides rather than one hard-coded answer. Also where "dynamic variables from the Agents
+section" actually resolves, and why the integrations Email node is the dangerous one),
+[EVENT_BUS.md](EVENT_BUS.md) (the small in-process publish/subscribe the email triggers ride
+on — shared infrastructure rather than part of that module, because the publishers are graph
+runs and integration runs and none of them should import an email module to say something
+happened. Strict on subscribe and forgiving on publish, and the two reasons that asymmetry is
+right; why every name in the catalogue has a real publisher and which two candidates were
+dropped rather than faked; and the honest cost of publishing after the commit instead of
+building a durable outbox),
 [DOCKER_AND_LOCAL_LLM.md](DOCKER_AND_LOCAL_LLM.md) (why the app runs in a container on
 Python 3.12, and how the in-built Ollama models are configured and measured),
 [SCHEMAS.md](SCHEMAS.md) (the Pydantic layer — one package per feature, every request parsed

@@ -114,3 +114,37 @@ class TestReferencedNodes:
 
     def test_a_node_with_no_references_has_none(self) -> None:
         assert referenced_nodes(node("q", "sql", sql_query="SELECT 1")) == set()
+
+    def test_a_nodes_own_variables_are_dependencies(self) -> None:
+        assert referenced_nodes(node("q", "sql", variables={
+            "TABLE": {"source": "node", "node_id": "v"},
+        })) == {"v"}
+
+    def test_an_email_nodes_bindings_are_dependencies(self) -> None:
+        """
+        This was missing, and the symptom was a wrong diagnosis rather than a missed
+        check: a selection run excluding the bound node passed the dependency test and
+        then failed inside the resolver saying the node "may have been deleted, or
+        skipped by a branch" — neither of which was true.
+        """
+        assert referenced_nodes(node("mail", "email", variable_bindings={
+            "CUSTOMER": {"source": "node", "node_id": "q"},
+        })) == {"q"}
+
+    def test_a_fixed_value_is_not_a_dependency(self) -> None:
+        assert referenced_nodes(node("q", "sql", variables={
+            "LIMIT": {"source": "literal", "value": "50"},
+        })) == set()
+
+    def test_a_timer_depends_on_the_one_that_started_it(self) -> None:
+        """
+        What makes a selection containing a Stop but not its Start refuse at the keyboard
+        rather than fail mid-run claiming the timer was never started.
+        """
+        assert referenced_nodes(node(
+            "stop", "timer", action="stop", timer_node="begin",
+        )) == {"begin"}
+
+    def test_a_timer_that_starts_one_depends_on_nothing(self) -> None:
+        """It *is* the timer, so a lone Start is testable on its own."""
+        assert referenced_nodes(node("begin", "timer", action="start")) == set()

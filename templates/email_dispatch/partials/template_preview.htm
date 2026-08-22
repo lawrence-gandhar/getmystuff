@@ -1,0 +1,50 @@
+{# The preview pane. Rendered with the template's declared defaults where it has
+   them and «NAME» stand-ins where it does not — never with real data, and it sends
+   nothing.
+
+   A render failure is shown here rather than raised, because a half-written
+   template is the normal case while somebody is typing and a 400 would replace the
+   pane they are working in. #}
+{% if not ok %}
+<div class="alert alert-danger mb-0">
+    <i class="las la-exclamation-triangle"></i> {{ error }}
+</div>
+{% else %}
+<div class="mb-3">
+    <div class="text-muted small text-uppercase">Subject</div>
+    <div class="fw-semibold">{{ subject }}</div>
+</div>
+
+<ul class="nav nav-pills nav-sm mb-2" role="tablist">
+    <li class="nav-item">
+        <button class="nav-link active" data-bs-toggle="pill" data-bs-target="#previewHtml"
+                type="button">HTML</button>
+    </li>
+    <li class="nav-item">
+        <button class="nav-link" data-bs-toggle="pill" data-bs-target="#previewText"
+                type="button">Plain text</button>
+    </li>
+</ul>
+
+<div class="tab-content">
+    <div class="tab-pane fade show active" id="previewHtml">
+        {# The rendered HTML is shown as source, not injected as live markup. An operator
+           can paste anything into a template body, and rendering it into this page would
+           execute it here with their session — a stored-XSS hole opened by the preview
+           feature rather than by the email. The mail client is where it gets to be HTML. #}
+        <pre class="border rounded bg-light p-3 small mb-0" style="white-space: pre-wrap;">{{ body_html }}</pre>
+        <div class="form-text">
+            Shown as source on purpose — this pane never runs a template's markup.
+        </div>
+    </div>
+    <div class="tab-pane fade" id="previewText">
+        {% if body_text %}
+        <pre class="border rounded bg-light p-3 small mb-0" style="white-space: pre-wrap;">{{ body_text }}</pre>
+        {% else %}
+        <p class="text-muted small mb-0">
+            This template has no plain-text version, so the email goes out as HTML only.
+        </p>
+        {% endif %}
+    </div>
+</div>
+{% endif %}

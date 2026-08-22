@@ -46,6 +46,7 @@ from typing import Any, AsyncIterator, Dict, Mapping, Optional, Sequence
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.db_utils import CRUDQueryBuilder
+from app.utils import events
 from app.models.integrations import (
     RUN_CANCELLED,
     RUN_FAILED,
@@ -398,7 +399,55 @@ async def _settle(run_id: int, final: Mapping[str, Any], compiled: Any) -> str: 
             error_message=message or None,
         )
 
+    # Announce it, outside the session and after the commit, so a subscriber opening its own
+    # session reads a database that agrees with the event. `publish` never raises, so an
+    # email trigger with a broken template cannot change how this run is recorded.
+    await _announce_settled(run_id, status, message, totals)
+
     return status
+
+
+async def _announce_settled(
+    run_id: int,
+    status: str,
+    message: str,
+    totals: Mapping[str, int],
+) -> None:
+    """
+    Publish ``integration_run.settled``.
+
+    Carries the record counters as well as the status, because "the sync finished" and "the
+    sync finished having failed 3 of 50,000 records" are the two different things somebody
+    would want an email about, and ``partial`` alone does not say which.
+
+    Swallows its own failures: the run is already recorded, and an event that could not be
+    published is worth a log line and nothing more.
+    """
+    try:
+        async with run_store.open_session() as db:
+            run = await run_crud.get_one(db, {"id": run_id})
+            if run is None:
+                return
+            flow = await flow_crud.get_one(db, {"id": run.flow_id})
+
+            await events.publish(
+                events.EVENT_INTEGRATION_RUN_SETTLED,
+                {
+                    "run_uuid": str(run.uuid),
+                    "status": status,
+                    "flow_name": flow.name if flow else "",
+                    "flow_uuid": str(flow.uuid) if flow else "",
+                    "failure_message": message,
+                    "written": totals.get("written", 0),
+                    "failed": totals.get("failed", 0),
+                    "skipped": totals.get("skipped", 0),
+                    "invalid": totals.get("invalid", 0),
+                },
+                user_id=run.user_id,
+                workspace_id=flow.workspace_id if flow else None,
+            )
+    except Exception:  # noqa: BLE001 — announcing must not fail a finished run
+        logger.exception("Could not announce that integration run %s settled", run_id)
 
 
 def _preview(final: Mapping[str, Any], totals: Mapping[str, int]) -> dict:

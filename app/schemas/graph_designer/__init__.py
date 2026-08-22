@@ -4,6 +4,7 @@ from app.schemas.graph_designer.graph_designer_schemas import (  # noqa: F401
     MAX_SELECTED_NODES,
     GraphAttachRequest,
     GraphCreateRequest,
+    GraphEmailTemplateOption,
     GraphNodeOption,
     GraphNodeOptionsResponse,
     GraphRenameRequest,

@@ -1,0 +1,9 @@
+{# HTMX response for every delivery-log action, and the target of the filter and
+   refresh requests: the inline error (or a success marker) plus an out-of-band
+   refresh of the log table. #}
+{% if error %}
+<div class="alert alert-danger" data-success="false">{{ error }}</div>
+{% else %}
+<div data-success="true"></div>
+{% endif %}
+{% include "email_dispatch/partials/message_table.htm" %}

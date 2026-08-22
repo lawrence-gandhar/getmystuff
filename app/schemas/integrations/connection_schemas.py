@@ -384,6 +384,13 @@ class ConnectorView(ResponseSchema):
     connector_id: str = Field(title="Connector")
     label: str = Field(title="Name")
     description: str = Field(default="", title="Description")
+
+    # Presentation, from the connector's own spec rather than from a mapping in a
+    # template — see ``ConnectorSpec.icon``. Neither says anything about where a request
+    # goes, which is why they may reach a browser at all.
+    icon: str = Field(default="las la-plug", title="Icon")
+    accent: str = Field(default="#6c757d", title="Brand colour")
+
     auth_kind: str = Field(default="", title="Authentication")
     asks_for_base_url: bool = Field(default=False, title="Needs an address")
 
@@ -400,3 +407,31 @@ class ConnectorView(ResponseSchema):
         default=False, title="You write its operations"
     )
     allows_private_hosts: bool = Field(default=False, title="Can reach private addresses")
+
+
+class AppView(ConnectorView):
+    """
+    One app as the Apps page reads it — a connector, plus where this user stands with it.
+
+    Counts rather than a ``connected`` flag, because a connection whose credential was
+    revoked still has a row: a page that called that connected would tell somebody their
+    sync is fine while it fails every night. ``connection_service.list_apps`` owns the
+    rule that decides which bucket a connection falls into, and the three buckets add up
+    to ``connection_count``.
+
+    ``operations`` is here and not on :class:`ConnectorView` because this is the payload
+    that has to say what an app can do before anybody has connected it — the Add
+    connection dropdown does not, and a field list on every option would be markup nobody
+    reads.
+    """
+
+    connection_count: int = Field(default=0, title="Connections")
+    ready_count: int = Field(default=0, title="Working")
+    attention_count: int = Field(default=0, title="Need attention")
+    paused_count: int = Field(default=0, title="Switched off")
+    asks_for_nothing_else: bool = Field(
+        default=False, title="Needs only a name and a key"
+    )
+    operations: List[OperationView] = Field(
+        default_factory=list, title="What it can do"
+    )

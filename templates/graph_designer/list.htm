@@ -1,14 +1,26 @@
 {% extends "base/layout.htm" %}
-{% block title %}Graph Designer | GetMyStuff{% endblock %}
+{% block title %}Pipelines | GetMyStuff{% endblock %}
 
 {% block content %}
 <div class="container mt-4" style="max-width: 100%;">
 
     <div class="d-flex justify-content-between align-items-center mb-3">
         <h5 class="fw-semibold mb-0">
-            <i class="las la-project-diagram text-primary"></i> Graph Designer
+            <i class="las la-project-diagram text-primary"></i> Pipelines
         </h5>
         <div class="d-flex gap-2">
+            {# Opens in its own tab: the page it explains is one somebody is in the middle
+               of building, so it must not be the thing covering it. Plain anchor —
+               nothing here is fetched by HTMX. #}
+            <a
+                class="btn btn-outline-secondary btn-sm"
+                href="/graph-designer/help"
+                target="_blank"
+                rel="noopener"
+                title="Every node explained, with a worked example per scenario"
+            >
+                <i class="las la-question-circle"></i> Help
+            </a>
             <a href="/tool-graphs" class="btn btn-outline-secondary btn-sm">
                 <i class="las la-sitemap"></i> Tool Graphs
             </a>
@@ -29,7 +41,9 @@
         or an existing <a href="/tool-configs">tool config</a>; connect them and the run
         follows the chain you drew. You can <strong>branch</strong>, loop with
         <strong>For each</strong> or <strong>Do until</strong>, stop to
-        <strong>ask a person</strong> mid-run, and end on a Success or a Failure node.
+        <strong>ask a person</strong> mid-run, and record the outcome with a Success or a
+        Failure node — which can itself lead on, so an alert can follow the box that says
+        what happened.
         Every node, or any group of them, can be tested on its own, with the flow, the
         state and a limited output shown below the canvas.
         Publishing a graph makes it callable, and <strong>Edit</strong> is where you say

@@ -577,6 +577,48 @@ returns.
 | `AggregateRunRequest` | `agent_id`, `tool_id`, `instruction` | the console form. `tool_id` is optional and blank means "let the instruction decide", which is what the agent does when it calls this itself |
 | `AggregationResultView` | `tool_name`, `tool_id`, `datasource_name`, `summary`, `columns`, `rows`, `group_count`, `records_read`, `total_records` | `group_count` is separate from `len(rows)` deliberately and is the number that must be reported: the rows are capped at the tool row limit and the group count is not, so 200 rows out of 4,821 groups has to say so rather than reading as the whole answer. `.is_capped` decides that in one place instead of leaving a comparison written into the markup |
 
+### email_dispatch — `app/schemas/email_dispatch/`
+
+Four modules, split by the thing each manages: `smtp_schemas.py`, `template_schemas.py`,
+`trigger_schemas.py`, `message_schemas.py`. See [EMAIL_DISPATCH.md](EMAIL_DISPATCH.md).
+
+**One route in this feature reads a raw payload on purpose**, and the audit flags it
+correctly rather than wrongly. `webhook_routes.receive` reads `await request.body()` before
+anything parses it, because the HMAC signature is computed over the **exact bytes received** —
+a schema cannot verify a signature over a payload it has already deserialised and
+re-serialised. The bytes are also size-capped before parsing, which a schema would not do
+either. Everything *after* the signature check goes through the ordinary path; the raw read is
+the security control, not a shortcut.
+
+**The load-bearing property of this package is negative: no view carries a secret.** The
+module keeps `password_encrypted` and `webhook_secret_encrypted` on ordinary rows rather than
+in a separate credentials table — `integration_credentials` is its own table because it holds
+six secrets plus OAuth state, none of which applies here — so what stops one reaching a
+response is that every view names its fields explicitly. A parametrised test asserts no view
+has a field whose name looks like a stored secret, because otherwise adding a column to the
+model and a field to the view is two easy edits away from putting a password in the DOM.
+
+| Schema | Fields | Rules |
+|---|---|---|
+| `SmtpConfigCreateRequest` | `name`, `host`, `port`, `security`, `from_email`, `from_name`, `reply_to`, `username`, `password`, `timeout_seconds`, `workspace_id` | `port` and `timeout_seconds` are **text, not `int`**: the service's "The port must be a whole number, such as 587" is a more useful sentence than Pydantic's "Input should be a valid integer", so the parse is deferred to where the sentence lives. `password` is write-only — it appears on requests and on no view |
+| `SmtpConfigUpdateRequest` | the above plus `clear_password` | Blank `password` means **leave the stored one**, because the form posts an empty box on every unrelated edit — so removal needs its own signal. `clear_password` exists only on the edit form, where there is something to remove |
+| `SmtpSetActiveRequest` | `is_active` | the on/off toggle |
+| `SmtpConfigView` | `uuid`, `name`, `host`, `port`, `security`, `security_label`, `username`, `has_password`, `from_email`, `from_name`, `reply_to`, `timeout_seconds`, `is_active`, `last_test_ok`, `last_test_message` | `has_password` is a **boolean**, never the value and not even masked: a masked secret in a response is still a secret in the DOM |
+| `SmtpChoiceView` | `uuid`, `label`, `detail`, `disabled_reason` | a node's dropdown entry. `disabled_reason` is a sentence rather than a flag, because unavailable options are **offered and flagged, not hidden** — a node already pointing at a switched-off server has to stay editable |
+| `TemplateCreateRequest` / `TemplateUpdateRequest` | `name`, `description`, `subject_template`, `body_html_template`, `body_text_template`, `variables_json`, `workspace_id` | `variables_json` is **one hidden JSON field**, straight from the Agents section's `variables_json`, so there is exactly one place to validate the shape rather than three parallel arrays and a decision about mismatched lengths. The schema checks only that it *is* an array; the naming rule, the cap, and "the body references something undeclared" are `rendering.parse_declaration` / `assert_declared`. `subject_template` caps at 998 — RFC 5322's header line limit, so a longer subject is refused rather than mangled in transit |
+| `TemplateSetActiveRequest` | `is_active` | |
+| `TemplateView` | `uuid`, `name`, `description`, `subject_template`, `body_html_template`, `body_text_template`, `variables`, `variable_names`, `is_active` | `variables` is the declared list in **declaration order**, never sorted: it is the display order in the settings UI and in every node's binding panel, and the operator's grouping is information (rule 7) |
+| `TemplateChoiceView` | `uuid`, `label`, `detail`, `disabled_reason`, `variables` | `variables` rides along deliberately — a node's property panel draws one binding row per declared variable the instant a template is picked, and a second round trip would let somebody save the node before its rows had loaded |
+| `TriggerCreateRequest` | `name`, `kind`, `template_id`, `smtp_config_id`, `event_name`, `min_interval_seconds`, `recipients_json`, `bindings_json`, `workspace_id` | `event_name` and `min_interval_seconds` are optional *here* and each required for exactly one `kind` — a rule about the combination of two fields, so the service owns it (rule 3) |
+| `TriggerUpdateRequest` | the above **without `kind`** | Deliberately not a subclass. Changing a trigger's kind would leave a live webhook URL that external systems are still calling pointing at different semantics; the honest operation is a new trigger. Omitting the field is how that refusal is expressed at this layer rather than as a check that has to remember to run |
+| `TriggerSetEnabledRequest` | `is_enabled` | |
+| `TriggerView` | `uuid`, `name`, `kind`, `kind_label`, `event_name`, `event_label`, `webhook_url`, `has_secret`, `reveal_secret`, `min_interval_seconds`, `recipients`, `variable_bindings`, `is_enabled`, `template_name`, `template_uuid`, `smtp_name`, `smtp_uuid` | `reveal_secret` is the module's **one** deliberate secret-in-a-response, and it is safe because of where it comes from: the service fills it once, at creation and rotation, from a value it has just generated — never read back off the row, which is impossible anyway. Empty on every ordinary read. `webhook_url` is a **path, not an absolute URL**: the server does not reliably know its own public hostname behind a proxy, and a guessed one pasted into a third-party system produces a silent 404 forever |
+| `MessageFilterRequest` | `status`, `source`, `search`, `page` | a `QueryRequest`, so **every field has a default** — the log page is reachable with no query string and a required filter would make the bare URL a 400. The values are checked against the vocabularies in the service, where an unknown one has a sentence |
+| `SendTestRequest` | `template_id`, `smtp_config_id`, `to_address` | Was read straight off the request until the schema audit pointed out that "small enough not to need one" is how a route acquires its own private idea of a valid payload. Parsing the uuids here means a mistyped one is a 400 with a sentence rather than a `ValueError` the handler has to catch alongside its `HTTPException` |
+| `MessageView` | `uuid`, `subject`, `to/cc/bcc_addresses`, `from_email`, `status`, `status_label`, `source`, `source_label`, `source_ref`, `template_name`, `smtp_host`, `attempt`, `max_attempts`, `error_message`, `smtp_response`, `can_retry`, `can_cancel` | Carries the **denormalised** `template_name` and `smtp_host` rather than following the foreign keys, which is what lets the log still read correctly after a template has been deleted. **No body fields**: a 30 kB body in every row of a fifty-row table makes the page unreadable and slow at once. `can_retry` / `can_cancel` are computed once here so the button an operator sees and the precondition the service enforces come from one expression — a template deciding for itself is how a visible button starts returning 400 |
+| `MessageDetailView` | `MessageView` plus `body_html`, `body_text`, `attempts` | the detail pane |
+| `AttemptView` | `uuid`, `attempt`, `status`, `error_message`, `smtp_response`, `retryable`, `duration_ms`, `worker` | `retryable` is **recorded** rather than re-derived from the message text later — the rule `NodeFailure` states, and what makes "why was this an hour late" answerable |
+
 ---
 
 ## Adding a schema

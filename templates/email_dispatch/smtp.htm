@@ -1,0 +1,58 @@
+{% extends "base/layout.htm" %}
+{% block title %}SMTP Servers | GetMyStuff{% endblock %}
+
+{% block content %}
+{% set tab = 'smtp' %}
+<div class="container mt-4" style="max-width: 100%;">
+
+    {% include "email_dispatch/partials/nav_tabs.htm" %}
+
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h5 class="fw-semibold mb-0">
+            <i class="las la-server text-primary"></i> SMTP Servers
+        </h5>
+        <button class="btn btn-primary btn-sm" type="button"
+                hx-get="/emails/smtp/new-form"
+                hx-target="#smtpModalContent"
+                hx-swap="innerHTML"
+                data-bs-toggle="modal"
+                data-bs-target="#smtpModal">
+            <i class="las la-plus"></i> Add server
+        </button>
+    </div>
+
+    <p class="text-muted small mb-3">
+        A server is how mail physically leaves this application. Add one per sending
+        identity — a transactional relay for receipts and a separate one for internal
+        alerts, so a blown quota on one does not take out the other. Passwords are stored
+        encrypted and are never shown again after you save them.
+    </p>
+
+    <div id="smtpTestResult" class="mb-2"></div>
+    <div id="smtpResponse" class="mb-2"></div>
+
+    {% include "email_dispatch/partials/smtp_table.htm" %}
+
+</div>
+
+<!-- ============================================
+     MODAL — ADD / EDIT SERVER
+     The body is fetched per open, so create and edit share one dialog and one
+     form partial.
+     ============================================ -->
+<div class="modal fade" tabindex="-1" id="smtpModal" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content" id="smtpModalContent">
+            <div class="modal-body text-center text-muted py-4">
+                <i class="las la-spinner la-spin fs-4"></i> Loading…
+            </div>
+        </div>
+    </div>
+</div>
+
+{# Loaded from inside the content block, which is where every other page in this
+   project puts its own script. The layout pulls htmx and Bootstrap in *after* the
+   content, so this file runs before either exists — which is why everything in it
+   is deferred to DOMContentLoaded rather than executing at parse time. #}
+<script src="/static/js/email_dispatch.js"></script>
+{% endblock %}

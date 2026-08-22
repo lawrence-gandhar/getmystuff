@@ -155,8 +155,7 @@ async def _send_once(
 
     # 2. The allowance, after the check so a refused request does not spend one.
     await rate_limiter.limiter.acquire(
-        context.connection_key,
-        (context.connector.rate_limits if context.connector else _DEFAULT_LIMITS),
+        _bucket_key(operation, context), _limits_for(operation, context)
     )
 
     if context.bump_daily is not None and context.connector is not None:
@@ -201,8 +200,11 @@ async def _send_once(
         raise _transport_failure(exc, operation, context) from exc
 
     if context.connector is not None:
+        # The same key `acquire` spent from. A vendor's own view of the bucket has to
+        # correct the bucket the request actually came out of; correcting a different one
+        # would leave the spent bucket uncorrected and lower an idle one for no reason.
         rate_limiter.limiter.observe(
-            context.connection_key, read.headers, context.connector.rate_limits
+            _bucket_key(operation, context), read.headers, _limits_for(operation, context)
         )
 
     # 6. The connector's look at the parsed body, before the status is judged.
@@ -212,6 +214,45 @@ async def _send_once(
         raise _status_failure(read, operation, context)
 
     return read
+
+
+# ---------------------------------------------------------------------------
+# Which allowance a call spends
+# ---------------------------------------------------------------------------
+
+
+def _limits_for(operation: OperationSpec, context: SendContext) -> RateLimitSpec:
+    """The operation's own send rate if it declares one, else the connector's."""
+    if operation.rate_limits is not None:
+        return operation.rate_limits
+
+    return context.connector.rate_limits if context.connector else _DEFAULT_LIMITS
+
+
+def _bucket_key(operation: OperationSpec, context: SendContext) -> str:
+    """
+    The bucket this call takes a token from.
+
+    **The bare connection key when the operation declares no allowance**, so every
+    connector that existed before per-operation limits keeps exactly the bucket it had.
+    That is not just conservatism: Shopify's limit is per shop and shared across its three
+    operations, so splitting them would send three times the rate the merchant's store
+    actually permits.
+
+    When there is an allowance, the group names the bucket rather than the operation
+    doing so — because a vendor's quota is usually shared by a *family* of endpoints, not
+    granted per endpoint. Brevo's 100-per-hour covers everything outside contacts, orders
+    and products, so its three reads and its category write have to draw on one bucket;
+    a bucket each would send four hundred an hour against a hundred-an-hour limit and
+    read as correct right up until the 429s.
+    """
+    if operation.rate_limits is None:
+        return context.connection_key
+
+    return (
+        f"{context.connection_key}#"
+        f"{operation.rate_limit_group or operation.operation_id}"
+    )
 
 
 # ---------------------------------------------------------------------------

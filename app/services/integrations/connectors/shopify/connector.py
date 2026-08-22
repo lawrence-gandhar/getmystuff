@@ -302,6 +302,11 @@ SPEC = ConnectorSpec(
         "Read orders, products and customers from a Shopify store using an Admin API "
         "access token from a custom app."
     ),
+    # Line Awesome 1.3 (the icon set this application loads) has no Shopify brand glyph —
+    # `lab la-shopify` renders as an empty square. A shopping bag on Shopify's green is
+    # the honest substitute; a brand icon that is nearly right would be worse.
+    icon="las la-shopping-bag",
+    accent="#5e8e3e",
     auth=AuthSpec(
         kind=AUTH_API_KEY,
         placement=PLACEMENT_HEADER,

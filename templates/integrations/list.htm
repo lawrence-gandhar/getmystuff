@@ -8,10 +8,10 @@
         <h5 class="fw-semibold mb-0">
             <i class="las la-exchange-alt text-primary"></i> Integrations
         </h5>
+        {# Actions only. Moving between Apps, Connections and Workflows is the tab strip's
+           job, and a second set of links doing it beside the buttons that *change* things
+           is two navigations to keep in step. #}
         <div class="d-flex gap-2">
-            <a href="/integrations/connections/" class="btn btn-outline-secondary btn-sm">
-                <i class="las la-plug"></i> Connections
-            </a>
             {# Additive to a working non-AI surface, like every AI panel here: the New
                Workflow button beside it does the same job without a model involved. #}
             <button
@@ -32,6 +32,8 @@
             </button>
         </div>
     </div>
+
+    {% include "integrations/partials/tabs.htm" %}
 
     <p class="text-muted small mb-3">
         Move records between the systems your business runs on. Draw a workflow on a

@@ -43,6 +43,13 @@ from app.models.graph_designer import (  # noqa: F401
     ToolGraphRun,
     ToolGraphRunStep,
 )
+from app.models.email_dispatch import (  # noqa: F401
+    EmailMessage,
+    EmailMessageAttempt,
+    EmailSmtpConfig,
+    EmailTemplate,
+    EmailTrigger,
+)
 from app.models.integrations import (  # noqa: F401
     IntegrationConnection,
     IntegrationCredential,

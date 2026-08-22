@@ -41,6 +41,7 @@ from app.models.integrations import (
     MIN_INTERVAL_SECONDS,
     NODE_BATCH,
     NODE_BRANCH,
+    NODE_EMAIL,
     NODE_CONNECTOR_READ,
     NODE_CONNECTOR_WRITE,
     NODE_FAILURE,
@@ -96,6 +97,7 @@ IMPLEMENTED_NODE_TYPES = frozenset(
         NODE_FILTER,
         NODE_BRANCH,
         NODE_BATCH,
+        NODE_EMAIL,
         NODE_SUCCESS,
         NODE_FAILURE,
     }
@@ -1149,6 +1151,81 @@ def _validate_branch_node(node: Mapping[str, Any]) -> None:
                 )
 
 
+def _validate_email_node(node: Mapping[str, Any]) -> None:
+    """
+    An Email step: a template, a server, somebody to send to, and legal bindings.
+
+    Checked by asking the runner's own module what a mode allows, rather than restating it —
+    ``binding_sources_for`` is the one definition, so a validator that accepted a ``record``
+    binding in ``once`` mode cannot drift away from a runner that refuses it. Same reason
+    ``_validate_mappings`` calls ``field_map.load_mappings`` instead of re-implementing it.
+
+    The template's declared variables are not available here: this function is synchronous
+    and offline like every validator in this module, and ``validate_flow`` runs on save,
+    publish *and* run. A binding naming a variable the template no longer declares is caught
+    at enqueue, with a sentence naming it.
+    """
+    from app.services.email_dispatch.errors import EmailFailure, RenderError
+    from app.services.email_dispatch.nodes import integration_runner
+    from app.services.email_dispatch import variable_sources
+
+    node_id = node_id_of(node)
+    label = label_of(node)
+    data = data_of(node)
+
+    if not str(data.get("template_id") or "").strip():
+        raise FlowValidationError(
+            f"'{label}' has no email template chosen.", node_id=node_id
+        )
+    if not str(data.get("smtp_config_id") or "").strip():
+        raise FlowValidationError(
+            f"'{label}' has no SMTP server chosen.", node_id=node_id
+        )
+
+    recipients = data.get("recipients") or {}
+    if not isinstance(recipients, dict) or not (recipients.get("to") or []):
+        raise FlowValidationError(
+            f"'{label}' has nobody to email. Add at least one TO address — it may be a "
+            "{{VARIABLE}}.",
+            node_id=node_id,
+        )
+
+    try:
+        mode = integration_runner.mode_of(data)
+    except EmailFailure as exc:
+        raise FlowValidationError(f"On '{label}': {exc.message}", node_id=node_id) from exc
+
+    allowed = integration_runner.binding_sources_for(mode)
+    bindings = data.get("variable_bindings") or {}
+    if not isinstance(bindings, dict):
+        raise FlowValidationError(
+            f"The variable bindings on '{label}' could not be read.", node_id=node_id
+        )
+
+    for name, binding in bindings.items():
+        shown = str(name).upper()
+        if not isinstance(binding, Mapping):
+            raise FlowValidationError(
+                f"The binding for {{{{{shown}}}}} on '{label}' could not be read.",
+                node_id=node_id,
+            )
+        source = str(binding.get("source") or "").strip().lower()
+        if source not in allowed:
+            raise FlowValidationError(
+                f"{{{{{shown}}}}} on '{label}' is bound to '{source}', which is not "
+                f"available when sending {'one email per record' if mode == integration_runner.MODE_PER_RECORD else 'one email for the whole batch'}.",
+                node_id=node_id,
+            )
+        path = str(binding.get("path") or "").strip()
+        if path:
+            try:
+                variable_sources.assert_path(path, name=shown)
+            except RenderError as exc:
+                raise FlowValidationError(
+                    f"On '{label}': {exc.message}", node_id=node_id
+                ) from exc
+
+
 _NODE_VALIDATORS = {
     NODE_TRIGGER: _validate_trigger,
     NODE_CONNECTOR_READ: _validate_connector_node,
@@ -1158,4 +1235,5 @@ _NODE_VALIDATORS = {
     NODE_VALIDATE: _validate_validate_node,
     NODE_BRANCH: _validate_branch_node,
     NODE_BATCH: _validate_batch_node,
+    NODE_EMAIL: _validate_email_node,
 }

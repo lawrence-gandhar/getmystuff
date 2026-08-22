@@ -38,6 +38,7 @@ from app.models.integrations.models import (  # noqa: F401
     NODE_APPROVAL,
     NODE_BATCH,
     NODE_BRANCH,
+    NODE_EMAIL,
     NODE_CONNECTOR_READ,
     NODE_CONNECTOR_WRITE,
     NODE_DELAY,

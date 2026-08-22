@@ -513,6 +513,68 @@ class TestTheEditForm:
         assert "already have a graph called" in response.text
 
 
+class TestTheHelpPage:
+    """
+    The help page is static, so what is worth testing is that it *renders* and that the
+    two pages that link to it actually do. A page whose whole body is SQL, JSON and
+    ``{{VARIABLE}}`` samples is one Jinja delimiter away from a 500, and the only person
+    who would find that is the operator who needed the page.
+
+    ``/help`` also has to keep winning against ``/{graph_id:uuid}/…``; a literal path
+    does, but the assertion is cheap and the failure would be a 404 on a working page.
+    """
+
+    def test_it_renders_inside_the_application_layout(self, client) -> None:  # noqa: ANN001
+        response = client.get("/graph-designer/help")
+
+        assert response.status_code == 200
+        assert "Pipelines — Help" in response.text
+
+    def test_the_examples_survive_template_rendering(self, client) -> None:  # noqa: ANN001
+        """
+        The whole body sits inside ``{% raw %}``, so the samples must arrive as written —
+        braces, colons and placeholders intact. ``{{TABLE}}`` is the one that matters
+        most: unescaped, Jinja would render it as an undefined variable and the page
+        would teach the opposite of what it says.
+        """
+        body = client.get("/graph-designer/help").text
+
+        assert "WHERE department_id = :dept_id" in body
+        assert "SELECT region, SUM(total) FROM {{TABLE}} GROUP BY region" in body
+        assert "dept_id IN :dept_ids" in body
+        assert '"elapsed_human": "1h 4m 12s"' in body
+
+    def test_it_names_every_node_type_the_palette_offers(self, client) -> None:  # noqa: ANN001
+        """
+        A palette entry with nothing about it on the help page is a node somebody has to
+        guess at. The labels come from the model's own tuples, so a node type added later
+        fails here until the page describes it.
+        """
+        from app.models.graph_designer import NODE_TYPES
+
+        body = client.get("/graph-designer/help").text
+
+        for _value, label in NODE_TYPES:
+            assert label in body, f"the help page does not mention the '{label}' node"
+
+    def test_the_library_links_to_it_in_a_new_tab(self, client) -> None:  # noqa: ANN001
+        body = client.get("/graph-designer/").text
+
+        assert 'href="/graph-designer/help"' in body
+        assert 'target="_blank"' in body
+
+    async def test_the_canvas_links_to_it_too(self, client, user, make_graph) -> None:  # noqa: ANN001
+        """
+        The canvas is where a port or a binding mode needs explaining, and going back to
+        the library for it would mean leaving unsaved work on the page.
+        """
+        graph = await make_graph(user, "Drawing")
+
+        body = client.get(f"/graph-designer/{graph.uuid}/edit").text
+
+        assert 'href="/graph-designer/help"' in body
+
+
 class TestCanvas:
     async def test_the_canvas_page_carries_the_graph_and_the_vocabulary(
         self, client, user, make_graph,
@@ -572,14 +634,43 @@ class TestCanvas:
 
         assert response.status_code == 404
 
-    async def test_node_options_answers_with_the_pickers(self, client) -> None:  # noqa: ANN001
-        response = client.get("/graph-designer/node-options")
+    async def test_node_options_answers_with_the_pickers(
+        self, client, user, make_graph,
+    ) -> None:  # noqa: ANN001
+        """
+        Scoped to a graph, because the email template list is: a graph shared into a
+        workspace picks from that workspace's templates.
+        """
+        graph = await make_graph(user, "Nightly")
+
+        response = client.get(f"/graph-designer/{graph.uuid}/node-options")
 
         assert response.status_code == 200
         payload = response.json()
         assert "datasources" in payload
         assert "tool_configs" in payload
+        # The two that were being dropped by the response schema, leaving an Email node's
+        # pickers empty in the browser with nothing to say why.
+        assert "email_templates" in payload
+        assert "smtp_configs" in payload
         assert payload["error"] is None
+
+    async def test_another_users_node_options_are_refused_readably(
+        self, client, make_user, make_graph,
+    ) -> None:  # noqa: ANN001
+        """
+        A 200 carrying the reason, not a 404 page: a picker that cannot be filled puts one
+        sentence beside itself rather than replacing the canvas somebody is working in.
+        """
+        other = await make_user("stranger@example.com")
+        theirs = await make_graph(other, "Theirs")
+
+        response = client.get(f"/graph-designer/{theirs.uuid}/node-options")
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["error"]
+        assert payload["email_templates"] == []
 
 
 class TestSaving:

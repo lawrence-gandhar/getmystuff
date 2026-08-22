@@ -1,0 +1,134 @@
+{# Create and edit share this one form. `config` is None for a create.
+
+   Every field carries HTML validation as well as the server-side rules — required,
+   type, min/max — because CLAUDE.md asks for both and because the browser's own
+   message appears without a round trip. None of it is trusted: `smtp_service`
+   re-checks all of it, and is the authority. #}
+<form hx-post="{{ form_action }}"
+      hx-target="#smtpResponse"
+      hx-swap="innerHTML">
+    <div class="modal-header border-bottom">
+        <h5 class="modal-title">
+            <i class="las la-server text-primary"></i>
+            {% if config %}Edit SMTP server{% else %}Add an SMTP server{% endif %}
+        </h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+    </div>
+
+    <div class="modal-body">
+        <div class="row g-3">
+            <div class="col-12">
+                <label class="form-label">Name <span class="text-danger">*</span></label>
+                <input type="text" name="name" class="form-control" required maxlength="255"
+                       placeholder="Transactional relay"
+                       value="{{ config.name if config else '' }}">
+                <div class="form-text">What you will pick this server by in a node.</div>
+            </div>
+
+            <div class="col-md-8">
+                <label class="form-label">Host <span class="text-danger">*</span></label>
+                <input type="text" name="host" class="form-control" required maxlength="255"
+                       placeholder="smtp.example.com"
+                       value="{{ config.host if config else '' }}">
+            </div>
+
+            <div class="col-md-4">
+                <label class="form-label">Port <span class="text-danger">*</span></label>
+                <input type="number" name="port" class="form-control" required min="1" max="65535"
+                       value="{{ config.port if config else 587 }}">
+            </div>
+
+            <div class="col-md-6">
+                <label class="form-label">Connection security <span class="text-danger">*</span></label>
+                <select name="security" class="form-select" required>
+                    {% for value, label in securities %}
+                    <option value="{{ value }}"
+                        {% if config and config.security == value %}selected
+                        {% elif not config and value == 'starttls' %}selected{% endif %}>
+                        {{ label }}
+                    </option>
+                    {% endfor %}
+                </select>
+                <div class="form-text">
+                    Port 587 usually wants STARTTLS; port 465 wants SSL/TLS.
+                </div>
+            </div>
+
+            <div class="col-md-6">
+                <label class="form-label">Timeout (seconds)</label>
+                <input type="number" name="timeout_seconds" class="form-control" min="5" max="300"
+                       value="{{ config.timeout_seconds if config else 30 }}">
+            </div>
+
+            <div class="col-12"><hr class="my-1"></div>
+
+            <div class="col-md-6">
+                <label class="form-label">Username</label>
+                <input type="text" name="username" class="form-control" maxlength="255"
+                       autocomplete="off"
+                       value="{{ config.username if config else '' }}">
+                <div class="form-text">Leave blank if the relay authenticates by address.</div>
+            </div>
+
+            <div class="col-md-6">
+                <label class="form-label">Password</label>
+                <input type="password" name="password" class="form-control" autocomplete="new-password"
+                       placeholder="{% if config and config.has_password %}A password is stored — leave blank to keep it{% else %}No password stored{% endif %}">
+                {# Deliberately empty on an edit, even when a password exists. Returning it —
+                   even masked — would put the secret in the DOM of this page. Blank on save
+                   therefore means "keep it", and removal needs the explicit tick below. #}
+                {% if config and config.has_password %}
+                <div class="form-check mt-2">
+                    <input class="form-check-input" type="checkbox" name="clear_password"
+                           value="true" id="clearPassword">
+                    <label class="form-check-label small text-danger" for="clearPassword">
+                        Remove the stored password
+                    </label>
+                </div>
+                {% endif %}
+            </div>
+
+            <div class="col-12"><hr class="my-1"></div>
+
+            <div class="col-md-6">
+                <label class="form-label">From address <span class="text-danger">*</span></label>
+                <input type="email" name="from_email" class="form-control" required maxlength="320"
+                       placeholder="alerts@example.com"
+                       value="{{ config.from_email if config else '' }}">
+                <div class="form-text">Many relays only allow addresses they own.</div>
+            </div>
+
+            <div class="col-md-6">
+                <label class="form-label">From name</label>
+                <input type="text" name="from_name" class="form-control" maxlength="255"
+                       placeholder="GetMyStuff Alerts"
+                       value="{{ config.from_name if config else '' }}">
+            </div>
+
+            <div class="col-md-6">
+                <label class="form-label">Reply-To address</label>
+                <input type="email" name="reply_to" class="form-control" maxlength="320"
+                       value="{{ config.reply_to if config else '' }}">
+            </div>
+
+            <div class="col-md-6">
+                <label class="form-label">Shared with workspace</label>
+                <select name="workspace_id" class="form-select">
+                    <option value="">Not shared</option>
+                    {% for workspace in workspaces %}
+                    <option value="{{ workspace.uuid }}"
+                        {% if workspace_id and workspace_id == workspace.uuid %}selected{% endif %}>
+                        {{ workspace.name }}{% if not workspace.is_active %} (archived){% endif %}
+                    </option>
+                    {% endfor %}
+                </select>
+                <div class="form-text">Anyone in that workspace may send through this server.</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="submit" class="btn btn-primary">{{ submit_label }}</button>
+    </div>
+</form>

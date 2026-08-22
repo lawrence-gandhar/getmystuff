@@ -97,6 +97,9 @@ NODE_HUMAN = "human"
 NODE_BRANCH = "branch"
 NODE_FOR_EACH = "for_each"
 NODE_DO_UNTIL = "do_until"
+NODE_EMAIL = "email"
+NODE_TIMER = "timer"
+NODE_WAIT = "wait"
 NODE_SUCCESS = "success"
 NODE_FAILURE = "failure"
 
@@ -110,6 +113,9 @@ NODE_TYPES = (
     (NODE_BRANCH, "Branch"),
     (NODE_FOR_EACH, "For each"),
     (NODE_DO_UNTIL, "Do until"),
+    (NODE_EMAIL, "Send an email"),
+    (NODE_TIMER, "Timer"),
+    (NODE_WAIT, "Wait"),
     (NODE_SUCCESS, "Success"),
     (NODE_FAILURE, "Failure"),
 )
@@ -117,9 +123,22 @@ NODE_TYPES = (
 NODE_TYPE_VALUES = frozenset(value for value, _ in NODE_TYPES)
 NODE_TYPE_LABELS = dict(NODE_TYPES)
 
-# The two terminal node types. Both compile to LangGraph's END; the difference is what
-# the run is recorded as having done, which is the whole point of the user being able
-# to draw a failure path rather than only an error state.
+# The two terminal node types. What each one does is *decide the run's outcome* — worked,
+# or failed with a message — which is the whole point of the user being able to draw a
+# failure path rather than only an error state.
+#
+# "Terminal" names what they decide, not where they sit. A terminal node may still lead
+# on, and anything after it runs with the outcome already settled: reaching an outcome is
+# the moment there is finally something worth announcing, and announcing it — an email, a
+# webhook, a row written somewhere — takes a node. Forbidding a successor meant the author
+# had to put the announcement *before* the box that says what happened, which reads
+# backwards and, on the failure side, is the one place a reader most needs the drawing to
+# be literal.
+#
+# What a successor cannot do is change its mind: a `success` drawn after a `failure` does
+# not turn a failed run green (`failed_at` is already set and nothing clears it), so
+# `graph_service._validate_edges` refuses one terminal leading to another rather than let
+# the picture claim an outcome the run will not report.
 TERMINAL_NODE_TYPES = frozenset({NODE_SUCCESS, NODE_FAILURE})
 
 # The two loop node types. Kept as its own set because three separate rules key off
@@ -170,6 +189,49 @@ HUMAN_EXPECTS = (
 )
 
 HUMAN_EXPECTS_VALUES = frozenset(value for value, _ in HUMAN_EXPECTS)
+
+
+# ----------------------------------------------------------------------------
+# What a `timer` node does
+# ----------------------------------------------------------------------------
+# One node type carrying four actions, rather than four node types. A timer is a
+# single state machine — started once, paused and resumed any number of times,
+# stopped once — and four palette entries sharing one machine is four validators to
+# keep in step and four ways for them to drift. The action is a property of the box,
+# the way a `value` node's kind is.
+#
+# Every action records `datetime.now(timezone.utc)`. Nothing here waits: a timer
+# measures how long the graph took to get from one box to another, which is a
+# different job from the `wait` node's.
+#
+# The instance set to `start` **is** the timer. The other three name its node id in
+# `timer_node`, which is what lets a save prove they refer to something real and lets
+# `referenced_nodes` report the dependency — a free-text name could do neither.
+TIMER_START = "start"
+TIMER_PAUSE = "pause"
+TIMER_RESUME = "resume"
+TIMER_STOP = "stop"
+
+TIMER_ACTIONS = (
+    (TIMER_START, "Start"),
+    (TIMER_PAUSE, "Pause"),
+    (TIMER_RESUME, "Resume"),
+    (TIMER_STOP, "Stop"),
+)
+
+TIMER_ACTION_VALUES = frozenset(value for value, _ in TIMER_ACTIONS)
+
+# The three that act on a timer somebody else started, and therefore must name it.
+TIMER_FOLLOWER_ACTIONS = frozenset({TIMER_PAUSE, TIMER_RESUME, TIMER_STOP})
+
+
+# ----------------------------------------------------------------------------
+# How many `{{VARIABLE}}`s one node may declare
+# ----------------------------------------------------------------------------
+# The same number `MAX_TEMPLATE_VARIABLES` allows an email template, so an operator
+# who has met one cap has met both. A node needing more than thirty named values is
+# describing a data structure, and the `value` node already exists for that.
+MAX_NODE_VARIABLES = 30
 
 
 # ----------------------------------------------------------------------------

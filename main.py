@@ -39,8 +39,16 @@ from app.routes.tool_graphs import ToolGraphController
 from app.routes.graph_designer import GraphDesignerController
 from app.routes.integrations import (
     IntegrationAIController,
+    IntegrationAppController,
     IntegrationConnectionController,
     IntegrationsController,
+)
+from app.routes.email_dispatch import (
+    EmailMessageController,
+    EmailSmtpController,
+    EmailTemplateController,
+    EmailTriggerController,
+    EmailWebhookController,
 )
 from app.routes.sql_assist import SqlAssistController
 from app.routes.query_test import QueryTestController
@@ -59,6 +67,11 @@ from app.services.integrations.engine import (
     run_service as integration_run_service,
     scheduler as integration_scheduler,
 )
+from app.services.email_dispatch import queue as email_queue
+# Imported for the side effect of subscribing its handler to every event on the bus. Same
+# import-for-registration pattern as `connectors/registry` and `app/db/models` — without
+# this line every email trigger is stored correctly and never fires.
+from app.services.email_dispatch import triggers as email_triggers  # noqa: F401
 from app.services.integrations.runtime import http_client as integration_http
 from app.services.downloader_agents.base.checkpointer import close_checkpointer
 from app.services.downloader_agents.base.record_reader import release_all_readers
@@ -152,6 +165,16 @@ async def on_startup() -> None:
     integration_queue.start_workers()
     integration_scheduler.start_scheduler()
 
+    # The email send workers. Safe across replicas for the same reason: the claim is
+    # `FOR UPDATE SKIP LOCKED` and it additionally refuses a second message for an SMTP
+    # server that already has one in flight, so N replicas do not become N simultaneous
+    # connections to one provider.
+    #
+    # No scheduler alongside it, deliberately. Email has no scheduled triggers — an
+    # event or a webhook fires it — so this adds exactly one background loop rather
+    # than two. See documentations/EMAIL_DISPATCH.md on the loop budget.
+    email_queue.start_workers()
+
 
 async def on_shutdown() -> None:
     """Release the Ollama connection, stop the worker, and close the checkpoint pool."""
@@ -173,6 +196,12 @@ async def on_shutdown() -> None:
     await integration_scheduler.stop_scheduler()
     await integration_queue.stop_workers()
     await integration_run_service.stop_all_runs()
+
+    # The email workers, after the things that enqueue for them. A message cancelled
+    # mid-send stays `sending` and is *failed* by the stale reaper rather than retried:
+    # the relay may already have taken it, and re-sending on the next boot would deliver
+    # it twice. See queue.stop_workers.
+    await email_queue.stop_workers()
 
     # The pooled outbound clients an integration run keeps per origin. Closed here rather
     # than per run, which is the point of pooling them — a forty-page sync must not pay
@@ -255,8 +284,15 @@ app = Litestar(
         # a uuid. Litestar resolves literal segments ahead of typed ones anyway, but the
         # ordering makes that independent of the router's internals.
         IntegrationAIController,
+        IntegrationAppController,
         IntegrationConnectionController,
         IntegrationsController,
+        # Three literal prefixes under /emails, so no ordering hazard here — none of them
+        # takes a uuid in the segment that would otherwise collide.
+        EmailMessageController,
+        EmailSmtpController,
+        EmailTemplateController,
+        EmailTriggerController,
         SqlAssistController,
         AggregationController,
         QueryTestController,
@@ -264,6 +300,7 @@ app = Litestar(
         DownloadController,
         PublicChatbotController,
         PublicDownloadController,
+        EmailWebhookController,
         FileDownloadController,
     ],
     debug=True,

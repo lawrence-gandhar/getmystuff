@@ -58,8 +58,10 @@ from app.models.graph_designer import (
     SCOPE_FULL,
     SCOPE_SELECTION,
 )
+from app.db.graph_designer.queries import fetch_run_with_graph
 from app.services.graph_designer import graph_service, graph_state, run_store
 from app.services.graph_designer.node_runners import RunContext
+from app.utils import events
 
 logger = logging.getLogger(__name__)
 
@@ -279,6 +281,9 @@ async def _settle(
 
     payload = graph_compiler.interrupt_payload(state)
 
+    settled_status = ""
+    settled_message = ""
+
     async with run_store.open_session() as db:
         if payload is not None:
             await run_store.mark_awaiting(db, run_id, payload)
@@ -287,23 +292,74 @@ async def _settle(
         failed_at = str((state or {}).get("failed_at") or "")
 
         if failed_at:
+            settled_status = RUN_FAILED
+            settled_message = (
+                str((state or {}).get("failure_message") or "")
+                or "The run stopped at a node that could not complete."
+            )
             await run_store.mark_finished(
                 db,
                 run_id,
                 RUN_FAILED,
-                error_message=(
-                    str((state or {}).get("failure_message") or "")
-                    or "The run stopped at a node that could not complete."
-                ),
+                error_message=settled_message,
             )
-            return
+        else:
+            settled_status = RUN_SUCCEEDED
+            await run_store.mark_finished(
+                db,
+                run_id,
+                RUN_SUCCEEDED,
+                result_preview=_result_preview(state, node_by_id),
+            )
 
-        await run_store.mark_finished(
-            db,
-            run_id,
-            RUN_SUCCEEDED,
-            result_preview=_result_preview(state, node_by_id),
-        )
+    # Announce it, outside the session and after the commit. A subscriber — an email trigger,
+    # today — opens its own session, so telling it while this transaction was still open
+    # would have it read a database that does not yet agree with the event. `publish` never
+    # raises, so a broken template cannot turn a finished run into a failed one.
+    #
+    # A paused run returns above and announces nothing: "awaiting an answer" is not an
+    # outcome, and a trigger firing on it would email somebody every time a graph asked a
+    # question.
+    await _announce_settled(run_id, settled_status, settled_message)
+
+
+async def _announce_settled(run_id: int, status: str, message: str) -> None:
+    """
+    Publish ``graph_run.settled`` for a run that has just reached a terminal state.
+
+    Reads the run again for the two things a subscriber needs and this function does not
+    already hold: whose run it was, and its public uuid. Cheap, once per run, and it keeps
+    ``_settle`` from having to thread them through.
+
+    Swallows its own failures. The run is already recorded; an event that could not be
+    published is worth a log line and nothing more.
+    """
+    try:
+        async with run_store.open_session() as db:
+            run = await run_store.reload_run(db, run_id)
+            if run is None:
+                return
+            found = await fetch_run_with_graph(db, run.uuid)
+            if not found:
+                return
+            _, graph = found
+
+            await events.publish(
+                events.EVENT_GRAPH_RUN_SETTLED,
+                {
+                    "run_uuid": str(run.uuid),
+                    "status": status,
+                    "graph_name": graph.name,
+                    "graph_uuid": str(graph.uuid),
+                    "failure_message": message,
+                },
+                # Ownership runs run -> graph -> user, which is why the graph is read at all
+                # rather than the run's own column being trusted for it.
+                user_id=graph.user_id,
+                workspace_id=graph.workspace_id,
+            )
+    except Exception:  # noqa: BLE001 — announcing must not fail a finished run
+        logger.exception("Could not announce that graph run %s settled", run_id)
 
 
 def _result_preview(
@@ -319,10 +375,16 @@ def _result_preview(
     that read two hundred rows as having returned nothing. Observed doing exactly that —
     the SQL node's rows were in state and the result said "no rows".
 
-    So the terminal, branch and loop nodes are skipped and the newest genuine result is
-    taken. ``node_by_id`` is how the types are known; without it this falls back to the
-    last output, which is the best guess available and is only reached if a caller has
-    nothing to identify the nodes with.
+    So the newest output belonging to a node in ``_DATA_NODE_TYPES`` is taken. An
+    **allow-list**, deliberately, rather than a list of types to skip: every node type added
+    since has been one whose output is bookkeeping rather than data — a queued email's
+    receipt, a person's answer, a loop's cursor — and each would have had to be remembered
+    and excluded. An Email node drawn after a Success node is the current case in point;
+    with a deny-list it would silently become "what this graph returned".
+
+    ``node_by_id`` is how the types are known; without it this falls back to the last
+    output, which is the best guess available and is only reached if a caller has nothing to
+    identify the nodes with.
 
     Capped by ``graph_state.preview_of`` like every other stored preview, so a run over a
     large result set does not put that result set on the run row.

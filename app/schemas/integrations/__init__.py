@@ -4,6 +4,7 @@ from app.schemas.integrations.connection_schemas import (  # noqa: F401
     MAX_OPERATION_FIELDS,
     MAX_OPERATION_ID_LENGTH,
     MAX_PATH_LENGTH,
+    AppView,
     ConnectionCreateRequest,
     ConnectionTestQuery,
     ConnectionTestView,

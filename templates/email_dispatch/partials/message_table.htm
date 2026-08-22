@@ -1,0 +1,157 @@
+{# The delivery log table plus its filter chips. See smtp_table.htm on why
+   hx-swap-oob is on the wrapper <div> rather than the <tbody>.
+
+   Every column here comes off the message row itself — template_name and smtp_host
+   were copied onto it at enqueue — so the log still reads correctly after a
+   template or a server has been deleted. Following the foreign keys instead would
+   show blanks for exactly the history somebody is most likely investigating. #}
+<div id="emailMessageTable" hx-swap-oob="true">
+
+    <div class="d-flex flex-wrap gap-2 align-items-center mb-3">
+        {# Chips come from the vocabulary, so a status with no rows reads nought rather
+           than vanishing — a chip that appears and disappears as mail flows is harder to
+           use than one that stays put. #}
+        <a class="btn btn-sm {% if not status %}btn-primary{% else %}btn-outline-secondary{% endif %}"
+           href="/emails/messages/">
+            All <span class="badge bg-light text-dark ms-1">{{ total }}</span>
+        </a>
+        {% for chip in chips %}
+        <a class="btn btn-sm {% if chip.selected %}btn-primary{% else %}btn-outline-secondary{% endif %}"
+           href="/emails/messages/?status={{ chip.value }}">
+            {{ chip.label }} <span class="badge bg-light text-dark ms-1">{{ chip.count }}</span>
+        </a>
+        {% endfor %}
+    </div>
+
+    <div class="card shadow-sm">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Subject</th>
+                        <th style="width:210px;">To</th>
+                        <th style="width:150px;">Source</th>
+                        <th style="width:130px;">Status</th>
+                        <th style="width:90px;">Tries</th>
+                        <th style="width:210px;">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for message in messages %}
+                    <tr>
+                        <td>
+                            <div class="fw-semibold">{{ message.subject }}</div>
+                            <div class="text-muted small">
+                                {% if message.template_name %}{{ message.template_name }}{% endif %}
+                                {% if message.smtp_host %} via {{ message.smtp_host }}{% endif %}
+                            </div>
+                            {% if message.error_message %}
+                            <div class="text-danger small mt-1">
+                                <i class="las la-exclamation-circle"></i> {{ message.error_message }}
+                            </div>
+                            {% endif %}
+                        </td>
+                        <td class="small">
+                            {{ message.to_addresses | join(', ') }}
+                            {% set extra = message.cc_addresses | length + message.bcc_addresses | length %}
+                            {% if extra %}
+                            <div class="text-muted">+{{ extra }} more</div>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <span class="badge bg-light text-dark">{{ message.source_label }}</span>
+                            {% if message.source_ref %}
+                            <div class="text-muted small text-truncate" style="max-width:140px;"
+                                 title="{{ message.source_ref }}">{{ message.source_ref }}</div>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if message.status == 'sent' %}
+                            <span class="badge bg-success-subtle text-success">Sent</span>
+                            {% elif message.status == 'failed' %}
+                            <span class="badge bg-danger-subtle text-danger">Failed</span>
+                            {% elif message.status == 'sending' %}
+                            <span class="badge bg-info-subtle text-info">
+                                <i class="las la-spinner la-spin"></i> Sending
+                            </span>
+                            {% elif message.status == 'cancelled' %}
+                            <span class="badge bg-secondary-subtle text-secondary">Cancelled</span>
+                            {% else %}
+                            <span class="badge bg-warning-subtle text-warning">Queued</span>
+                            {% endif %}
+                        </td>
+                        <td class="small">
+                            {{ message.attempt }}{% if message.max_attempts %} / {{ message.max_attempts }}{% endif %}
+                        </td>
+                        <td>
+                            <button class="btn btn-sm btn-outline-secondary"
+                                    hx-get="/emails/messages/{{ message.uuid }}"
+                                    hx-target="#emailMessageDetailBody"
+                                    hx-swap="innerHTML"
+                                    data-bs-toggle="modal"
+                                    data-bs-target="#emailMessageDetailModal">
+                                <i class="las la-eye"></i> View
+                            </button>
+                            {% if message.can_retry %}
+                            {# The confirm text is not boilerplate: for a message whose worker
+                               died mid-send we genuinely do not know whether it arrived, and
+                               the operator has to decide with that in front of them. #}
+                            <button class="btn btn-sm btn-outline-primary"
+                                    hx-post="/emails/messages/{{ message.uuid }}/retry"
+                                    hx-target="#emailMessageResponse"
+                                    hx-swap="innerHTML"
+                                    hx-confirm="Send this email again? If the first attempt may have gone out, the recipient will get it twice.">
+                                <i class="las la-redo"></i> Retry
+                            </button>
+                            {% endif %}
+                            {% if message.can_cancel %}
+                            <button class="btn btn-sm btn-outline-danger"
+                                    hx-post="/emails/messages/{{ message.uuid }}/cancel"
+                                    hx-target="#emailMessageResponse"
+                                    hx-swap="innerHTML">
+                                <i class="las la-ban"></i> Cancel
+                            </button>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="6" class="text-center text-muted py-4">
+                            {% if status or source %}
+                            No emails match this filter.
+                            {% else %}
+                            Nothing has been sent yet. Add a server and a template, then use
+                            the Send test button above.
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    {% if page > 1 or has_more %}
+    <div class="d-flex justify-content-between align-items-center mt-3">
+        {% set query = '&status=' ~ status if status else '' %}
+        {% if page > 1 %}
+        <a class="btn btn-sm btn-outline-secondary"
+           href="/emails/messages/?page={{ page - 1 }}{{ query }}">
+            <i class="las la-angle-left"></i> Newer
+        </a>
+        {% else %}<span></span>{% endif %}
+
+        <span class="text-muted small">Page {{ page }}</span>
+
+        {# "Older" appears when this page came back full. There is no total-pages count on
+           purpose: it would need a second COUNT over the filtered set on every load of a
+           table that only grows. #}
+        {% if has_more %}
+        <a class="btn btn-sm btn-outline-secondary"
+           href="/emails/messages/?page={{ page + 1 }}{{ query }}">
+            Older <i class="las la-angle-right"></i>
+        </a>
+        {% else %}<span></span>{% endif %}
+    </div>
+    {% endif %}
+</div>

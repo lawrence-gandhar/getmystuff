@@ -394,6 +394,23 @@ class OperationSpec:
     ordered: bool = False
     timeout_seconds: Optional[int] = None
 
+    #: This operation's own send rate, when the connector's single figure would be wrong
+    #: for it. ``None`` — the usual case — means it spends the connector's allowance.
+    #:
+    #: Brevo is why this exists. It publishes limits that differ by 180× across the
+    #: endpoints one connection reaches: 10/second for contacts, 5/second for order
+    #: writes, 2/second for product writes, and 100 **per hour** for everything else. A
+    #: single connector-wide figure has to be one of those, and both ends are wrong — the
+    #: slowest throttles order writes to one every 36 seconds, and the fastest exhausts
+    #: the retry engine's three attempts against the hourly ceiling and fails the run.
+    #:
+    #: **Vendor-declared only.** ``load_operation`` does not read it and no column backs
+    #: it, so an ``integration_rest_operations`` row a user typed cannot raise its own
+    #: send rate. That is deliberate rather than unfinished: a rate limit a user can set
+    #: is a way to hammer somebody else's API from our egress address.
+    rate_limits: Optional[RateLimitSpec] = None
+    rate_limit_group: str = ""
+
     def validated(self) -> "OperationSpec":
         if not str(self.operation_id).strip():
             raise ValueError("An operation needs an id.")
@@ -438,8 +455,31 @@ class OperationSpec:
 
         self._check_body_literals()
         self._check_input_paging()
+        self._check_rate_limits()
 
         return self
+
+    def _check_rate_limits(self) -> None:
+        """
+        A group has to name an allowance, and the allowance has to be a usable one.
+
+        The group without the limits is the failure worth catching. It reads exactly like
+        an operation with its own budget, and it silently has not got one — the call falls
+        back to the connector's figure, which is the number this field exists because it
+        was wrong. A run then sends at somebody else's rate and only the vendor's 429s say
+        so.
+        """
+        if self.rate_limits is not None:
+            self.rate_limits.validated()
+            return
+
+        if self.rate_limit_group:
+            raise ValueError(
+                f"'{self.operation_id}' names the rate limit group "
+                f"'{self.rate_limit_group}' but declares no limits of its own, so it "
+                "would quietly spend the connector's allowance instead. Give it a "
+                "RateLimitSpec or drop the group."
+            )
 
     def _check_body_literals(self) -> None:
         """
@@ -512,6 +552,11 @@ class OperationSpec:
         the UI does not change what it sends, and a hash that moved for a typo fix would
         make every replay look like a different run. Everything that reaches the wire is
         in here.
+
+        ``rate_limits`` and ``rate_limit_group`` are excluded for the same reason
+        ``has_more_path`` is: they decide *when* a request leaves, never what it says.
+        Retuning a limit after a vendor publishes new figures would otherwise move every
+        fingerprint at once and make every prior run look like it ran something else.
         """
         return {
             "operation_id": self.operation_id,
@@ -729,6 +774,18 @@ class ConnectorSpec:
     auth: AuthSpec = field(default_factory=AuthSpec)
     rate_limits: RateLimitSpec = field(default_factory=RateLimitSpec)
     operations: Tuple[OperationSpec, ...] = ()
+
+    #: How this connector appears on the Apps page — a Line Awesome class and a brand
+    #: colour for the tile behind it.
+    #:
+    #: Here rather than in a mapping in the template for the same reason ``label`` and
+    #: ``description`` are here: a connector is added by writing one module and
+    #: registering it, and a second place listing every connector by id is a place that
+    #: falls behind — which shows up as a new app rendering with no icon at all. Both have
+    #: defaults, so a connector that says nothing gets a generic plug rather than a blank
+    #: square.
+    icon: str = "las la-plug"
+    accent: str = "#6c757d"
 
     #: ``https://{account}/admin/api/2026-07``. ``{account}`` is substituted from the
     #: connection's ``external_account_id``. Empty when the connection supplies its own
@@ -1029,6 +1086,11 @@ def _as_mapping(source: Any) -> Mapping[str, Any]:
             # as it did before. Listed here so that adding the column later is a
             # migration and nothing else.
             "body_literals",
+            # `rate_limits` and `rate_limit_group` are deliberately **not** here, and
+            # adding them later should not be a migration. A row is a form somebody filled
+            # in; an operation that could declare its own send rate would let that form set
+            # how fast we hammer a third party from our egress address. Vendor connectors
+            # declare them in Python, where a reviewer sees the number.
         )
     }
 

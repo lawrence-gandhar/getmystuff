@@ -1,0 +1,41 @@
+{# The three views of Integrations: the apps you can connect, the connections you have,
+   and the workflows that move records between them.
+
+   **Links, not Bootstrap's JavaScript tabs.** Each tab is a page somebody can bookmark,
+   send to a colleague and land on directly, and each already has its own route and its own
+   HTMX targets. Loading all three into one document to switch them in the browser would
+   mean three tables' worth of markup on every visit and one broken script away from a page
+   with nothing on it.
+
+   `tab` is set by the route rather than derived from the URL here, because the route is
+   what knows: a template guessing from a path is a template that quietly highlights the
+   wrong tab the day a path changes. #}
+<ul class="nav nav-tabs mb-3">
+    <li class="nav-item">
+        <a
+            class="nav-link {% if tab == 'apps' %}active{% endif %}"
+            href="/integrations/apps/"
+            {% if tab == 'apps' %}aria-current="page"{% endif %}
+        >
+            <i class="las la-th-large"></i> Apps
+        </a>
+    </li>
+    <li class="nav-item">
+        <a
+            class="nav-link {% if tab == 'connections' %}active{% endif %}"
+            href="/integrations/connections/"
+            {% if tab == 'connections' %}aria-current="page"{% endif %}
+        >
+            <i class="las la-plug"></i> Connections
+        </a>
+    </li>
+    <li class="nav-item">
+        <a
+            class="nav-link {% if tab == 'workflows' %}active{% endif %}"
+            href="/integrations/"
+            {% if tab == 'workflows' %}aria-current="page"{% endif %}
+        >
+            <i class="las la-exchange-alt"></i> Workflows
+        </a>
+    </li>
+</ul>

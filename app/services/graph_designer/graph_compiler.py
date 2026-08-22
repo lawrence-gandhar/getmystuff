@@ -70,6 +70,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Set, 
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
+from litestar.exceptions import HTTPException
 
 from app.models.graph_designer import (
     HUMAN_EXPECTS_CHOICE,
@@ -83,7 +84,12 @@ from app.models.graph_designer import (
     TERMINAL_NODE_TYPES,
 )
 from app.services.downloader_agents.base.checkpointer import get_checkpointer
-from app.services.graph_designer import graph_state, node_runners, run_store
+from app.services.graph_designer import (
+    graph_state,
+    node_runners,
+    node_variables,
+    run_store,
+)
 from app.services.graph_designer.graph_service import (
     DEFAULT_MAX_ITERATIONS,
     PORT_BODY,
@@ -247,7 +253,24 @@ def _human_function(
     node_id = str(node.get("id") or "")
 
     async def run(state: Mapping[str, Any]) -> dict:
-        answer = interrupt(_question(node))
+        # The question is substituted here as well as inside `run_node`, because
+        # `interrupt()` puts it in front of a person *before* the runner is ever reached
+        # — without this, a question written "Approve {{TOTAL}}?" would be shown with the
+        # braces still in it.
+        #
+        # Rendering twice is free and deterministic: `interrupt()` re-runs this node from
+        # the top on resume anyway, and the renderer reads only `outputs`, which no
+        # answer changes.
+        try:
+            asked = node_variables.render_node(node, state)
+        except HTTPException:
+            # A variable the question needs did not resolve. Pausing on a half-written
+            # question would strand the run on something nobody can sensibly answer, so
+            # fall through to the guarded path instead — which opens the step row, records
+            # the reason, and takes the error port if the author drew one.
+            return await _guarded(node, state, context, has_error_path)
+
+        answer = interrupt(_question(asked))
 
         # The answer belongs in state before the runner reads it, and the runner reads it
         # from state rather than from an argument so that a resumed run and a replayed
@@ -332,8 +355,17 @@ def _wire(
     """
     Give one node its outgoing conditional edge.
 
-    Every node, uniformly — see the module docstring. A terminal node is the one
-    exception and gets a plain edge to ``END``, because it has nothing to decide.
+    Every node, uniformly — see the module docstring, and now with no exceptions at all.
+    A terminal node used to be one: it got a plain ``add_edge(node_id, END)``, on the
+    reasoning that it has nothing to decide. It does have one thing to decide, which is
+    whether the author drew anything after it, and ``_router`` answers that for terminals
+    the same way it answers it for every other node.
+
+    Dropping the special case fixed a quiet bug in **tested selections**, too. A selection
+    made of two disconnected pieces chains each piece's dead ends into the next piece's
+    entry (:func:`_entry_and_chaining`), and a terminal node at the end of the first piece
+    is such a dead end — but the plain edge to ``END`` ignored ``fallthrough``, so the
+    second piece never ran and nothing in the log said why. Its nodes were simply absent.
 
     ``loop_id`` is the enclosing loop from :func:`_enclosing_loops`, passed on to the
     router because a union node's outcome is a question about that loop's cursor rather
@@ -341,10 +373,6 @@ def _wire(
     fact, so closing over it here beats making every router re-derive it per visit.
     """
     node_id = str(node.get("id"))
-
-    if str(node.get("type")) in TERMINAL_NODE_TYPES:
-        builder.add_edge(node_id, END)
-        return
 
     builder.add_conditional_edges(
         node_id,
@@ -388,7 +416,17 @@ def _router(
     """
     Where the run goes after this node.
 
-    One function per node, answering in a fixed order of precedence:
+    **A terminal node is answered here, at compile time, and asks nothing of state.** It
+    has one thing to decide — whether the author drew anything after it — and that is a fact
+    about the drawing. Answering it up here is not only cheaper; it is the only correct
+    place, because a ``failure`` node sets ``failed_at`` to *its own id* as its entire job
+    (``node_runners._run_failure``), which is indistinguishable inside ``route`` from a node
+    whose runner blew up. Falling through to the generic failure check would therefore send
+    every ``failure`` node to ``END`` and silently drop whatever the author drew after it —
+    no error, no step row, nothing in the log. Kept out of ``route`` rather than ordered
+    first within it, so that no later edit can reorder it back into being a bug.
+
+    Everything else gets one function per node, answering in a fixed order of precedence:
 
     1. **A handled failure** takes the error path. First, because a node that failed has
        not produced the output a branch or a loop would go on to read, so asking those
@@ -412,6 +450,14 @@ def _router(
     """
     node_id = str(node.get("id"))
     node_type = str(node.get("type") or "")
+
+    if node_type in TERMINAL_NODE_TYPES:
+        settled = _default_of(node_id, targets, fallthrough)
+
+        def leave(_state: Mapping[str, Any]) -> str:
+            return settled
+
+        return leave
 
     def route(state: Mapping[str, Any]) -> str:
         if (state.get("errors") or {}).get(node_id):

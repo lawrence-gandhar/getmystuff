@@ -1,0 +1,25 @@
+{# The response to connecting an app. Marker or error for the targeted response area, plus
+   an out-of-band refresh of the tiles, whose counts have just changed.
+
+   The success message is visible rather than a bare marker: the dialog closes on it, so
+   without a line on the page there is nothing to say the credential landed — and the next
+   thing to do (test it) lives on another tab. Same `data-success` contract the rest of the
+   application uses. #}
+{% if error %}
+    <div class="alert alert-danger alert-dismissible fade show mb-0" role="alert">
+        <i class="las la-exclamation-circle"></i> {{ error }}
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+{% else %}
+    <div data-success="true" class="alert alert-success alert-dismissible fade show mb-0" role="alert">
+        <i class="las la-check-circle"></i>
+        Connected to {{ app_label }}. Nothing is moving yet — press
+        <strong>Test</strong> on the
+        <a href="/integrations/connections/" class="alert-link">Connections</a> tab to make
+        one real call with it, then use it on a
+        <a href="/integrations/" class="alert-link">workflow</a> step.
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+{% endif %}
+
+{% include "integrations/partials/app_cards.htm" %}

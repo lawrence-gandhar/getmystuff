@@ -1,0 +1,190 @@
+{# Create and edit share this one form. `trigger` is None for a create.
+
+   Two dynamic parts, both driven by email_dispatch.js:
+
+   • the kind switch shows either the event picker or the webhook throttle, because
+     a trigger is one or the other and showing both invites filling in the wrong one;
+   • the binding rows are rebuilt whenever the template changes, one row per
+     variable that template declares — which is why template_service.choices sends
+     each template's `variables` along with its name.
+
+   Both serialise into single hidden JSON fields, so the server has exactly one place
+   to validate each shape. #}
+<form hx-post="{{ form_action }}"
+      hx-target="#emailTriggerResponse"
+      hx-swap="innerHTML"
+      data-email-trigger-form>
+    <div class="modal-header border-bottom">
+        <h5 class="modal-title">
+            <i class="las la-bolt text-primary"></i>
+            {% if trigger %}Edit trigger{% else %}New trigger{% endif %}
+        </h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+    </div>
+
+    <div class="modal-body">
+        <div class="row g-3">
+            <div class="col-md-6">
+                <label class="form-label">Trigger name <span class="text-danger">*</span></label>
+                <input type="text" name="name" class="form-control" required maxlength="255"
+                       placeholder="Tell ops when a sync fails"
+                       value="{{ trigger.name if trigger else '' }}">
+            </div>
+
+            <div class="col-md-6">
+                <label class="form-label">Fires when <span class="text-danger">*</span></label>
+                {% if trigger %}
+                {# Not editable. Changing a webhook trigger into an event trigger would
+                   leave a live URL that callers are still using pointing at something with
+                   different semantics; the honest operation is a new trigger. #}
+                <input type="text" class="form-control" readonly disabled
+                       value="{{ trigger.kind_label }}">
+                <div class="form-text">
+                    A trigger's type cannot be changed. Create a new one instead.
+                </div>
+                {% else %}
+                <select name="kind" class="form-select" required data-trigger-kind>
+                    {% for value, label in kinds %}
+                    <option value="{{ value }}">{{ label }}</option>
+                    {% endfor %}
+                </select>
+                {% endif %}
+            </div>
+
+            <!-- kind == event -->
+            <div class="col-12" data-kind-panel="event"
+                 {% if trigger and trigger.kind != 'event' %}hidden{% endif %}>
+                <label class="form-label">Which event <span class="text-danger">*</span></label>
+                <select name="event_name" class="form-select">
+                    <option value="">Choose an event…</option>
+                    {% for value, label in events %}
+                    <option value="{{ value }}"
+                        {% if trigger and trigger.event_name == value %}selected{% endif %}>
+                        {{ label }}
+                    </option>
+                    {% endfor %}
+                </select>
+                <div class="form-text">
+                    Only events about your own data reach your triggers.
+                </div>
+            </div>
+
+            <!-- kind == webhook -->
+            <div class="col-12" data-kind-panel="webhook"
+                 {% if not trigger or trigger.kind != 'webhook' %}hidden{% endif %}>
+                <label class="form-label">Minimum gap between firings (seconds)</label>
+                <input type="number" name="min_interval_seconds" class="form-control"
+                       min="1" max="86400"
+                       value="{{ trigger.min_interval_seconds if trigger else 60 }}">
+                <div class="form-text">
+                    The endpoint is public, so it needs a floor — without one, anybody
+                    holding the URL and secret could make this send mail as fast as they
+                    can post. A URL and a signing secret are issued when you save.
+                </div>
+            </div>
+
+            <div class="col-12"><hr class="my-1"></div>
+
+            <div class="col-md-6">
+                <label class="form-label">Send this template <span class="text-danger">*</span></label>
+                <select name="template_id" class="form-select" required data-trigger-template>
+                    <option value="">Choose a template…</option>
+                    {% for choice in templates %}
+                    <option value="{{ choice.uuid }}"
+                            data-variables="{{ choice.variables | tojson | forceescape }}"
+                        {% if trigger and trigger.template_uuid == choice.uuid %}selected{% endif %}>
+                        {{ choice.label }}{% if choice.disabled_reason %} — {{ choice.disabled_reason }}{% endif %}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="col-md-6">
+                <label class="form-label">Send through <span class="text-danger">*</span></label>
+                <select name="smtp_config_id" class="form-select" required>
+                    <option value="">Choose a server…</option>
+                    {% for choice in configs %}
+                    <option value="{{ choice.uuid }}"
+                        {% if trigger and trigger.smtp_uuid == choice.uuid %}selected{% endif %}>
+                        {{ choice.label }}{% if choice.disabled_reason %} — {{ choice.disabled_reason }}{% endif %}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <!-- ============================================
+                 RECIPIENTS
+                 ============================================ -->
+            <div class="col-12">
+                <hr class="my-1">
+                <label class="form-label fw-semibold">Send to</label>
+                <div class="form-text mb-2">
+                    Comma-separated. Each entry may be a fixed address or a
+                    <code>&#123;&#123;VARIABLE&#125;&#125;</code> — which is how "email whoever this was
+                    about" works without any rules engine.
+                </div>
+                <div class="row g-2">
+                    <div class="col-md-4">
+                        <label class="form-label small">To <span class="text-danger">*</span></label>
+                        <input type="text" class="form-control form-control-sm" data-recipients="to"
+                               placeholder="ops@example.com, &#123;&#123;OWNER_EMAIL&#125;&#125;">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label small">Cc</label>
+                        <input type="text" class="form-control form-control-sm" data-recipients="cc">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label small">Bcc</label>
+                        <input type="text" class="form-control form-control-sm" data-recipients="bcc">
+                    </div>
+                </div>
+                <script type="application/json" id="triggerRecipientsData">
+                    {{ (trigger.recipients if trigger else {}) | tojson }}
+                </script>
+                <input type="hidden" name="recipients_json" id="triggerRecipientsJson" value="{}">
+            </div>
+
+            <!-- ============================================
+                 VARIABLE BINDINGS
+                 One row per variable the chosen template declares. Rebuilt by the JS
+                 whenever the template changes.
+                 ============================================ -->
+            <div class="col-12">
+                <hr class="my-1">
+                <label class="form-label fw-semibold">Fill in the template's variables</label>
+                <div class="form-text mb-2">
+                    A trigger can take values from the incoming payload or use a fixed
+                    value. Bindings to a conversation, an earlier node or a record are only
+                    available inside a flow — pick one of those in the Flow Builder or
+                    Pipelines instead.
+                </div>
+                <div id="triggerBindingRows" class="vstack gap-2"></div>
+                <div id="triggerBindingEmpty" class="text-muted small">
+                    Choose a template to see what it needs.
+                </div>
+                <script type="application/json" id="triggerBindingsData">
+                    {{ (trigger.variable_bindings if trigger else {}) | tojson }}
+                </script>
+                <input type="hidden" name="bindings_json" id="triggerBindingsJson" value="{}">
+            </div>
+
+            <div class="col-md-6">
+                <label class="form-label">Shared with workspace</label>
+                <select name="workspace_id" class="form-select">
+                    <option value="">Not shared</option>
+                    {% for workspace in workspaces %}
+                    <option value="{{ workspace.uuid }}"
+                        {% if workspace_id and workspace_id == workspace.uuid %}selected{% endif %}>
+                        {{ workspace.name }}{% if not workspace.is_active %} (archived){% endif %}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="submit" class="btn btn-primary">{{ submit_label }}</button>
+    </div>
+</form>

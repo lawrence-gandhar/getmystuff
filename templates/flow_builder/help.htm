@@ -1,0 +1,1058 @@
+{# Flow Builder — the in-app help page, opened in its own tab from the Help button on
+   /flow-builder/ and from the canvas toolbar.
+
+   It is the browsable form of documentations/FLOW_BUILDER.md: the same blocks, the same
+   validation refusals and the same limits, so somebody halfway through drawing a flow does
+   not have to leave the application to find out what a port means. Keep the two in step —
+   when a validator's wording or a cap changes, both say the new thing.
+
+   Deliberately static: no form, no HTMX, no context beyond what the layout needs. That is
+   why the whole body sits inside {% raw %} — the copy is full of {{VARIABLE}} examples, and
+   an example is worth nothing if it has been escaped by hand into something that is no
+   longer the thing you would type. #}
+{% extends "base/layout.htm" %}
+{% block title %}Flow Builder Help | GetMyStuff{% endblock %}
+
+{% block extra_css %}
+<style>
+    /* Prose column: measured for reading rather than filling the viewport. */
+    .help-body { max-width: 900px; }
+
+    /* The fixed navbar is 110px tall, so an anchor jump would land under it. */
+    .help-section { scroll-margin-top: 130px; }
+
+    .help-toc {
+        position: sticky;
+        top: 130px;
+        max-height: calc(100vh - 160px);
+        overflow-y: auto;
+    }
+    .help-toc a {
+        display: block;
+        padding: 4px 10px;
+        font-size: 13px;
+        color: #4b5563;
+        text-decoration: none;
+        border-left: 2px solid #e5e7eb;
+    }
+    .help-toc a:hover {
+        color: #2563eb;
+        background: #f9fafb;
+        border-left-color: #93c5fd;
+    }
+    .help-toc .help-toc-group {
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: .04em;
+        color: #9ca3af;
+        padding: 12px 10px 4px;
+    }
+
+    .help-body pre {
+        background: #0f172a;
+        color: #e2e8f0;
+        border-radius: 8px;
+        padding: 14px 16px;
+        font-size: 12.5px;
+        line-height: 1.6;
+        overflow-x: auto;
+        margin-bottom: 0;
+    }
+    .help-body pre code { color: inherit; }
+    .help-body :not(pre) > code {
+        background: #f3f4f6;
+        color: #b91c1c;
+        padding: 1px 5px;
+        border-radius: 4px;
+        font-size: 12.5px;
+    }
+    .help-body table { font-size: 13.5px; }
+    .help-body h6 {
+        font-size: 12px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: .04em;
+        color: #6b7280;
+    }
+    .help-scenario .card-header { background: #f9fafb; }
+    .help-ask {
+        font-style: italic;
+        color: #4b5563;
+        border-left: 3px solid #93c5fd;
+        padding-left: 12px;
+        margin-bottom: 0;
+    }
+    /* The block reference rows: an icon column that stays narrow. */
+    .help-block-icon { width: 34px; font-size: 18px; color: #2563eb; }
+</style>
+{% endblock %}
+
+{% block content %}
+{% raw %}
+<div class="container-fluid mt-4">
+
+    <div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
+        <h5 class="fw-semibold mb-0">
+            <i class="las la-question-circle text-primary"></i> Flow Builder — Help
+            <span class="text-muted small fw-normal ms-2">
+                every block explained, with a worked example per scenario
+            </span>
+        </h5>
+        <a href="/flow-builder/" class="btn btn-outline-primary btn-sm">
+            <i class="las la-arrow-left"></i> Back to Flow Builder
+        </a>
+    </div>
+
+    <div class="row g-4">
+
+        <!-- ============ IN-PAGE NAV ============ -->
+        <div class="col-lg-3 d-none d-lg-block">
+            <nav class="help-toc">
+                <div class="help-toc-group">Start here</div>
+                <a href="#model">The mental model</a>
+                <a href="#live">Making it live</a>
+                <a href="#variables">Variables, honestly</a>
+                <a href="#ports">Ports and connections</a>
+
+                <div class="help-toc-group">The blocks</div>
+                <a href="#blocks">All eleven, at a glance</a>
+                <a href="#b-talk">Start · Send Message · End</a>
+                <a href="#b-ask">Ask for Input</a>
+                <a href="#b-choice">Menu · Dropdown</a>
+                <a href="#b-ifelse">If / Else</a>
+                <a href="#b-goto">Goto</a>
+                <a href="#b-ai">AI Fallback</a>
+                <a href="#b-graph">Run Graph</a>
+                <a href="#b-email">Send Email</a>
+
+                <div class="help-toc-group">Scenarios</div>
+                <a href="#s1">1 · A greeting that ends</a>
+                <a href="#s2">2 · Ask for a name</a>
+                <a href="#s3">3 · A menu with branches</a>
+                <a href="#s4">4 · Branch on an answer</a>
+                <a href="#s5">5 · One shared ending</a>
+                <a href="#s6">6 · Hand over to AI</a>
+                <a href="#s7">7 · Look something up</a>
+                <a href="#s8">8 · Notify the team</a>
+                <a href="#s9">9 · A whole triage flow</a>
+
+                <div class="help-toc-group">Reference</div>
+                <a href="#limits">Limits</a>
+                <a href="#errors">When a save is refused</a>
+                <a href="#session">What a visitor's session holds</a>
+            </nav>
+        </div>
+
+        <!-- ============ BODY ============ -->
+        <div class="col-lg-9">
+            <div class="help-body">
+
+                <!-- ============ MENTAL MODEL ============ -->
+                <section id="model" class="help-section mb-5">
+                    <h6>Start here</h6>
+                    <h4 class="fw-semibold mb-3">The mental model</h4>
+
+                    <p>
+                        A flow is a conversation <strong>on rails</strong>. You draw the
+                        blocks, connect them, and every visitor walks the same track — the
+                        agent says exactly what you wrote, in the order you drew it.
+                    </p>
+                    <p>
+                        That is the opposite of the AI answering freely, and it is the point.
+                        A flow is for the parts of a conversation you want to be the same
+                        every time: the greeting, the menu, the qualifying questions, the
+                        hand-off. When the rails run out, the AI takes over.
+                    </p>
+
+                    <div class="row g-3 mb-3">
+                        <div class="col-md-4">
+                            <div class="card h-100 border-0 bg-light">
+                                <div class="card-body">
+                                    <h6 class="mb-2">One flow, one agent</h6>
+                                    <p class="small mb-0">
+                                        A flow is built here on its own, then attached to a
+                                        single agent from that agent's settings page. It is
+                                        not owned by the agent — you can build it, park it,
+                                        and attach it later.
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="card h-100 border-0 bg-light">
+                                <div class="card-body">
+                                    <h6 class="mb-2">One visitor, one position</h6>
+                                    <p class="small mb-0">
+                                        Each visitor has a session holding where they are in
+                                        the flow and the answers collected so far. Nothing
+                                        else. Close the tab and come back much later and
+                                        they start again.
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="card h-100 border-0 bg-light">
+                                <div class="card-body">
+                                    <h6 class="mb-2">The end is a hand-over</h6>
+                                    <p class="small mb-0">
+                                        Reaching an End block — or simply running out of
+                                        connections — finishes the flow and lets the agent
+                                        answer normally from then on. It never loops back to
+                                        the top.
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="alert alert-info small mb-0">
+                        <strong>Draw the happy path first.</strong> Start → a greeting → a
+                        menu → one branch per option → an End on each. Get that saving, then
+                        add the awkward cases. A flow that refuses to save is easier to fix
+                        when only one thing changed since it last did.
+                    </div>
+                </section>
+
+                <!-- ============ LIVE ============ -->
+                <section id="live" class="help-section mb-5">
+                    <h4 class="fw-semibold mb-3">Making it live takes two switches</h4>
+
+                    <p>
+                        This is the single most common reason a flow "does not work". Both
+                        have to be on, and they are set in two different places.
+                    </p>
+
+                    <div class="table-responsive">
+                        <table class="table table-sm table-bordered align-middle">
+                            <thead class="table-light">
+                                <tr><th style="width:130px;">Switch</th><th>Where</th><th>What it means</th></tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><strong>Active</strong></td>
+                                    <td>Here, on the Flow Builder list</td>
+                                    <td>
+                                        The flow is published. A draft is editable but never
+                                        runs for a visitor.
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Attached</strong></td>
+                                    <td>The agent's own settings page</td>
+                                    <td>
+                                        This agent runs this flow. Only Active flows that are
+                                        not already attached elsewhere can be picked.
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <p class="mb-2"><strong>Two consequences worth knowing:</strong></p>
+                    <ul class="small">
+                        <li>
+                            <strong>Save is not publish.</strong> Editing an attached, active
+                            flow changes what visitors get as soon as you press Save. There
+                            is no separate publish step and no draft copy — the
+                            <em>Unsaved changes</em> badge on the canvas is telling you the
+                            opposite thing, that your edits are <em>not</em> live yet.
+                        </li>
+                        <li>
+                            <strong>Turning an attached flow back to draft leaves it
+                            attached</strong> and simply stops the agent running it. That is
+                            the safe way to take a flow out of service without unpicking the
+                            agent's settings.
+                        </li>
+                    </ul>
+
+                    <div class="alert alert-warning small mb-0">
+                        <strong>Nobody is mid-conversation when you save.</strong> Visitors
+                        already in the flow are walking the graph you just replaced. If you
+                        have moved things around, expect a few sessions to land somewhere odd
+                        and sign off early — they will, rather than crash, but a busy agent is
+                        better edited quietly.
+                    </div>
+                </section>
+
+                <!-- ============ VARIABLES ============ -->
+                <section id="variables" class="help-section mb-5">
+                    <h4 class="fw-semibold mb-3">Variables, honestly</h4>
+
+                    <p>
+                        Several blocks can <strong>store</strong> what a visitor said into a
+                        named variable — <code>email</code>, <code>issue_type</code>,
+                        whatever you call it. The session carries those names and values for
+                        the rest of the conversation.
+                    </p>
+
+                    <p class="mb-2">Where a stored variable can actually be <em>read</em>:</p>
+
+                    <div class="table-responsive">
+                        <table class="table table-sm table-bordered align-middle">
+                            <thead class="table-light">
+                                <tr><th style="width:220px;">Place</th><th>Reads variables?</th></tr>
+                            </thead>
+                            <tbody>
+                                <tr><td>If / Else condition</td><td class="text-success"><strong>Yes</strong> — this is what it is for</td></tr>
+                                <tr><td>Send Email — recipients</td><td class="text-success"><strong>Yes</strong> — a TO may be <code>{{EMAIL}}</code></td></tr>
+                                <tr><td>Send Email — template variables</td><td class="text-success"><strong>Yes</strong> — bind each one to a collected value</td></tr>
+                                <tr><td>Send Message text</td><td class="text-danger"><strong>No</strong></td></tr>
+                                <tr><td>Ask for Input prompt</td><td class="text-danger"><strong>No</strong></td></tr>
+                                <tr><td>Menu / Dropdown prompt and options</td><td class="text-danger"><strong>No</strong></td></tr>
+                                <tr><td>End Flow closing message</td><td class="text-danger"><strong>No</strong></td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="alert alert-danger small mb-3">
+                        <strong>Message text is sent exactly as you typed it.</strong> Writing
+                        <code>Thanks {{NAME}}!</code> in a Send Message shows the visitor the
+                        literal characters <code>Thanks {{NAME}}!</code> — braces and all. It
+                        is not a broken variable; message text simply is not a template.
+                    </div>
+
+                    <p class="mb-0">
+                        To greet somebody by name, branch instead: an If / Else on the
+                        variable, with a differently-worded Send Message on each side. To put
+                        a collected value into something a person reads, use
+                        <strong>Send Email</strong>, whose template variables are bound
+                        properly.
+                    </p>
+                </section>
+
+                <!-- ============ PORTS ============ -->
+                <section id="ports" class="help-section mb-5">
+                    <h4 class="fw-semibold mb-3">Ports and connections</h4>
+
+                    <p>
+                        Every block has zero or more <strong>output ports</strong> — the small
+                        handles on its right edge. A connection runs from one port to the top
+                        of another block.
+                    </p>
+
+                    <ul class="small mb-3">
+                        <li>
+                            <strong>One connection per port.</strong> A port already joined to
+                            something cannot be joined to a second block; the save is refused
+                            rather than one of the two being picked silently.
+                        </li>
+                        <li>
+                            <strong>A port left unconnected is an ending.</strong> The
+                            conversation signs off there. That is legitimate — you do not need
+                            an End block on every branch — but it means a
+                            <em>forgotten</em> connection looks exactly like a deliberate
+                            ending, and the visitor gets "Thank you for chatting with us.
+                            Goodbye!" in the middle of your flow.
+                        </li>
+                        <li>
+                            <strong>Menu and Dropdown grow a port per option.</strong> Add a
+                            fourth option and a fourth port appears; delete an option and its
+                            connection goes with it.
+                        </li>
+                        <li>
+                            <strong>Two ports mean two outcomes.</strong> If / Else has
+                            <code>True</code> and <code>False</code>; Run Graph and Send Email
+                            have a success port and a <code>failed</code> port. Leave
+                            <code>failed</code> unconnected and a failure quietly ends the
+                            conversation — connect it to a Send Message if you would rather
+                            say something.
+                        </li>
+                    </ul>
+
+                    <div class="alert alert-info small mb-0">
+                        <strong>Nothing may connect back into Start</strong>, and
+                        <strong>nothing may leave an End</strong>. Both are refused on save.
+                        To restart a conversation, end it — the next message begins a new one.
+                    </div>
+                </section>
+
+                <hr class="my-5">
+
+                <!-- ============ BLOCK TABLE ============ -->
+                <section id="blocks" class="help-section mb-5">
+                    <h6>The blocks</h6>
+                    <h4 class="fw-semibold mb-3">All eleven, at a glance</h4>
+
+                    <div class="table-responsive">
+                        <table class="table table-sm table-bordered align-middle">
+                            <thead class="table-light">
+                                <tr>
+                                    <th colspan="2" style="width:190px;">Block</th>
+                                    <th>What it does</th>
+                                    <th style="width:150px;">Ports</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr><td class="help-block-icon text-center"><i class="las la-play-circle"></i></td><td><strong>Start</strong></td><td>Where every conversation begins. Exactly one per flow</td><td>one</td></tr>
+                                <tr><td class="help-block-icon text-center"><i class="las la-comment-dots"></i></td><td><strong>Send Message</strong></td><td>Says something and carries straight on</td><td>one</td></tr>
+                                <tr><td class="help-block-icon text-center"><i class="las la-keyboard"></i></td><td><strong>Ask for Input</strong></td><td>Asks, waits for typing, stores the answer</td><td>one</td></tr>
+                                <tr><td class="help-block-icon text-center"><i class="las la-list"></i></td><td><strong>Menu / Buttons</strong></td><td>Offers buttons; each one is its own branch</td><td>one per option</td></tr>
+                                <tr><td class="help-block-icon text-center"><i class="las la-caret-square-down"></i></td><td><strong>Dropdown</strong></td><td>The same, as a select — for longer lists</td><td>one per option</td></tr>
+                                <tr><td class="help-block-icon text-center"><i class="las la-code-branch"></i></td><td><strong>If / Else</strong></td><td>Takes one of two routes based on a stored value</td><td><code>True</code>, <code>False</code></td></tr>
+                                <tr><td class="help-block-icon text-center"><i class="las la-share"></i></td><td><strong>Goto</strong></td><td>Jumps to another block — reuse without redrawing</td><td>none</td></tr>
+                                <tr><td class="help-block-icon text-center"><i class="las la-robot"></i></td><td><strong>AI Fallback</strong></td><td>Hands this turn to the AI, then carries on</td><td>one</td></tr>
+                                <tr><td class="help-block-icon text-center"><i class="las la-project-diagram"></i></td><td><strong>Run Graph</strong></td><td>Runs a published pipeline mid-conversation</td><td><code>done</code>, <code>failed</code></td></tr>
+                                <tr><td class="help-block-icon text-center"><i class="las la-envelope"></i></td><td><strong>Send Email</strong></td><td>Queues an email. Says nothing to the visitor</td><td><code>queued</code>, <code>failed</code></td></tr>
+                                <tr><td class="help-block-icon text-center"><i class="las la-flag-checkered"></i></td><td><strong>End Flow</strong></td><td>Signs off and hands the visitor to the AI</td><td>none</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <!-- ============ TALK BLOCKS ============ -->
+                <section id="b-talk" class="help-section mb-5">
+                    <h4 class="fw-semibold mb-3">Start · Send Message · End Flow</h4>
+
+                    <p>
+                        The three that just talk. <strong>Start</strong> takes no settings —
+                        it marks the entry point, and a flow must have exactly one.
+                    </p>
+                    <p>
+                        <strong>Send Message</strong> has one field, the message text, and
+                        does not wait for a reply — it says its piece and moves to the next
+                        block in the same turn. Chain three of them and the visitor gets three
+                        bubbles at once.
+                    </p>
+                    <p class="mb-3">
+                        <strong>End Flow</strong> takes an optional closing message and
+                        finishes the conversation. Leave it blank and the visitor gets
+                        <em>"Thank you for chatting with us. Goodbye!"</em>
+                    </p>
+
+                    <div class="alert alert-light border small mb-0">
+                        <strong>A blank Send Message is skipped, not sent.</strong> It hops
+                        onward rather than drawing an empty chat bubble — so a message you
+                        meant to write and did not is invisible rather than ugly. If there is
+                        nowhere left to hop, it becomes the end of the conversation.
+                    </div>
+                </section>
+
+                <!-- ============ ASK ============ -->
+                <section id="b-ask" class="help-section mb-5">
+                    <h4 class="fw-semibold mb-3">Ask for Input</h4>
+
+                    <p>
+                        Asks a question and <strong>waits</strong>. Whatever the visitor types
+                        next is stored under the variable name you give, and the flow
+                        continues from the single output port.
+                    </p>
+
+                    <div class="table-responsive mb-3">
+                        <table class="table table-sm table-bordered">
+                            <tbody>
+                                <tr><th scope="row" class="fw-normal" style="width:210px;">Prompt text</th><td>The question. Shown as a normal message</td></tr>
+                                <tr><th scope="row" class="fw-normal">Store answer in variable</th><td>A short name — <code>email</code>, <code>order_number</code></td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="alert alert-warning small mb-0">
+                        <strong>Anything they type is accepted.</strong> There is no format
+                        checking here — asking for an email address and being given "no" stores
+                        the word "no". If the answer has to be usable, follow it with an
+                        If / Else on <code>contains</code> and ask again on the False branch.
+                    </div>
+                </section>
+
+                <!-- ============ CHOICE ============ -->
+                <section id="b-choice" class="help-section mb-5">
+                    <h4 class="fw-semibold mb-3">Menu / Buttons · Dropdown</h4>
+
+                    <p>
+                        Both offer a fixed set of choices and wait. The difference is only how
+                        the widget draws them: <strong>Menu</strong> renders buttons, which
+                        suits three or four options; <strong>Dropdown</strong> renders a
+                        select, which suits a longer list.
+                    </p>
+
+                    <div class="table-responsive mb-3">
+                        <table class="table table-sm table-bordered">
+                            <tbody>
+                                <tr><th scope="row" class="fw-normal" style="width:210px;">Prompt text</th><td>The question above the choices</td></tr>
+                                <tr><th scope="row" class="fw-normal">Options</th><td>One row each. Each grows its own output port</td></tr>
+                                <tr><th scope="row" class="fw-normal">Store choice in variable</th><td>Optional. Records which one they picked</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <p class="mb-0">
+                        Every option needs somewhere to go. An option whose port is left
+                        unconnected ends the conversation the moment somebody picks it — which
+                        is a perfectly good "no thanks, goodbye" option and a very confusing
+                        accident.
+                    </p>
+                </section>
+
+                <!-- ============ IF/ELSE ============ -->
+                <section id="b-ifelse" class="help-section mb-5">
+                    <h4 class="fw-semibold mb-3">If / Else</h4>
+
+                    <p>
+                        Looks at one stored variable and leaves by <code>True</code> or
+                        <code>False</code>. Three tests, and no others:
+                    </p>
+
+                    <div class="table-responsive mb-3">
+                        <table class="table table-sm table-bordered">
+                            <thead class="table-light">
+                                <tr><th style="width:150px;">Operator</th><th>True when</th></tr>
+                            </thead>
+                            <tbody>
+                                <tr><td><code>not_empty</code></td><td>The variable holds anything at all. The compare value is ignored</td></tr>
+                                <tr><td><code>equals</code></td><td>The variable is exactly the compare value</td></tr>
+                                <tr><td><code>contains</code></td><td>The compare value appears somewhere inside it</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="alert alert-info small mb-0">
+                        <strong>A variable that was never set is empty, not an error.</strong>
+                        An If / Else on a name nothing stored takes the <code>False</code>
+                        branch every time — which is usually what you want, and is worth
+                        remembering when a branch never fires: check the spelling of the
+                        variable name against the block that stores it.
+                    </div>
+                </section>
+
+                <!-- ============ GOTO ============ -->
+                <section id="b-goto" class="help-section mb-5">
+                    <h4 class="fw-semibold mb-3">Goto</h4>
+
+                    <p>
+                        Jumps to a named block. It has no output port — the jump
+                        <em>is</em> its output. Use it to reuse one ending, or one "can I help
+                        with anything else?" section, from several branches without drawing
+                        the same blocks three times.
+                    </p>
+
+                    <div class="alert alert-warning small mb-0">
+                        <strong>A Goto that jumps backwards can loop.</strong> The engine stops
+                        a runaway at <strong>25 hops</strong> within a single turn and signs
+                        off, so a loop cannot hang the conversation — but it does end it, and
+                        the visitor sees a goodbye they did not ask for. A loop is fine as long
+                        as something in it waits for the visitor.
+                    </div>
+                </section>
+
+                <!-- ============ AI ============ -->
+                <section id="b-ai" class="help-section mb-5">
+                    <h4 class="fw-semibold mb-3">AI Fallback</h4>
+
+                    <p>
+                        Hands this one turn to the language model, then carries on down the
+                        flow. Use it where a scripted answer will not do — an open "what is
+                        your question?" step in the middle of an otherwise fixed path.
+                    </p>
+
+                    <div class="table-responsive mb-3">
+                        <table class="table table-sm table-bordered">
+                            <tbody>
+                                <tr><th scope="row" class="fw-normal" style="width:210px;">Guardrails</th><td>What it must not do — topics to refuse, tone to keep</td></tr>
+                                <tr><th scope="row" class="fw-normal">Prompt / instructions</th><td>What it should do at this point in the conversation</td></tr>
+                                <tr>
+                                    <th scope="row" class="fw-normal">Answer using</th>
+                                    <td>
+                                        <code>Attached datasource</code> — query the agent's data ·
+                                        <code>Knowledge base</code> — the documents on this block ·
+                                        <code>Prompt only</code> — no lookups
+                                    </td>
+                                </tr>
+                                <tr><th scope="row" class="fw-normal">Language model</th><td><code>In-built LLM</code>, or <code>Attached LLM API</code></td></tr>
+                                <tr><th scope="row" class="fw-normal">Attached API key</th><td>Required when the mode is <code>Attached LLM API</code></td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <p class="mb-0">
+                        Choosing <strong>Knowledge base</strong> gives this block its own
+                        document store: upload files or paste text on the block, then
+                        <strong>Train</strong>. Until it is trained it has nothing to answer
+                        from. The knowledge base belongs to the block, not the flow, so two AI
+                        Fallback blocks can answer from two different sets of documents.
+                    </p>
+                </section>
+
+                <!-- ============ RUN GRAPH ============ -->
+                <section id="b-graph" class="help-section mb-5">
+                    <h4 class="fw-semibold mb-3">Run Graph</h4>
+
+                    <p>
+                        Runs one of your <strong>Pipelines</strong> in the middle of the
+                        conversation and waits for it to finish. Two ports:
+                        <code>done</code> and <code>failed</code>.
+                    </p>
+
+                    <div class="table-responsive mb-3">
+                        <table class="table table-sm table-bordered">
+                            <tbody>
+                                <tr><th scope="row" class="fw-normal" style="width:210px;">Graph</th><td>Which pipeline. <strong>Only published ones are listed</strong></td></tr>
+                                <tr><th scope="row" class="fw-normal">Store the number of results in</th><td>A variable holding how many rows came back</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="alert alert-info small mb-0">
+                        <strong>The count is what you branch on.</strong> Follow it with an
+                        If / Else on that variable — <code>equals 0</code> for "we found
+                        nothing", anything else for a result — so the visitor gets a sensible
+                        sentence either way. And connect <code>failed</code>: a pipeline that
+                        errors otherwise ends the conversation without explanation.
+                    </div>
+                </section>
+
+                <!-- ============ EMAIL ============ -->
+                <section id="b-email" class="help-section mb-5">
+                    <h4 class="fw-semibold mb-3">Send Email</h4>
+
+                    <p>
+                        Queues an email and <strong>says nothing to the visitor</strong> — it
+                        hops straight on, so put a Send Message after it if somebody should be
+                        told. Two ports: <code>queued</code> and <code>failed</code>.
+                    </p>
+
+                    <div class="table-responsive mb-3">
+                        <table class="table table-sm table-bordered">
+                            <tbody>
+                                <tr><th scope="row" class="fw-normal" style="width:210px;">Template</th><td>From <strong>Emails → Templates</strong>. Required</td></tr>
+                                <tr><th scope="row" class="fw-normal">Send through</th><td>An SMTP server from <strong>Emails → Servers</strong>. Required</td></tr>
+                                <tr><th scope="row" class="fw-normal">To / Cc / Bcc</th><td>At least one TO. May be a fixed address or a <code>{{VARIABLE}}</code></td></tr>
+                                <tr><th scope="row" class="fw-normal">Variables</th><td>One binding per placeholder the template declares</td></tr>
+                                <tr><th scope="row" class="fw-normal">Store the email's id in</th><td>Optional. Useful for looking the message up later</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <p class="mb-2">Each template variable is bound to one of three sources:</p>
+                    <ul class="small mb-3">
+                        <li><strong>A value the conversation collected</strong> — anything an Ask for Input or a Menu stored</li>
+                        <li><strong>An agent variable</strong> — the standing values on the agent, such as <code>{{COMPANY}}</code></li>
+                        <li><strong>A fixed value</strong> — the same text every time</li>
+                    </ul>
+
+                    <div class="alert alert-warning small mb-0">
+                        <strong><code>queued</code> does not mean delivered.</strong> The
+                        <code>failed</code> port fires for something knowable right now — a
+                        template that has been deleted, a binding that resolves to nothing.
+                        Whether the mail is later accepted by the relay is answered by the
+                        delivery log under <strong>Emails → Messages</strong>, not by this
+                        block.
+                    </div>
+                </section>
+
+                <hr class="my-5">
+
+                <!-- ============ SCENARIO 1 ============ -->
+                <section id="s1" class="help-section help-scenario mb-4">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="badge bg-primary-subtle text-primary-emphasis border border-primary-subtle">Basics</span>
+                            <strong class="ms-1">1 · A greeting that ends</strong>
+                        </div>
+                        <div class="card-body">
+                            <p class="help-ask mb-3">"Say hello, then let the AI take over."</p>
+
+                            <h6>What to draw</h6>
+                            <pre><code>Start → Send Message → End Flow</code></pre>
+
+                            <h6 class="mt-4">What to fill in</h6>
+                            <table class="table table-sm table-bordered">
+                                <tbody>
+                                    <tr><th scope="row" class="fw-normal" style="width:180px;">Send Message</th><td>"Hi! I'm the support assistant. Ask me anything."</td></tr>
+                                    <tr><th scope="row" class="fw-normal">End Flow</th><td>Leave the closing message blank</td></tr>
+                                </tbody>
+                            </table>
+
+                            <div class="alert alert-info small mt-3 mb-0">
+                                <strong>The End is doing the work here.</strong> It finishes
+                                the flow, which is what puts the AI in charge of everything
+                                after the greeting. Without it the visitor would get the
+                                default goodbye instead of an assistant.
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ============ SCENARIO 2 ============ -->
+                <section id="s2" class="help-section help-scenario mb-4">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="badge bg-primary-subtle text-primary-emphasis border border-primary-subtle">Basics</span>
+                            <strong class="ms-1">2 · Ask for a name</strong>
+                        </div>
+                        <div class="card-body">
+                            <p class="help-ask mb-3">"Get their name before anything else."</p>
+
+                            <h6>What to draw</h6>
+                            <pre><code>Start → Ask for Input → Send Message → End Flow</code></pre>
+
+                            <h6 class="mt-4">What to fill in</h6>
+                            <table class="table table-sm table-bordered">
+                                <tbody>
+                                    <tr><th scope="row" class="fw-normal" style="width:180px;">Ask for Input</th><td>Prompt: "Before we start — what's your name?"<br>Store in: <code>name</code></td></tr>
+                                    <tr><th scope="row" class="fw-normal">Send Message</th><td>"Thanks! How can I help today?"</td></tr>
+                                </tbody>
+                            </table>
+
+                            <div class="alert alert-danger small mt-3 mb-0">
+                                <strong>Do not write "Thanks {{name}}!"</strong> — the visitor
+                                would see those characters exactly. Message text is not a
+                                template; see <a href="#variables">Variables, honestly</a>. The
+                                name is stored and useful for branching and for emails, just
+                                not for greeting them by it.
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ============ SCENARIO 3 ============ -->
+                <section id="s3" class="help-section help-scenario mb-4">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="badge bg-primary-subtle text-primary-emphasis border border-primary-subtle">Basics</span>
+                            <strong class="ms-1">3 · A menu with branches</strong>
+                        </div>
+                        <div class="card-body">
+                            <p class="help-ask mb-3">"Sales, support, or something else?"</p>
+
+                            <h6>What to draw</h6>
+                            <pre><code>Start → Menu ─┬─ Sales   → Send Message → End Flow
+              ├─ Support → Send Message → End Flow
+              └─ Other   → End Flow</code></pre>
+
+                            <h6 class="mt-4">What to fill in</h6>
+                            <table class="table table-sm table-bordered">
+                                <tbody>
+                                    <tr><th scope="row" class="fw-normal" style="width:180px;">Prompt text</th><td>"What can I help with?"</td></tr>
+                                    <tr><th scope="row" class="fw-normal">Options</th><td>Sales · Support · Something else</td></tr>
+                                    <tr><th scope="row" class="fw-normal">Store choice in</th><td><code>topic</code></td></tr>
+                                </tbody>
+                            </table>
+
+                            <div class="alert alert-info small mt-3 mb-0">
+                                <strong>Store the choice even when you branch on the port.</strong>
+                                The connections already send each option somewhere, so
+                                <code>topic</code> looks redundant — until you want to put it in
+                                a notification email or test it further down. It costs nothing.
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ============ SCENARIO 4 ============ -->
+                <section id="s4" class="help-section help-scenario mb-4">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="badge bg-info-subtle text-info-emphasis border border-info-subtle">Branching</span>
+                            <strong class="ms-1">4 · Branch on what they typed</strong>
+                        </div>
+                        <div class="card-body">
+                            <p class="help-ask mb-3">"Only continue if they actually gave an email address."</p>
+
+                            <h6>What to draw</h6>
+                            <pre><code>Ask for Input → If / Else ─┬─ True  → Send Message → End Flow
+                           └─ False → Send Message → Goto (back to the question)</code></pre>
+
+                            <h6 class="mt-4">What to fill in</h6>
+                            <table class="table table-sm table-bordered">
+                                <tbody>
+                                    <tr><th scope="row" class="fw-normal" style="width:180px;">Ask for Input</th><td>Prompt: "What's your email address?" · Store in: <code>email</code></td></tr>
+                                    <tr><th scope="row" class="fw-normal">If / Else</th><td>Variable <code>email</code>, operator <code>contains</code>, compare value <code>@</code></td></tr>
+                                    <tr><th scope="row" class="fw-normal">False branch message</th><td>"That doesn't look like an email address — could you try again?"</td></tr>
+                                </tbody>
+                            </table>
+
+                            <div class="alert alert-success small mt-3 mb-0">
+                                <strong>This loop is safe</strong> because the Ask for Input it
+                                returns to waits for the visitor. The 25-hop limit only catches
+                                loops where nothing waits — see <a href="#b-goto">Goto</a>.
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ============ SCENARIO 5 ============ -->
+                <section id="s5" class="help-section help-scenario mb-4">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="badge bg-info-subtle text-info-emphasis border border-info-subtle">Branching</span>
+                            <strong class="ms-1">5 · One shared ending</strong>
+                        </div>
+                        <div class="card-body">
+                            <p class="help-ask mb-3">"Every branch should finish the same way."</p>
+
+                            <h6>What to draw</h6>
+                            <pre><code>Sales branch   → Goto ┐
+Support branch → Goto ├─→ Send Message ("Anything else?") → End Flow
+Other branch   → Goto ┘</code></pre>
+
+                            <div class="alert alert-info small mt-3 mb-0">
+                                <strong>Three Gotos, one ending.</strong> Without them you would
+                                draw the same closing message three times and have to remember
+                                all three when the wording changes. Point each Goto at the
+                                shared Send Message.
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ============ SCENARIO 6 ============ -->
+                <section id="s6" class="help-section help-scenario mb-4">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="badge bg-dark-subtle text-dark border">AI</span>
+                            <strong class="ms-1">6 · Hand over to AI when the menu does not fit</strong>
+                        </div>
+                        <div class="card-body">
+                            <p class="help-ask mb-3">"Give them a menu, but let them just ask instead."</p>
+
+                            <h6>What to draw</h6>
+                            <pre><code>Menu ─┬─ Sales           → …
+      ├─ Support         → …
+      └─ Something else  → AI Fallback → End Flow</code></pre>
+
+                            <h6 class="mt-4">What to fill in</h6>
+                            <table class="table table-sm table-bordered">
+                                <tbody>
+                                    <tr><th scope="row" class="fw-normal" style="width:180px;">Answer using</th><td><code>Attached datasource</code></td></tr>
+                                    <tr><th scope="row" class="fw-normal">Prompt</th><td>"Answer their question from our data. If you cannot, offer to take a message."</td></tr>
+                                    <tr><th scope="row" class="fw-normal">Guardrails</th><td>"Never quote prices. Never promise a delivery date."</td></tr>
+                                </tbody>
+                            </table>
+
+                            <div class="alert alert-light border small mt-3 mb-0">
+                                <strong>AI Fallback answers one turn and moves on.</strong> The
+                                End after it is what keeps the AI in charge afterwards. Drop the
+                                End and the flow would carry on scripting at somebody who is
+                                mid-question.
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ============ SCENARIO 7 ============ -->
+                <section id="s7" class="help-section help-scenario mb-4">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle">Pipelines</span>
+                            <strong class="ms-1">7 · Look something up</strong>
+                        </div>
+                        <div class="card-body">
+                            <p class="help-ask mb-3">"Check whether we have their order, then say so."</p>
+
+                            <h6>What to draw</h6>
+                            <pre><code>Ask for Input → Run Graph ─┬─ done   → If / Else ─┬─ True  → Send Message ("Found it…")
+                           │                     └─ False → Send Message ("Nothing under that number")
+                           └─ failed → Send Message ("Our system is busy — try shortly") → End Flow</code></pre>
+
+                            <h6 class="mt-4">What to fill in</h6>
+                            <table class="table table-sm table-bordered">
+                                <tbody>
+                                    <tr><th scope="row" class="fw-normal" style="width:180px;">Ask for Input</th><td>Store in <code>order_number</code></td></tr>
+                                    <tr><th scope="row" class="fw-normal">Run Graph</th><td>Graph: your published order-lookup pipeline · Store count in <code>hits</code></td></tr>
+                                    <tr><th scope="row" class="fw-normal">If / Else</th><td>Variable <code>hits</code>, operator <code>equals</code>, compare value <code>0</code> — then swap the two branches, since True now means "nothing found"</td></tr>
+                                </tbody>
+                            </table>
+
+                            <div class="alert alert-warning small mt-3 mb-0">
+                                <strong>Watch the polarity.</strong> Testing <code>equals 0</code>
+                                makes <code>True</code> the empty case. If that reads backwards to
+                                you, test <code>not_empty</code> on the count instead — but note
+                                that a count of <code>0</code> is still a value, so
+                                <code>not_empty</code> is True even when nothing was found.
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ============ SCENARIO 8 ============ -->
+                <section id="s8" class="help-section help-scenario mb-4">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle">Email</span>
+                            <strong class="ms-1">8 · Notify the team</strong>
+                        </div>
+                        <div class="card-body">
+                            <p class="help-ask mb-3">"Take a message and email it to support."</p>
+
+                            <h6>What to draw</h6>
+                            <pre><code>Ask for Input (email) → Ask for Input (message)
+    → Send Email ─┬─ queued → Send Message ("Thanks, we'll be in touch") → End Flow
+                  └─ failed → Send Message ("Sorry — couldn't send that") → End Flow</code></pre>
+
+                            <h6 class="mt-4">What to fill in</h6>
+                            <table class="table table-sm table-bordered">
+                                <tbody>
+                                    <tr><th scope="row" class="fw-normal" style="width:180px;">To</th><td><code>support@yourcompany.com</code></td></tr>
+                                    <tr><th scope="row" class="fw-normal">Template</th><td>A "new enquiry" template declaring <code>{{FROM_EMAIL}}</code> and <code>{{MESSAGE}}</code></td></tr>
+                                    <tr><th scope="row" class="fw-normal">Bindings</th><td><code>{{FROM_EMAIL}}</code> → value the conversation collected: <code>email</code><br><code>{{MESSAGE}}</code> → value the conversation collected: <code>enquiry</code></td></tr>
+                                </tbody>
+                            </table>
+
+                            <div class="alert alert-info small mt-3 mb-0">
+                                <strong>Send Email says nothing by itself.</strong> The Send
+                                Message on the <code>queued</code> port is the only reason the
+                                visitor knows anything happened.
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ============ SCENARIO 9 ============ -->
+                <section id="s9" class="help-section help-scenario mb-5">
+                    <div class="card border-primary-subtle">
+                        <div class="card-header">
+                            <span class="badge bg-primary-subtle text-primary-emphasis border border-primary-subtle">Everything together</span>
+                            <strong class="ms-1">9 · A whole triage flow</strong>
+                        </div>
+                        <div class="card-body">
+                            <p class="help-ask mb-3">"Greet, route, look up an order, take a message if we cannot help."</p>
+
+                            <pre><code>Start
+ └→ Send Message  "Hi! I can check an order or take a message."
+     └→ Menu  "What would you like to do?"
+         ├─ Check an order
+         │   └→ Ask for Input  "What's the order number?"        → order_number
+         │       └→ Run Graph  (order lookup)                    → hits
+         │           ├─ done   → If / Else  hits equals 0
+         │           │            ├─ True  → Send Message  "Nothing under that number."
+         │           │            │            └→ Goto  ──────────────┐
+         │           │            └─ False → Send Message  "Found it — someone will confirm."
+         │           │                         └→ Goto  ─────────────┤
+         │           └─ failed → Send Message  "Our system is busy."  │
+         │                        └→ Goto  ────────────────────────────┤
+         ├─ Leave a message                                            │
+         │   └→ Ask for Input  "Your email?"                → email    │
+         │       └→ Ask for Input  "What's it about?"       → enquiry  │
+         │           └→ Send Email                                     │
+         │               ├─ queued → Send Message "Thanks!"            │
+         │               │            └→ Goto  ────────────────────────┤
+         │               └─ failed → Send Message "Couldn't send."     │
+         │                            └→ Goto  ────────────────────────┤
+         └─ Something else                                             │
+             └→ AI Fallback → End Flow                                 │
+                                                                       │
+     Send Message  "Anything else I can help with?"  ←─────────────────┘
+      └→ End Flow</code></pre>
+
+                            <div class="alert alert-success small mt-3 mb-0">
+                                <strong>Five Gotos into one ending.</strong> That is the shape
+                                most real flows settle into: a menu at the top, one branch per
+                                intent, and every branch funnelling into a single sign-off you
+                                only have to word once. Note that every
+                                <code>failed</code> port is connected — nothing dead-ends in
+                                silence.
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <hr class="my-5">
+
+                <!-- ============ LIMITS ============ -->
+                <section id="limits" class="help-section mb-5">
+                    <h6>Reference</h6>
+                    <h4 class="fw-semibold mb-3">Limits, in one place</h4>
+
+                    <div class="table-responsive">
+                        <table class="table table-sm table-bordered">
+                            <tbody>
+                                <tr><th scope="row" class="fw-normal" style="width:340px;">Blocks per flow</th><td>500</td></tr>
+                                <tr><th scope="row" class="fw-normal">Connections per flow</th><td>2000</td></tr>
+                                <tr><th scope="row" class="fw-normal">Start blocks</th><td>Exactly one</td></tr>
+                                <tr><th scope="row" class="fw-normal">Connections leaving one port</th><td>One</td></tr>
+                                <tr><th scope="row" class="fw-normal">Blocks crossed in a single turn</th><td>25, then the conversation signs off</td></tr>
+                                <tr><th scope="row" class="fw-normal">Knowledge base — pasted text</th><td>100,000 characters</td></tr>
+                                <tr><th scope="row" class="fw-normal">A visitor's session goes stale after</th><td>12 hours of silence — the next message starts a new conversation</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <!-- ============ ERRORS ============ -->
+                <section id="errors" class="help-section mb-5">
+                    <h4 class="fw-semibold mb-3">When a save is refused</h4>
+
+                    <p class="small text-muted">
+                        The whole flow is checked on every Save, so a refusal can name a block
+                        you were not editing. Nothing is stored when it is refused — your
+                        drawing is still on screen, unchanged.
+                    </p>
+
+                    <div class="table-responsive">
+                        <table class="table table-sm table-bordered align-middle">
+                            <thead class="table-light">
+                                <tr><th style="width:52%;">Message</th><th>What to do</th></tr>
+                            </thead>
+                            <tbody>
+                                <tr><td><em>Flow must contain at least one node</em></td><td>An empty canvas cannot be saved. Add a Start block</td></tr>
+                                <tr><td><em>Flow must contain exactly one Start node</em></td><td>You have none, or two. Delete the spare</td></tr>
+                                <tr><td><em>Every node must have a unique, non-empty id</em></td><td>Usually a copy-paste that went wrong — delete the duplicate block and redraw it</td></tr>
+                                <tr><td><em>Start node cannot have incoming edges</em></td><td>Something connects back into Start. To repeat a section, Goto the block <em>after</em> Start</td></tr>
+                                <tr><td><em>End node cannot have outgoing edges</em></td><td>An End is final. Delete the connection leaving it</td></tr>
+                                <tr><td><em>Edge references an unknown node</em></td><td>A connection to a block that no longer exists. Delete and redraw it</td></tr>
+                                <tr><td><em>Node '…' has more than one edge on the same output ('…')</em></td><td>Two connections leave one port. Delete one — to fan out, add a Menu or an If / Else</td></tr>
+                                <tr><td><em>If/Else node is missing a variable name</em></td><td>Fill in which variable to test</td></tr>
+                                <tr><td><em>If/Else node has an invalid operator</em></td><td>Pick one of the three from the list</td></tr>
+                                <tr><td><em>Goto node must target a valid node</em></td><td>Its target was deleted or never chosen. Pick one</td></tr>
+                                <tr><td><em>Menu node must have at least one option</em></td><td>A menu with nothing to pick cannot be answered. Add an option</td></tr>
+                                <tr><td><em>Dropdown node must have at least one option</em></td><td>The same</td></tr>
+                                <tr><td><em>AI Fallback is set to use an attached LLM API but no key is selected</em></td><td>Choose a key, or switch back to the in-built model</td></tr>
+                                <tr><td><em>Email node is missing an email template</em></td><td>Pick one under Emails → Templates first</td></tr>
+                                <tr><td><em>Email node is missing an SMTP server</em></td><td>Add one under Emails → Servers first</td></tr>
+                                <tr><td><em>Email node needs at least one TO address (it may be a {{VARIABLE}})</em></td><td>A fixed address, or a variable the conversation collects</td></tr>
+                                <tr><td><em>Email node binds {{…}} to '…', which a conversation cannot provide</em></td><td>A flow has only what the chat collected, the agent's variables, and fixed values. Pick one of those three</td></tr>
+                                <tr><td><em>Unknown node type: '…'</em></td><td>A block from a newer version, or an edited import. Delete it and redraw</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <!-- ============ SESSION ============ -->
+                <section id="session" class="help-section mb-5">
+                    <h4 class="fw-semibold mb-3">What a visitor's session holds</h4>
+
+                    <p>Two things, and it is worth knowing how little that is:</p>
+
+                    <ul class="small mb-3">
+                        <li><strong>Where they are</strong> — the one block they are waiting at</li>
+                        <li><strong>What they have said</strong> — a flat list of variable names and text values</li>
+                    </ul>
+
+                    <p class="mb-3">
+                        Every value is <strong>text</strong>. A count from Run Graph is the text
+                        <code>"0"</code>, not the number zero — which is why If / Else compares
+                        it as text and why <code>equals 0</code> is written exactly like that.
+                    </p>
+
+                    <div class="alert alert-light border small mb-0">
+                        There is no history of the path taken, no undo, and no way to reach a
+                        value from a block that did not store one. If you will need something
+                        later, store it when it is offered — a Menu's
+                        <em>Store choice in variable</em> costs nothing and cannot be recovered
+                        afterwards.
+                    </div>
+                </section>
+
+                <div class="d-flex gap-2 mb-5 flex-wrap">
+                    <a href="/flow-builder/" class="btn btn-primary btn-sm">
+                        <i class="las la-arrow-left"></i> Back to Flow Builder
+                    </a>
+                    <a href="/graph-designer/" class="btn btn-outline-secondary btn-sm">
+                        <i class="las la-project-diagram"></i> Pipelines
+                    </a>
+                    <a href="/emails/templates/" class="btn btn-outline-secondary btn-sm">
+                        <i class="las la-envelope"></i> Email Templates
+                    </a>
+                    <a href="/data-agents" class="btn btn-outline-secondary btn-sm">
+                        <i class="las la-robot"></i> Data Agents
+                    </a>
+                </div>
+
+            </div>
+        </div>
+    </div>
+</div>
+{% endraw %}
+{% endblock %}

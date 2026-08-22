@@ -158,3 +158,64 @@ class TestResponses:
 
         assert result.saved is False
         assert result.message == "bad graph"
+
+
+class TestEveryPickerSurvivesTheResponse:
+    """
+    ``ResponseSchema`` is ``extra="ignore"``, so a list the service builds and this schema
+    does not declare is dropped from the JSON **without a word**.
+
+    That is not hypothetical. ``email_templates`` and ``smtp_configs`` were built by
+    ``node_options`` and undeclared here, so an Email node's Template picker was empty in
+    every browser and nothing anywhere said why — which in turn hid a TypeError in the
+    binding editor that could not be reached while the picker stayed empty.
+
+    These tests exist so that failure mode is loud next time.
+    """
+
+    def _built(self) -> dict:
+        return GraphNodeOptionsResponse.build({
+            "datasources": [
+                {"uuid": "d1", "label": "Warehouse", "detail": "postgres",
+                 "disabled_reason": ""},
+            ],
+            "tool_configs": [],
+            "data_agents": [],
+            "email_templates": [
+                {"uuid": "t1", "label": "Weekly digest", "detail": "Your week",
+                 "disabled_reason": "",
+                 "variables": [{"name": "CUSTOMER", "required": True}]},
+            ],
+            "smtp_configs": [
+                {"uuid": "s1", "label": "Relay", "detail": "smtp.example.com",
+                 "disabled_reason": ""},
+            ],
+            "human_expects": ["text"],
+            "error": None,
+        }).payload()
+
+    def test_the_email_templates_reach_the_browser(self) -> None:
+        assert [row["label"] for row in self._built()["email_templates"]] == ["Weekly digest"]
+
+    def test_the_smtp_servers_reach_the_browser(self) -> None:
+        assert [row["label"] for row in self._built()["smtp_configs"]] == ["Relay"]
+
+    def test_a_template_carries_what_it_declares(self) -> None:
+        """
+        The panel draws one binding row per declared variable the moment a template is
+        chosen. Dropping this would make it draw none, silently.
+        """
+        variables = self._built()["email_templates"][0]["variables"]
+
+        assert [variable["name"] for variable in variables] == ["CUSTOMER"]
+
+    def test_a_failure_still_answers_with_every_picker_empty(self) -> None:
+        """
+        The panel reads each list unconditionally, so a missing key is a TypeError in the
+        browser rather than an empty dropdown.
+        """
+        payload = GraphNodeOptionsResponse.failure("nope").payload()
+
+        for picker in ("datasources", "tool_configs", "data_agents",
+                       "email_templates", "smtp_configs"):
+            assert payload[picker] == []

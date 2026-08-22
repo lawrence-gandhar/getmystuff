@@ -36,7 +36,13 @@ window.FlowBuilder = (function () {
         // Two ports on purpose. A graph that could not run must not leave by the same
         // edge as one that succeeded, or the flow says "all done" about work that never
         // happened. With no `error` edge drawn the engine signs off instead.
-        run_graph: { label: "Run Graph", icon: "la-project-diagram", outputs: function () {
+        send_email: { label: "Send Email", icon: "la-envelope", outputs: function () {
+        // `error` is for a refusal knowable now — no template, an unresolvable binding.
+        // Whether the mail is later accepted by the relay is not knowable here and routes
+        // nowhere; the delivery log answers that.
+        return [{ port: "default", label: "queued" }, { port: "error", label: "failed" }];
+    } },
+    run_graph: { label: "Run Graph", icon: "la-project-diagram", outputs: function () {
             return [{ port: "default", label: "done" }, { port: "error", label: "failed" }];
         } },
         end: { label: "End Flow", icon: "la-flag-checkered", outputs: function () { return []; } },
@@ -103,6 +109,11 @@ window.FlowBuilder = (function () {
             case "ask_input": return { prompt_text: "", variable_name: "" };
             case "send_message": return { message_text: "" };
             case "run_graph": return { graph_id: "", variable_name: "" };
+        case "send_email": return {
+            template_id: "", smtp_config_id: "",
+            recipients: { to: [], cc: [], bcc: [] },
+            variable_bindings: {}, variable_name: "",
+        };
             case "ai_fallback": return {
                 guardrails: "",
                 prompt: "",
@@ -908,6 +919,8 @@ window.FlowBuilder = (function () {
                 fieldHtml("Store answer in variable", '<input class="form-control form-control-sm" data-field="variable_name" value="' + escapeAttr(draft.variable_name || "") + '">');
         } else if (node.type === "send_message") {
             html += fieldHtml("Message text", '<textarea class="form-control form-control-sm" rows="3" data-field="message_text">' + escapeHtml(draft.message_text || "") + "</textarea>");
+        } else if (node.type === "send_email") {
+            html += sendEmailFieldsHtml(draft);
         } else if (node.type === "run_graph") {
             html += runGraphFieldsHtml(draft);
         } else if (node.type === "ai_fallback") {
@@ -933,6 +946,10 @@ window.FlowBuilder = (function () {
                 draft[input.dataset.field] = input.value;
             });
         });
+
+        if (node.type === "send_email") {
+            wireSendEmailFields(node, draft);
+        }
 
         if (node.type === "menu" || node.type === "dropdown") {
             draft.options = draft.options || [];
@@ -1130,12 +1147,194 @@ window.FlowBuilder = (function () {
      * variable holds *how many* rows the graph produced, not the rows themselves, because
      * a variable is text that goes into a message.
      */
+
+    /**
+     * An Email block's properties: template, server, recipients, and one binding row per
+     * variable the chosen template declares.
+     *
+     * The declared variables ride along on each entry of `opts.emailTemplates`, sent by the
+     * edit route, so choosing a template can draw its rows without a round trip — a fetch
+     * here would let somebody Save the block before its rows had loaded.
+     *
+     * A flow offers three sources and no more: something the conversation collected, one of
+     * the agent's prompt variables from the Agents section, or a fixed value. There are no
+     * upstream node outputs in this engine — its state is one flat string map — and
+     * `_validate_send_email_data` refuses anything else on save.
+     */
+    function sendEmailFieldsHtml(draft) {
+        const templates = opts.emailTemplates || [];
+        const servers = opts.smtpConfigs || [];
+
+        if (!templates.length || !servers.length) {
+            return '<p class="text-muted small mb-0">' +
+                "You need at least one email template and one SMTP server before this " +
+                'block can send anything. Set them up under <a href="/emails/smtp/">Email</a>.' +
+                "</p>";
+        }
+
+        const templateSelect =
+            '<select class="form-select form-select-sm" data-email-template>' +
+            '<option value="">Select a template&hellip;</option>' +
+            templates.map(function (t) {
+                return '<option value="' + escapeAttr(t.uuid) + '"' +
+                    (t.uuid === draft.template_id ? " selected" : "") + ">" +
+                    escapeHtml(t.label) + (t.disabled_reason ? " — " + escapeHtml(t.disabled_reason) : "") +
+                    "</option>";
+            }).join("") + "</select>";
+
+        const serverSelect =
+            '<select class="form-select form-select-sm" data-field="smtp_config_id">' +
+            '<option value="">Select a server&hellip;</option>' +
+            servers.map(function (c) {
+                return '<option value="' + escapeAttr(c.uuid) + '"' +
+                    (c.uuid === draft.smtp_config_id ? " selected" : "") + ">" +
+                    escapeHtml(c.label) + (c.disabled_reason ? " — " + escapeHtml(c.disabled_reason) : "") +
+                    "</option>";
+            }).join("") + "</select>";
+
+        draft.recipients = draft.recipients || { to: [], cc: [], bcc: [] };
+
+        const recipientRows = ["to", "cc", "bcc"].map(function (key) {
+            const label = key === "to" ? "To" : key === "cc" ? "Cc" : "Bcc";
+            return fieldHtml(
+                label,
+                '<input class="form-control form-control-sm" data-recipients="' + key + '" value="' +
+                escapeAttr((draft.recipients[key] || []).join(", ")) + '">'
+            );
+        }).join("");
+
+        return fieldHtml("Template", templateSelect) +
+            fieldHtml("Send through", serverSelect) +
+            recipientRows +
+            '<p class="text-muted small">Comma-separated. Each entry may be a fixed ' +
+            "address or a {{VARIABLE}}.</p>" +
+            '<label class="form-label fw-semibold small mt-2">Variables</label>' +
+            '<div id="fbEmailBindings"></div>' +
+            fieldHtml(
+                "Store the email's id in (optional)",
+                '<input class="form-control form-control-sm" data-field="variable_name" value="' +
+                escapeAttr(draft.variable_name || "") + '">'
+            ) +
+            '<p class="text-muted small mb-0">The email is queued and the flow carries on — ' +
+            "nothing is said to the visitor unless you say it with a Send Message block. " +
+            "Whether it was delivered is in the " +
+            '<a href="/emails/messages/">delivery log</a>.</p>';
+    }
+
+    /** Wire the email panel's own controls after its HTML has been placed. */
+    function wireSendEmailFields(node, draft) {
+        const templateEl = propertiesBodyEl.querySelector("[data-email-template]");
+        const bindingsEl = propertiesBodyEl.querySelector("#fbEmailBindings");
+
+        propertiesBodyEl.querySelectorAll("[data-recipients]").forEach(function (input) {
+            input.addEventListener("input", function () {
+                draft.recipients[input.dataset.recipients] = input.value
+                    .split(",")
+                    .map(function (part) { return part.trim(); })
+                    .filter(function (part) { return part !== ""; });
+            });
+        });
+
+        if (!templateEl || !bindingsEl) return;
+
+        function renderBindings() {
+            draft.variable_bindings = draft.variable_bindings || {};
+            const chosen = (opts.emailTemplates || []).find(function (t) {
+                return t.uuid === draft.template_id;
+            });
+            const declared = (chosen && chosen.variables) || [];
+
+            if (!draft.template_id) {
+                bindingsEl.innerHTML =
+                    '<p class="text-muted small mb-0">Choose a template to see what it needs.</p>';
+                return;
+            }
+            if (!declared.length) {
+                bindingsEl.innerHTML =
+                    '<p class="text-muted small mb-0">This template declares no variables.</p>';
+                return;
+            }
+
+            bindingsEl.innerHTML = declared.map(function (variable) {
+                const current = draft.variable_bindings[variable.name] || {};
+                const sources = [
+                    { value: "session", label: "A value the conversation collected" },
+                    { value: "agent", label: "An agent variable (Agents section)" },
+                    { value: "literal", label: "A fixed value" },
+                ];
+                const sourceSelect =
+                    '<select class="form-select form-select-sm" data-binding-source="' +
+                    escapeAttr(variable.name) + '">' +
+                    '<option value="">' +
+                    (variable.required ? "Choose a source&hellip;" : "Leave unset (use the default)") +
+                    "</option>" +
+                    sources.map(function (s) {
+                        return '<option value="' + s.value + '"' +
+                            (current.source === s.value ? " selected" : "") + ">" +
+                            escapeHtml(s.label) + "</option>";
+                    }).join("") + "</select>";
+
+                const valueField = current.source
+                    ? '<input class="form-control form-control-sm mt-1" data-binding-value="' +
+                      escapeAttr(variable.name) + '" placeholder="' +
+                      (current.source === "literal" ? "The text to use"
+                          : current.source === "agent" ? "COMPANY" : "the variable name")
+                      + '" value="' +
+                      escapeAttr(current.source === "literal" ? (current.value || "") : (current.path || "")) +
+                      '">'
+                    : "";
+
+                return '<div class="border rounded p-2 mb-2">' +
+                    '<div class="small fw-semibold">{{' + escapeHtml(variable.name) + "}}" +
+                    (variable.required ? " (required)" : "") + "</div>" +
+                    (variable.label ? '<div class="text-muted small">' + escapeHtml(variable.label) + "</div>" : "") +
+                    sourceSelect + valueField +
+                    "</div>";
+            }).join("");
+
+            bindingsEl.querySelectorAll("[data-binding-source]").forEach(function (select) {
+                select.addEventListener("change", function () {
+                    const name = select.dataset.bindingSource;
+                    if (!select.value) {
+                        delete draft.variable_bindings[name];
+                    } else {
+                        draft.variable_bindings[name] = { source: select.value };
+                    }
+                    renderBindings();
+                });
+            });
+
+            bindingsEl.querySelectorAll("[data-binding-value]").forEach(function (input) {
+                input.addEventListener("input", function () {
+                    const name = input.dataset.bindingValue;
+                    const binding = draft.variable_bindings[name];
+                    if (!binding) return;
+                    if (binding.source === "literal") {
+                        binding.value = input.value;
+                    } else {
+                        binding.path = input.value.trim();
+                    }
+                });
+            });
+        }
+
+        templateEl.addEventListener("change", function () {
+            draft.template_id = templateEl.value;
+            // The bindings belong to the old template's variables, so keeping them would
+            // save a binding the new template does not declare — which the server refuses.
+            draft.variable_bindings = {};
+            renderBindings();
+        });
+
+        renderBindings();
+    }
+
     function runGraphFieldsHtml(draft) {
         const graphs = opts.graphs || [];
 
         if (!graphs.length) {
             return '<p class="text-muted small mb-0">No published graphs yet — ' +
-                'create one in the <a href="/graph-designer">Graph Designer</a> and ' +
+                'create one in <a href="/graph-designer">Pipelines</a> and ' +
                 "publish it, then it can be picked here.</p>";
         }
 

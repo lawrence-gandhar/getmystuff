@@ -42,6 +42,7 @@ from app.models.integrations import (
     AUTH_NONE,
     CONNECTION_ACTIVE,
     CONNECTION_DISABLED,
+    CONNECTION_REVOKED,
     CREDENTIAL_PRIVATE_HOSTS_ENABLED,
     OPERATION_KINDS,
     OPERATION_READ,
@@ -119,6 +120,109 @@ def build_views(connections: Sequence[IntegrationConnection]) -> List[dict]:
     return credential_service.build_connection_views(
         list(connections), connector_labels=connector_labels()
     )
+
+
+async def list_apps(db: AsyncSession, user_id: int) -> List[Dict[str, Any]]:
+    """
+    Every connector, as the Apps page reads it: what it is, and where this user stands
+    with it.
+
+    The counts are the whole reason this is a service function rather than two context
+    keys the route assembles. "Connected" is not "there is a row" — a connection whose
+    credential was revoked, or whose token the vendor rejected, still has a row, and an
+    Apps page calling that connected is a page that tells somebody their sync is fine
+    while it is failing every night. So three separate numbers: how many connections
+    exist, how many are usable right now, and how many want attention.
+
+    Three buckets and not two, because a connection somebody switched off is neither. It
+    is not working and it does not want attention: parking one is a decision, and a page
+    that nagged about it would train people to ignore the badge that means a token was
+    revoked. The three add up to ``connection_count``.
+
+    Counted in Python from the one query :func:`list_connections` already makes rather
+    than with a ``GROUP BY`` per connector: there are a handful of connectors and a user
+    has tens of connections, so a second round trip would buy nothing and the aggregate
+    would still have to be reconciled with the same ``needs_reauth`` rule that lives in
+    ``credential_service``.
+    """
+    views = build_views(await list_connections(db, user_id))
+
+    apps: List[Dict[str, Any]] = []
+
+    for connector in registry.describe_connectors():
+        mine = [
+            view
+            for view in views
+            if view.get("connector_id") == connector["connector_id"]
+        ]
+        attention = [view for view in mine if _wants_attention(view)]
+        paused = [view for view in mine if _is_paused(view)]
+
+        apps.append(
+            {
+                **connector,
+                "connection_count": len(mine),
+                "ready_count": len(mine) - len(attention) - len(paused),
+                "attention_count": len(attention),
+                "paused_count": len(paused),
+                # What the form has to ask for, said once here so the template does not
+                # re-derive it from three booleans. A connector that computes its own
+                # address and needs no account id — Brevo — asks for a name and a key and
+                # nothing else, and that is worth the page saying out loud.
+                "asks_for_nothing_else": not (
+                    connector["asks_for_base_url"] or connector["asks_for_account_id"]
+                ),
+            }
+        )
+
+    return apps
+
+
+def describe_app(connector_id: str) -> Dict[str, Any]:
+    """
+    One connector, for the dialog that asks for its credentials.
+
+    No counts and no database: the form asks what *this connector* needs, and how many
+    connections already exist is the grid's business. Unknown ids come back as the
+    registry's own sentence through :func:`_require_connector_id`, so a stale link is a
+    readable refusal rather than a form with no fields on it.
+    """
+    connector = _require_connector_id(connector_id)
+
+    described = next(
+        entry
+        for entry in registry.describe_connectors()
+        if entry["connector_id"] == connector.connector_id
+    )
+
+    return {
+        **described,
+        "asks_for_nothing_else": not (
+            described["asks_for_base_url"] or described["asks_for_account_id"]
+        ),
+    }
+
+
+def _wants_attention(view: Mapping[str, Any]) -> bool:
+    """
+    Whether a connection needs somebody to get a new credential before it runs again.
+
+    ``needs_reauth`` and ``revoked`` — the two states a button cannot fix. Deliberately
+    **not** ``disabled``: see :func:`_is_paused`.
+    """
+    return bool(view.get("needs_reauth")) or view.get("status") == CONNECTION_REVOKED
+
+
+def _is_paused(view: Mapping[str, Any]) -> bool:
+    """
+    Whether the owner switched this off themselves.
+
+    Its own bucket rather than folded into attention, because parking a connection is a
+    decision somebody made and pressing one button brings it back. A page that nagged
+    about it would train people to ignore the badge that means a token was revoked —
+    which is the one thing on that tile worth reacting to.
+    """
+    return not view.get("is_active", True) or view.get("status") == CONNECTION_DISABLED
 
 
 async def connection_schema(

@@ -1,3 +1,6 @@
+from app.routes.integrations.app_routes import (  # noqa: F401
+    IntegrationAppController,
+)
 from app.routes.integrations.connection_routes import (  # noqa: F401
     IntegrationConnectionController,
 )

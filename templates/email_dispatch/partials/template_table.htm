@@ -1,0 +1,92 @@
+{# The whole templates table. See smtp_table.htm on why hx-swap-oob is on the
+   wrapper <div> rather than the <tbody>. #}
+<div id="emailTemplateTable" class="card shadow-sm" hx-swap-oob="true">
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th>Name</th>
+                    <th>Subject</th>
+                    <th style="width:220px;">Variables</th>
+                    <th style="width:100px;">Status</th>
+                    <th style="width:230px;">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for template in templates %}
+                <tr>
+                    <td>
+                        <div class="fw-semibold">{{ template.name }}</div>
+                        {% if template.description %}
+                        <div class="text-muted small">{{ template.description }}</div>
+                        {% endif %}
+                    </td>
+                    <td class="small">{{ template.subject_template }}</td>
+                    <td>
+                        {% for name in template.variable_names %}
+                        <code class="small">&#123;&#123;{{ name }}&#125;&#125;</code>
+                        {% else %}
+                        <span class="text-muted small">None declared</span>
+                        {% endfor %}
+                    </td>
+                    <td>
+                        {% if template.is_active %}
+                        <span class="badge bg-success-subtle text-success">Active</span>
+                        {% else %}
+                        <span class="badge bg-secondary-subtle text-secondary">Off</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <button class="btn btn-sm btn-outline-secondary"
+                                hx-get="/emails/templates/{{ template.uuid }}/preview"
+                                hx-target="#templatePreviewBody"
+                                hx-swap="innerHTML"
+                                data-bs-toggle="modal"
+                                data-bs-target="#templatePreviewModal">
+                            <i class="las la-eye"></i> Preview
+                        </button>
+                        <button class="btn btn-sm btn-outline-primary"
+                                hx-get="/emails/templates/{{ template.uuid }}/edit-form"
+                                hx-target="#emailTemplateModalContent"
+                                hx-swap="innerHTML"
+                                data-bs-toggle="modal"
+                                data-bs-target="#emailTemplateModal">
+                            <i class="las la-edit"></i> Edit
+                        </button>
+                        <form class="d-inline"
+                              hx-post="/emails/templates/{{ template.uuid }}/set-active"
+                              hx-target="#emailTemplateResponse"
+                              hx-swap="innerHTML">
+                            {% if template.is_active %}
+                            <button class="btn btn-sm btn-outline-secondary" type="submit"
+                                    title="Switch off">
+                                <i class="las la-toggle-off"></i>
+                            </button>
+                            {% else %}
+                            <input type="hidden" name="is_active" value="true">
+                            <button class="btn btn-sm btn-outline-success" type="submit"
+                                    title="Switch on">
+                                <i class="las la-toggle-on"></i>
+                            </button>
+                            {% endif %}
+                        </form>
+                        <button class="btn btn-sm btn-outline-danger"
+                                hx-post="/emails/templates/{{ template.uuid }}/delete"
+                                hx-target="#emailTemplateResponse"
+                                hx-swap="innerHTML"
+                                hx-confirm="Delete '{{ template.name }}'? Emails already sent keep their own copy of the text.">
+                            <i class="las la-trash"></i>
+                        </button>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="5" class="text-center text-muted py-4">
+                        No templates yet. Create one to describe what an email says.
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>

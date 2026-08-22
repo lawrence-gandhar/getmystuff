@@ -100,6 +100,10 @@ def describe_connectors() -> List[Dict[str, Any]]:
             "connector_id": spec.connector_id,
             "label": spec.label,
             "description": spec.description,
+            # Presentation, and safe to send: a class name and a hex colour say nothing
+            # about where a request goes. See ``ConnectorSpec.icon``.
+            "icon": spec.icon,
+            "accent": spec.accent,
             "auth_kind": spec.auth.kind,
             "asks_for_base_url": spec.base_url_is_user_supplied,
             # What the form should ask for instead of a base URL, when the connector
@@ -190,5 +194,6 @@ async def _load_user_defined_operation(
 # Imported for the side effect of registering. Last, so a connector module can import
 # anything above it without a cycle — the same reason `app/db/models.py` imports every
 # model at the bottom of the dependency graph rather than the top.
+from app.services.integrations.connectors.brevo import connector as _brevo  # noqa: E402,F401
 from app.services.integrations.connectors.rest_generic import connector as _rest_generic  # noqa: E402,F401
 from app.services.integrations.connectors.shopify import connector as _shopify  # noqa: E402,F401

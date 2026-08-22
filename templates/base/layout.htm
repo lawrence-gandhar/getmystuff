@@ -181,14 +181,23 @@ body {
         </a>
 
         <a href="/graph-designer/" class="{% if active == 'graph_designer' %}active{% endif %}">
-            <i class="las la-draw-polygon"></i> Graph Designer
+            <i class="las la-draw-polygon"></i> Pipelines
         </a>
 
-        {# One entry for the whole feature, marked active from both its pages: the
-           connections list sets `active == 'integrations'` too, because it is where a
-           workflow's credentials are set up rather than a separate thing to find. #}
-        <a href="/integrations/" class="{% if active == 'integrations' %}active{% endif %}">
+        {# One entry for the whole feature, marked active from all three of its pages —
+           apps, connections and workflows are three views of one thing, and the tab strip
+           inside the feature is what moves between them. It lands on Apps because that is
+           the first question somebody has ("what can this talk to?"), and a workflow with
+           no connection behind it cannot do anything anyway. #}
+        <a href="/integrations/apps/" class="{% if active == 'integrations' %}active{% endif %}">
             <i class="las la-exchange-alt"></i> Integrations
+        </a>
+
+        {# One entry for the whole feature, marked active from all three of its pages —
+           servers, templates and the delivery log are three views of one thing, and
+           splitting them in the nav would make an operator hunt for the log. #}
+        <a href="/emails/messages/" class="{% if active == 'emails' %}active{% endif %}">
+            <i class="las la-envelope"></i> Email
         </a>
 
         <a href="/ai-settings" class="{% if active == 'ai_settings' %}active{% endif %}">

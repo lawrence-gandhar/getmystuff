@@ -66,6 +66,8 @@ from litestar.exceptions import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.db_utils import CRUDQueryBuilder
+from app.services.email_dispatch import smtp_service as email_smtp_service
+from app.services.email_dispatch import template_service as email_template_service
 from app.db.graph_designer.queries import fetch_graphs_with_owner_names
 from app.models.data_agents import DataAgent
 from app.models.graph_designer import (
@@ -76,16 +78,21 @@ from app.models.graph_designer import (
     LOOP_NODE_TYPES,
     NODE_BRANCH,
     NODE_DO_UNTIL,
+    NODE_EMAIL,
     NODE_FOR_EACH,
     NODE_HUMAN,
     NODE_SQL,
     NODE_SQL_UNION,
     NODE_START,
+    NODE_TIMER,
     NODE_TOOL_CONFIG,
     NODE_TYPE_LABELS,
     NODE_TYPE_VALUES,
     NODE_VALUE,
+    NODE_WAIT,
     TERMINAL_NODE_TYPES,
+    TIMER_ACTION_VALUES,
+    TIMER_START,
     VALUE_KIND_ARRAY,
     VALUE_KIND_DICT,
     VALUE_KIND_LIST,
@@ -319,7 +326,9 @@ async def get_graph_view(
     }
 
 
-async def node_options(db: AsyncSession, user_id: int) -> dict:
+async def node_options(
+    db: AsyncSession, user_id: int, graph_id: uuid_pkg.UUID,
+) -> dict:
     """
     Everything the properties panel's pickers need, in one payload.
 
@@ -332,11 +341,16 @@ async def node_options(db: AsyncSession, user_id: int) -> dict:
     Unavailable options are **offered and flagged, not hidden**. An operator looking
     for a tool that is switched off needs to see that it is switched off; a list that
     silently omits it sends them to check the wrong thing.
+
+    Scoped to one graph because the email template list is: a graph shared into a
+    workspace picks from that workspace's templates. Resolving the graph first is also
+    what makes this 404 for somebody else's graph rather than answer it.
     """
+    graph = await get_graph(db, user_id, graph_id)
+
     datasources = await tool_config_service.get_datasource_choices(db, user_id)
     tool_configs = await tool_config_service.get_tool_config_views(db, user_id)
     agents = await data_agent_service.get_agent_choices(db, user_id)
-    workspaces = await workspace_service.get_workspace_choices(db, user_id)
 
     return {
         "datasources": [
@@ -375,21 +389,17 @@ async def node_options(db: AsyncSession, user_id: int) -> dict:
             }
             for view in agents
         ],
-        # For the sharing control rather than for any node. An archived workspace is
-        # listed and flagged, not hidden, the same rule the other three lists follow: a
-        # graph already shared with one has to be visible there to be moved out of it.
-        "workspaces": [
-            {
-                "uuid": str(choice.get("uuid") or ""),
-                "label": str(choice.get("name") or ""),
-                "detail": "",
-                "disabled_reason": (
-                    "" if choice.get("is_active", True)
-                    else "This workspace is archived."
-                ),
-            }
-            for choice in workspaces
-        ],
+        # What an Email node's property panel picks from. Sent with the rest of the
+        # options rather than fetched separately, so the panel can draw one binding row per
+        # declared variable the instant a template is chosen — a second round trip would let
+        # somebody save the node before its bindings had loaded.
+        #
+        # Scoped to the graph's own workspace: a template shared into a different one is
+        # listed with a reason rather than dropped, the same rule the lists above follow.
+        "email_templates": await email_template_service.choices_for_workspace(
+            db, user_id, graph.workspace_id,
+        ),
+        "smtp_configs": await email_smtp_service.choices(db, user_id),
         "human_expects": sorted(HUMAN_EXPECTS_VALUES),
         "error": None,
     }
@@ -826,6 +836,7 @@ def validate_graph(graph_data: Any) -> None:
     _require_looping_bodies(nodes, edges)
     _require_unions_in_loop_bodies(nodes, edges)
     _require_collected_nodes_in_body(nodes, edges, node_by_id)
+    _require_timers_started(nodes, edges, node_by_id)
 
 
 def _indexed_nodes(nodes: Sequence[Any]) -> Dict[str, dict]:
@@ -955,6 +966,11 @@ def _validate_node(node: dict, node_by_id: Dict[str, dict]) -> None:
             status_code=400, detail=f"The settings on '{label}' could not be read.",
         )
 
+    # Before the type dispatch, deliberately. A `{{TABLE}}` the author forgot to declare
+    # should be reported as that, and not as whatever `validated_tool_sql` makes of a
+    # statement with braces in it.
+    _validate_variables(node, label, node_by_id)
+
     if node_type == NODE_SQL:
         _validate_sql_node(data, label, node_by_id)
     elif node_type == NODE_SQL_UNION:
@@ -969,6 +985,200 @@ def _validate_node(node: dict, node_by_id: Dict[str, dict]) -> None:
         _validate_branch_node(data, label, node_by_id)
     elif node_type in LOOP_NODE_TYPES:
         _validate_loop_node(node_type, data, label, node_by_id)
+    elif node_type == NODE_EMAIL:
+        _validate_email_node(data, label)
+    elif node_type == NODE_TIMER:
+        _validate_timer_node(data, label, node_by_id)
+    elif node_type == NODE_WAIT:
+        _validate_wait_node(data, label)
+
+
+def _validate_variables(node: dict, label: str, node_by_id: Dict[str, dict]) -> None:
+    """
+    One node's own ``{{VARIABLE}}`` declarations, for every node type.
+
+    Offline like every other validator here — ``validate_graph`` runs on save, publish
+    **and** run, so a database read in it would slow all three and make the rules
+    untestable without a session.
+
+    Delegated to ``node_variables`` rather than written out, because the same rules have
+    to hold when the node runs and two copies is how a form and a runner drift apart.
+    """
+    from app.services.graph_designer import node_variables
+
+    node_variables.assert_valid(node, label, node_by_id)
+
+
+def _validate_timer_node(data: dict, label: str, node_by_id: Dict[str, dict]) -> None:
+    """
+    A Timer node: which of the four things it does, and — for three of them — to which timer.
+
+    The instance set to *start* **is** the timer, so it names nothing. The other three
+    act on it and must say which, by node id. A node id rather than a typed-in name
+    because a name cannot be checked: nothing offline can prove two boxes spell "Job
+    timer" the same way, and a typo would surface at run time as "that timer has not
+    been started", which is indistinguishable from a branch not taken.
+    """
+    action = str(data.get("action") or "").strip().lower()
+
+    if action not in TIMER_ACTION_VALUES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"'{label}' has no action chosen. A Timer node must Start, Pause, "
+                "Resume or Stop a timer."
+            ),
+        )
+
+    target = str(data.get("timer_node") or "").strip()
+
+    if action == TIMER_START:
+        if target:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"'{label}' starts a timer, so it cannot also point at one — it "
+                    "*is* the timer. Clear the Timer box."
+                ),
+            )
+        return
+
+    if not target:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"'{label}' does not say which timer it acts on. Choose the Timer node "
+                "that starts it."
+            ),
+        )
+
+    referenced = node_by_id.get(target)
+
+    if referenced is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"'{label}' acts on a timer that is no longer in this graph. Choose it "
+                "again."
+            ),
+        )
+
+    started_here = (
+        str(referenced.get("type") or "") == NODE_TIMER
+        and str((referenced.get("data") or {}).get("action") or "").strip().lower()
+        == TIMER_START
+    )
+
+    if not started_here:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"'{label}' points at '{node_label(referenced)}', which is not a Timer "
+                "set to Start. Point it at the Timer node that begins the timing."
+            ),
+        )
+
+
+def _validate_wait_node(data: dict, label: str) -> None:
+    """
+    A Wait node: a number of seconds inside the ceiling.
+
+    The ceiling is enforced here **and** in the runner. There is no ``asyncio.wait_for``
+    around a runner in this package, so this number is the only thing bounding how long
+    a run can be parked, and a ``graph_data`` row can be edited by hand.
+    """
+    from app.services.graph_designer import timers
+
+    try:
+        timers.validated_wait_seconds(data.get("seconds"), label)
+    except timers.TimerError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _validate_email_node(data: dict, label: str) -> None:
+    """
+    An Email node: a template, a server, and a binding for everything the template needs.
+
+    The bindings are checked against ``GRAPH_BINDING_SOURCES`` — upstream node outputs and
+    literals only. A graph has no chat session and no record in hand, and it is not attached
+    to a chatbot, so there is no agent whose prompt variables it could read; refusing those
+    here means the property panel and the runner agree, and a graph can never execute a
+    binding looser than one that could be saved.
+
+    What is **not** checked here is whether the named template and server exist. That needs
+    the database, and this function is deliberately synchronous and offline like every other
+    validator in this module — ``validate_graph`` is called from save, publish and run, and
+    making it do IO would make all three slower and harder to test. A deleted template is
+    caught at run time with a sentence naming it.
+    """
+    from app.services.email_dispatch.nodes.graph_designer_runner import (
+        GRAPH_BINDING_SOURCES,
+    )
+    from app.services.email_dispatch.errors import RenderError
+    from app.services.email_dispatch import variable_sources
+
+    if not str(data.get("template_id") or "").strip():
+        raise HTTPException(
+            status_code=400, detail=f"'{label}' has no email template chosen.",
+        )
+
+    if not str(data.get("smtp_config_id") or "").strip():
+        raise HTTPException(
+            status_code=400, detail=f"'{label}' has no SMTP server chosen.",
+        )
+
+    recipients = data.get("recipients") or {}
+    if not isinstance(recipients, dict) or not (recipients.get("to") or []):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"'{label}' has nobody to email. Add at least one TO address — it may be "
+                "a {{VARIABLE}}."
+            ),
+        )
+
+    bindings = data.get("variable_bindings") or {}
+    if not isinstance(bindings, dict):
+        raise HTTPException(
+            status_code=400,
+            detail=f"The variable bindings on '{label}' could not be read.",
+        )
+
+    # The template's own declaration is not available offline, so only the *shape* and the
+    # source availability are checked here. `assert_bindable`'s declaration checks run again
+    # at enqueue, where the template has been read.
+    for name, binding in bindings.items():
+        if not isinstance(binding, dict):
+            raise HTTPException(
+                status_code=400,
+                detail=f"The binding for {{{{{str(name).upper()}}}}} on '{label}' could not be read.",
+            )
+        source = str(binding.get("source") or "").strip().lower()
+        if source not in GRAPH_BINDING_SOURCES:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"{{{{{str(name).upper()}}}}} on '{label}' is bound to '{source}', "
+                    "which is not available in a graph. Use an earlier node's output or a "
+                    "fixed value."
+                ),
+            )
+        if source == "node" and not str(binding.get("node_id") or "").strip():
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"{{{{{str(name).upper()}}}}} on '{label}' is bound to an earlier node "
+                    "but no node was chosen."
+                ),
+            )
+        path = str(binding.get("path") or "").strip()
+        if path:
+            try:
+                variable_sources.assert_path(path, name=str(name).upper())
+            except RenderError as exc:
+                raise HTTPException(
+                    status_code=400, detail=f"On '{label}': {exc.message}",
+                ) from exc
 
 
 def _validate_sql_node(
@@ -1622,11 +1832,18 @@ def _refuse_collection_on(data: dict, label: str) -> None:
 
 def _validate_edges(edges: Sequence[Any], node_by_id: Dict[str, dict]) -> None:
     """
-    Every connection, and the three things one can get wrong.
+    Every connection, and the four things one can get wrong.
 
     A second edge on one output port is the subtle one: the run would take exactly one
     of them and which one would depend on iteration order, so it is a graph whose
     behaviour is not the drawing.
+
+    A terminal node **may** lead on — see ``TERMINAL_NODE_TYPES`` for why, and note that
+    this rule used to refuse it outright. What is still refused is one terminal leading to
+    another, because the second one cannot undo the first: ``failed_at`` is already set by
+    then and nothing clears it, so a ``success`` drawn after a ``failure`` would draw a
+    green run that reports as failed. Refused rather than documented, because the drawing
+    is the thing people trust.
     """
     start_ids = {
         node_id for node_id, node in node_by_id.items()
@@ -1667,12 +1884,14 @@ def _validate_edges(edges: Sequence[Any], node_by_id: Dict[str, dict]) -> None:
                 ),
             )
 
-        if source in terminal_ids:
+        if source in terminal_ids and target in terminal_ids:
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    f"'{node_label(node_by_id[source])}' ends the run, so nothing can "
-                    "follow it."
+                    f"'{node_label(node_by_id[source])}' already decides how this run "
+                    f"ends, so it cannot lead to '{node_label(node_by_id[target])}', "
+                    "which decides it again. The first outcome is the one reported, so "
+                    "the drawing would promise something the run does not do."
                 ),
             )
 
@@ -1962,6 +2181,96 @@ def _require_collected_nodes_in_body(
                     "loop's 'each' output and its way back."
                 ),
             )
+
+
+def _require_timers_started(
+    nodes: Sequence[dict],
+    edges: Sequence[Any],
+    node_by_id: Dict[str, dict],
+) -> None:
+    """
+    A timer must be able to have been started by the time something pauses or stops it.
+
+    Two rules, and it is worth being precise about what each one proves.
+
+    **Reachability.** If the *start* box cannot reach the *stop* box by any path, then no
+    run can ever have started that timer before arriving — the drawing is dead, and
+    refusing it is not a guess. What reachability does **not** prove is the converse: a
+    branch whose other port also leads to the stop means a run can still arrive without
+    having passed the start. That case cannot be settled from the drawing, so it is left
+    to run time, where ``timers`` refuses it with a sentence that names the branch as the
+    likely reason. Static analysis here proves *impossible*, never *certain*.
+
+    **Loop membership.** A pause, resume or stop inside a loop's body whose start sits
+    outside it is refused. Pass one works and pass two finds the timer already stopped,
+    which is the worst failure mode available — a graph that goes green and then red on
+    the same drawing with the same data. Detected with the same body definition
+    :func:`_require_collected_nodes_in_body` uses, and refused for the same reason
+    :func:`_require_unions_in_loop_bodies` refuses its case: the picture cannot mean what
+    it appears to.
+
+    A *start* with no matching stop is deliberately allowed. A graph that only wants to
+    know when something began is a legitimate graph.
+    """
+    forward = _adjacency(edges)
+    backward = _adjacency(edges, reverse=True)
+
+    loops = [
+        str(node.get("id") or "")
+        for node in nodes
+        if str(node.get("type") or "") in LOOP_NODE_TYPES
+    ]
+
+    bodies = {
+        loop_id: (
+            _reachable_from(forward, _body_targets(edges, loop_id))
+            & _reachable_from(backward, {loop_id})
+        ) - {loop_id}
+        for loop_id in loops
+        if loop_id
+    }
+
+    for node in nodes:
+        if str(node.get("type") or "") != NODE_TIMER:
+            continue
+
+        data = node.get("data") or {}
+
+        if str(data.get("action") or "").strip().lower() == TIMER_START:
+            continue
+
+        node_id = str(node.get("id") or "")
+        target = str(data.get("timer_node") or "").strip()
+
+        # `_validate_timer_node` has already refused a missing or wrong target, so
+        # anything still here names a real Timer set to Start.
+        if not target or target not in node_by_id:
+            continue
+
+        started = node_label(node_by_id[target])
+
+        if node_id not in _reachable_from(forward, {target}):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"'{node_label(node)}' acts on '{started}', but there is no path "
+                    "from that timer to it. Nothing this run does can have started the "
+                    "timer by the time it reaches this node."
+                ),
+            )
+
+        for loop_id, body in bodies.items():
+            if node_id in body and target not in body:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"'{node_label(node)}' is inside the loop "
+                        f"'{node_label(node_by_id[loop_id])}', but '{started}' starts "
+                        "outside it. The first pass would work and every pass after it "
+                        "would find the timer already finished. Move the Start inside "
+                        "the loop, or this node outside it."
+                    ),
+                )
 
 
 def _adjacency(edges: Sequence[Any], reverse: bool = False) -> Dict[str, Set[str]]:

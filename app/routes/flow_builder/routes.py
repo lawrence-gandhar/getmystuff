@@ -16,11 +16,14 @@ from app.schemas.flow_builder import (
     FlowSetActiveRequest,
 )
 from app.services.ai_settings import ai_settings_service
+from app.services.email_dispatch import smtp_service as email_smtp_service
+from app.services.email_dispatch import template_service as email_template_service
 from app.services.flow_builder import flow_service
 from app.services.graph_designer import graph_service
 
 _JSON = "application/json"
 _ROWS_TEMPLATE = "flow_builder/flow_rows.htm"
+_HELP_TEMPLATE = "flow_builder/help.htm"
 
 
 class FlowBuilderController(Controller):
@@ -41,6 +44,29 @@ class FlowBuilderController(Controller):
         return Template(
             template_name="flow_builder/list.htm",
             context={"user": user, "flows": flows, "active": "flow_builder"},
+        )
+
+    # --------------------------
+    # HELP
+    # --------------------------
+    @get("/help")
+    async def help_page(self, user: User) -> Template:
+        """
+        The Flow Builder help page — the browsable form of
+        documentations/FLOW_BUILDER.md, opened in its own tab by the Help button on the
+        library page and on the canvas.
+
+        Static: it reads nothing and takes no query parameters, so there is no service
+        call and no schema to parse. It is a route rather than a link to the markdown
+        file because a help page has to arrive inside the application's own layout,
+        behind the same auth as the page it explains — the same call
+        ``graph_designer_routes.help_page`` and ``tool_config_routes.help_page`` make.
+
+        A literal path, so it cannot be confused with ``/{flow_id:uuid}/…``.
+        """
+        return Template(
+            template_name=_HELP_TEMPLATE,
+            context={"user": user, "active": "flow_builder"},
         )
 
     # --------------------------
@@ -77,6 +103,14 @@ class FlowBuilderController(Controller):
             for view in await graph_service.get_graph_views(db, user.id)
             if view.get("is_active")
         ]
+        # What an Email node picks from. Templates carry their declared variables so the
+        # property panel can draw one binding row per variable the instant a template is
+        # chosen; a second request would let somebody Save the block before its rows loaded.
+        # Switched-off entries are offered and flagged rather than hidden, so a node already
+        # pointing at one stays editable.
+        email_templates_json = await email_template_service.choices(db, user.id)
+        smtp_configs_json = await email_smtp_service.choices(db, user.id)
+
         return Template(
             template_name="flow_builder/canvas.htm",
             context={
@@ -85,6 +119,8 @@ class FlowBuilderController(Controller):
                 "graph_data_json": json.dumps(flow.graph_data),
                 "ai_api_keys_json": json.dumps(ai_api_keys_json),
                 "graphs_json": json.dumps(graphs_json),
+                "email_templates_json": json.dumps(email_templates_json),
+                "smtp_configs_json": json.dumps(smtp_configs_json),
                 "active": "flow_builder",
             },
         )

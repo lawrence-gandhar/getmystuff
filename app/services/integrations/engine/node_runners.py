@@ -43,6 +43,7 @@ from app.models.integrations import (
     DEFAULT_BATCH_SIZE,
     NODE_BATCH,
     NODE_BRANCH,
+    NODE_EMAIL,
     NODE_CONNECTOR_READ,
     NODE_CONNECTOR_WRITE,
     NODE_FAILURE,
@@ -772,6 +773,63 @@ def _written_message(target, outcome, dry_run: bool) -> str:  # noqa: ANN001
     return ", ".join(parts) + "."
 
 
+async def _run_email(
+    node: dict, state: Mapping[str, Any], context: RunContext
+) -> dict:
+    """
+    Queue an email for this batch, or one per record.
+
+    The implementation is in ``app/services/email_dispatch/nodes/integration_runner.py`` —
+    a new module does not put its files inside another feature's folder — and it is where
+    the send cap lives. **A batch larger than the node's limit fails the node and queues
+    nothing**, rather than sending the first N: an operator who saw a green tick would
+    otherwise believe everyone had been emailed.
+
+    Records that individually cannot be rendered are **counted, not raised**, the same rule
+    ``_run_transform`` follows. Three unusable addresses in five hundred records is a fact
+    about the data, and failing the sync over it would hide the other four hundred and
+    ninety-seven that went out.
+
+    Imported inside the function, like every other cross-feature call in this module: the
+    email module pulls in the mapping path reader and the crypto helpers, and a module-scope
+    import would put that chain behind every import of the runners.
+    """
+    from app.services.email_dispatch.errors import EmailFailure
+    from app.services.email_dispatch.nodes import integration_runner
+
+    node_id = flow_rules.node_id_of(node)
+    data = flow_rules.data_of(node)
+
+    # A `once` email does not need records at all — it may be reporting on a run rather than
+    # on a batch — so the records are only demanded in per-record mode. Asking for them
+    # unconditionally would make an Email node outside a loop impossible to draw.
+    records: List[Any] = []
+    if integration_runner.mode_of(data) == integration_runner.MODE_PER_RECORD:
+        records = _records_for(node, state, context)
+
+    try:
+        outcome = await integration_runner.run_email_node(
+            node,
+            state,
+            records,
+            user_id=context.user_id,
+            node_id=node_id,
+            run_ref=context.run_uuid,
+        )
+    except EmailFailure as exc:
+        raise NodeFailure(exc.message, node_id=node_id) from exc
+
+    return {
+        "outputs": {node_id: outcome},
+        "counts": flow_state.delta(
+            node_id, mapped=outcome["queued"], failed=outcome["failed"],
+        ),
+        "_message": outcome["message"],
+        "_records_in": len(records),
+        "_records_out": outcome["queued"],
+    }
+
+
 async def _run_success(node: dict, state: Mapping[str, Any], context: RunContext) -> dict:
     node_id = flow_rules.node_id_of(node)
     return {
@@ -872,6 +930,7 @@ register_runner(NODE_VALIDATE, _run_validate)
 register_runner(NODE_FILTER, _run_filter)
 register_runner(NODE_BRANCH, _run_branch)
 register_runner(NODE_BATCH, _run_batch)
+register_runner(NODE_EMAIL, _run_email)
 register_runner(NODE_SUCCESS, _run_success)
 register_runner(NODE_FAILURE, _run_failure)
 

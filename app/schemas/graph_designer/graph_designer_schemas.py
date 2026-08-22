@@ -25,7 +25,7 @@ than on *drawing* — and a bound on work is the one that actually protects anyt
 
 import uuid as uuid_pkg
 from datetime import datetime
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import Field, field_validator
 
@@ -359,6 +359,21 @@ class GraphNodeOption(ResponseSchema):
     disabled_reason: str = Field(default="", title="Unavailable because")
 
 
+class GraphEmailTemplateOption(GraphNodeOption):
+    """
+    A template option, carrying what it declares.
+
+    ``variables`` rides along so the property panel can draw one binding row per declared
+    variable the instant a template is chosen. A second round trip would make the panel
+    flicker, or — worse — let somebody save the node before its bindings had loaded. See
+    ``template_service.choices``, which is where the shape comes from.
+    """
+
+    variables: List[Dict[str, Any]] = Field(
+        default_factory=list, title="Declared variables",
+    )
+
+
 class GraphNodeOptionsResponse(ResponseSchema):
     """
     Everything the properties panel needs to fill its pickers, in one request.
@@ -368,6 +383,13 @@ class GraphNodeOptionsResponse(ResponseSchema):
     sentence instead of a status code, the contract
     ``ChildToolOptionsResponse`` established — a picker that cannot be filled should
     put one line next to itself, not replace the canvas the user is working in.
+
+    **Every list the service builds must be declared here.** ``ResponseSchema`` is
+    ``extra="ignore"``, so a key the service returns and this class does not name is
+    dropped from the JSON without a word. That is exactly what happened to
+    ``email_templates`` and ``smtp_configs``: the service built them, the response threw
+    them away, and an Email node's Template picker was empty in every browser with
+    nothing anywhere saying why.
     """
 
     datasources: List[GraphNodeOption] = Field(
@@ -378,6 +400,12 @@ class GraphNodeOptionsResponse(ResponseSchema):
     )
     data_agents: List[GraphNodeOption] = Field(
         default_factory=list, title="Data agents",
+    )
+    email_templates: List[GraphEmailTemplateOption] = Field(
+        default_factory=list, title="Email templates",
+    )
+    smtp_configs: List[GraphNodeOption] = Field(
+        default_factory=list, title="SMTP servers",
     )
     human_expects: List[str] = Field(
         default_factory=lambda: sorted(HUMAN_EXPECTS_VALUES), title="Answer types",

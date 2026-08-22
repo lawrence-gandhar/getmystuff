@@ -9,6 +9,18 @@
             <i class="las la-project-diagram text-primary"></i> Flow Builder
         </h5>
         <div class="d-flex gap-2">
+            {# Opens in its own tab: the page it explains is one somebody is in the middle
+               of building, so it must not be the thing covering it. Plain anchor —
+               nothing here is fetched by HTMX. #}
+            <a
+                class="btn btn-outline-secondary btn-sm"
+                href="/flow-builder/help"
+                target="_blank"
+                rel="noopener"
+                title="Every block explained, with a worked example per scenario"
+            >
+                <i class="las la-question-circle"></i> Help
+            </a>
             <button
                 class="btn btn-primary btn-sm"
                 type="button"

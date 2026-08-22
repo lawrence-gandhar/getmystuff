@@ -212,6 +212,14 @@
             </span>
         </h5>
         <div class="d-flex gap-2">
+            {# Own tab, and deliberately here as well as on the library page: the canvas is
+               where somebody needs to know what a port or an operator means, and going back
+               for it would mean leaving unsaved work. #}
+            <a class="btn btn-sm btn-outline-secondary" href="/flow-builder/help"
+               target="_blank" rel="noopener"
+               title="Every block explained, with a worked example per scenario">
+                <i class="las la-question-circle"></i> Help
+            </a>
             <a href="/flow-builder/" class="btn btn-outline-secondary btn-sm">
                 <i class="las la-arrow-left"></i> Back
             </a>
@@ -284,6 +292,8 @@
         kbBaseUrl: "/flow-builder/{{ flow.uuid }}/nodes",
         aiApiKeys: {{ ai_api_keys_json | safe }},
         graphs: {{ graphs_json | safe }},
+        emailTemplates: {{ email_templates_json | safe }},
+        smtpConfigs: {{ smtp_configs_json | safe }},
     });
 </script>
 {% endblock %}

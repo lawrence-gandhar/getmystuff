@@ -1,0 +1,117 @@
+{# The whole SMTP servers table, rendered both by the list page and by every
+   mutation response.
+
+   The wrapper <div> — not the <tbody> — carries hx-swap-oob. htmx parses a
+   response fragment with DOMParser, and the HTML parser discards a <tbody> or
+   <tr> that is not already inside a <table>, so an out-of-band swap keyed on the
+   <tbody> is dropped without any error and the table silently keeps its stale
+   rows. Sending the whole <table> inside a <div> is parse-safe. The attribute is
+   inert on the initial page render: htmx only honours it on response fragments. #}
+<div id="smtpTable" class="card shadow-sm" hx-swap-oob="true">
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th>Name</th>
+                    <th>Server</th>
+                    <th style="width:130px;">Security</th>
+                    <th style="width:150px;">Last test</th>
+                    <th style="width:100px;">Status</th>
+                    <th style="width:260px;">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for config in configs %}
+                <tr>
+                    <td>
+                        <div class="fw-semibold">{{ config.name }}</div>
+                        <div class="text-muted small">
+                            {{ config.from_name }} &lt;{{ config.from_email }}&gt;
+                        </div>
+                    </td>
+                    <td>
+                        <code class="small">{{ config.host }}:{{ config.port }}</code>
+                        {% if config.username %}
+                        <div class="text-muted small">
+                            as {{ config.username }}
+                            {% if config.has_password %}
+                            {# Whether a password is stored, never the password — not even
+                               masked. A masked secret in a response is still a secret in
+                               the DOM. #}
+                            <i class="las la-lock" title="A password is stored"></i>
+                            {% endif %}
+                        </div>
+                        {% endif %}
+                    </td>
+                    <td><span class="badge bg-light text-dark">{{ config.security_label }}</span></td>
+                    <td>
+                        {% if config.last_test_ok is none %}
+                        <span class="text-muted small">Never tested</span>
+                        {% elif config.last_test_ok %}
+                        <span class="text-success small"><i class="las la-check-circle"></i> Passed</span>
+                        {% else %}
+                        <span class="text-danger small" title="{{ config.last_test_message }}">
+                            <i class="las la-times-circle"></i> Failed
+                        </span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if config.is_active %}
+                        <span class="badge bg-success-subtle text-success">Active</span>
+                        {% else %}
+                        <span class="badge bg-secondary-subtle text-secondary">Off</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <button class="btn btn-sm btn-outline-secondary"
+                                hx-post="/emails/smtp/{{ config.uuid }}/test"
+                                hx-target="#smtpTestResult"
+                                hx-swap="innerHTML">
+                            <i class="las la-plug"></i> Test
+                        </button>
+                        <button class="btn btn-sm btn-outline-primary"
+                                hx-get="/emails/smtp/{{ config.uuid }}/edit-form"
+                                hx-target="#smtpModalContent"
+                                hx-swap="innerHTML"
+                                data-bs-toggle="modal"
+                                data-bs-target="#smtpModal">
+                            <i class="las la-edit"></i> Edit
+                        </button>
+                        <form class="d-inline"
+                              hx-post="/emails/smtp/{{ config.uuid }}/set-active"
+                              hx-target="#smtpResponse"
+                              hx-swap="innerHTML">
+                            {# Posts the opposite of the current state. A checkbox would
+                               need the row to know its own form id; a hidden field says
+                               plainly what the button does. #}
+                            {% if config.is_active %}
+                            <button class="btn btn-sm btn-outline-secondary" type="submit">
+                                <i class="las la-toggle-off"></i> Switch off
+                            </button>
+                            {% else %}
+                            <input type="hidden" name="is_active" value="true">
+                            <button class="btn btn-sm btn-outline-success" type="submit">
+                                <i class="las la-toggle-on"></i> Switch on
+                            </button>
+                            {% endif %}
+                        </form>
+                        <button class="btn btn-sm btn-outline-danger"
+                                hx-post="/emails/smtp/{{ config.uuid }}/delete"
+                                hx-target="#smtpResponse"
+                                hx-swap="innerHTML"
+                                hx-confirm="Delete '{{ config.name }}'? Emails already queued for it will fail.">
+                            <i class="las la-trash"></i>
+                        </button>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="6" class="text-center text-muted py-4">
+                        No SMTP servers yet. Add one to start sending email.
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>

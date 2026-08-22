@@ -1,0 +1,110 @@
+{# The whole triggers table. See smtp_table.htm on why hx-swap-oob is on the
+   wrapper <div> rather than the <tbody>. #}
+<div id="emailTriggerTable" class="card shadow-sm" hx-swap-oob="true">
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th>Name</th>
+                    <th>Fires when</th>
+                    <th style="width:200px;">Sends</th>
+                    <th style="width:150px;">Last fired</th>
+                    <th style="width:100px;">Status</th>
+                    <th style="width:250px;">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for trigger in triggers %}
+                <tr>
+                    <td>
+                        <div class="fw-semibold">{{ trigger.name }}</div>
+                        <div class="text-muted small">{{ trigger.kind_label }}</div>
+                    </td>
+                    <td class="small">
+                        {% if trigger.kind == 'event' %}
+                        {{ trigger.event_label or trigger.event_name }}
+                        {% else %}
+                        <div>Something calls in to:</div>
+                        {# The path only, never a full URL. The server does not reliably know
+                           its own public hostname behind a proxy, and printing a guessed one
+                           is worse than printing none — an operator who pastes a wrong host
+                           into a third-party system gets a silent 404 forever. #}
+                        <code class="small">{{ trigger.webhook_url }}</code>
+                        <div class="text-muted">
+                            One call every {{ trigger.min_interval_seconds }}s at most.
+                        </div>
+                        {% endif %}
+                    </td>
+                    <td class="small">
+                        {{ trigger.template_name }}
+                        <div class="text-muted">via {{ trigger.smtp_name }}</div>
+                    </td>
+                    <td class="small">
+                        {% if trigger.last_fired_at %}
+                        {{ trigger.last_fired_at.strftime('%d %b %H:%M') }}
+                        {% else %}
+                        <span class="text-muted">Never</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if trigger.is_enabled %}
+                        <span class="badge bg-success-subtle text-success">On</span>
+                        {% else %}
+                        <span class="badge bg-secondary-subtle text-secondary">Off</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <button class="btn btn-sm btn-outline-primary"
+                                hx-get="/emails/triggers/{{ trigger.uuid }}/edit-form"
+                                hx-target="#emailTriggerModalContent"
+                                hx-swap="innerHTML"
+                                data-bs-toggle="modal"
+                                data-bs-target="#emailTriggerModal">
+                            <i class="las la-edit"></i> Edit
+                        </button>
+                        <form class="d-inline"
+                              hx-post="/emails/triggers/{{ trigger.uuid }}/set-enabled"
+                              hx-target="#emailTriggerResponse"
+                              hx-swap="innerHTML">
+                            {% if trigger.is_enabled %}
+                            <button class="btn btn-sm btn-outline-secondary" type="submit"
+                                    title="Switch off">
+                                <i class="las la-toggle-off"></i>
+                            </button>
+                            {% else %}
+                            <input type="hidden" name="is_enabled" value="true">
+                            <button class="btn btn-sm btn-outline-success" type="submit"
+                                    title="Switch on">
+                                <i class="las la-toggle-on"></i>
+                            </button>
+                            {% endif %}
+                        </form>
+                        {% if trigger.kind == 'webhook' %}
+                        <button class="btn btn-sm btn-outline-warning"
+                                hx-post="/emails/triggers/{{ trigger.uuid }}/rotate-secret"
+                                hx-target="#emailTriggerResponse"
+                                hx-swap="innerHTML"
+                                hx-confirm="Issue a new URL and secret? Everything currently calling this webhook will stop working until it is reconfigured.">
+                            <i class="las la-key"></i> Rotate
+                        </button>
+                        {% endif %}
+                        <button class="btn btn-sm btn-outline-danger"
+                                hx-post="/emails/triggers/{{ trigger.uuid }}/delete"
+                                hx-target="#emailTriggerResponse"
+                                hx-swap="innerHTML"
+                                hx-confirm="Delete '{{ trigger.name }}'? Emails it already sent stay in the log.">
+                            <i class="las la-trash"></i>
+                        </button>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="6" class="text-center text-muted py-4">
+                        No triggers yet. Add one to send email without building a flow.
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>

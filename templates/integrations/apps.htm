@@ -1,0 +1,49 @@
+{% extends "base/layout.htm" %}
+{% block title %}Apps | GetMyStuff{% endblock %}
+
+{% block content %}
+<div class="container mt-4" style="max-width: 100%;">
+
+    {# No buttons beside the heading: everything you can do on this page is on a tile, and
+       moving to the other two pages is the tab strip's job. #}
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h5 class="fw-semibold mb-0">
+            <i class="las la-th-large text-primary"></i> Apps
+        </h5>
+    </div>
+
+    {% include "integrations/partials/tabs.htm" %}
+
+    <p class="text-muted small mb-3">
+        The systems this application can talk to. Connecting one stores
+        <strong>one set of credentials for one account</strong> — and you can connect the
+        same app as many times as you have accounts: three Shopify stores are three
+        connections, not a problem to work around. Credentials are
+        <strong>encrypted before they are stored</strong> and are never sent back to a
+        page, so an edit form starts empty and leaving it empty means "leave the stored one
+        alone". Connecting an app <strong>does not move any data</strong>: it gives a
+        workflow somewhere to read from and write to, and the workflow is what decides what
+        travels where.
+    </p>
+
+    <div id="apps-response" class="mb-3"></div>
+
+    {% include "integrations/partials/app_cards.htm" %}
+
+</div>
+
+<!-- ============================================
+     MODAL — CONNECT AN APP
+     Body fetched per open, so the questions are the ones the chosen connector actually
+     has. Nothing in this dialog is switched by JavaScript — see `app_routes.connect_form`.
+     ============================================ -->
+<div class="modal fade" tabindex="-1" id="appConnectModal" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content" id="appConnectModalContent">
+            <div class="modal-body text-center text-muted py-4">
+                <i class="las la-spinner la-spin fs-4"></i> Loading…
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

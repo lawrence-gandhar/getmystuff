@@ -1,0 +1,53 @@
+{% extends "base/layout.htm" %}
+{% block title %}Email Triggers | GetMyStuff{% endblock %}
+
+{% block content %}
+{% set tab = 'triggers' %}
+<div class="container mt-4" style="max-width: 100%;">
+
+    {% include "email_dispatch/partials/nav_tabs.htm" %}
+
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h5 class="fw-semibold mb-0">
+            <i class="las la-bolt text-primary"></i> Email Triggers
+        </h5>
+        <button class="btn btn-primary btn-sm" type="button"
+                hx-get="/emails/triggers/new-form"
+                hx-target="#emailTriggerModalContent"
+                hx-swap="innerHTML"
+                data-bs-toggle="modal"
+                data-bs-target="#emailTriggerModal">
+            <i class="las la-plus"></i> New trigger
+        </button>
+    </div>
+
+    <p class="text-muted small mb-3">
+        A trigger sends email without a flow: either when something happens in this
+        application — a datasource going offline, a sync failing — or when an external
+        system calls a private URL. To send email as a step inside a flow, use the Email
+        node in the <a href="/flow-builder/">Flow Builder</a>,
+        <a href="/graph-designer/">Pipelines</a> or
+        <a href="/integrations/">Integrations</a> instead.
+    </p>
+
+    <div id="emailTriggerResponse" class="mb-2"></div>
+
+    {% include "email_dispatch/partials/trigger_table.htm" %}
+
+</div>
+
+<!-- ============================================
+     MODAL — NEW / EDIT TRIGGER
+     ============================================ -->
+<div class="modal fade" tabindex="-1" id="emailTriggerModal" aria-hidden="true">
+    <div class="modal-dialog modal-xl">
+        <div class="modal-content" id="emailTriggerModalContent">
+            <div class="modal-body text-center text-muted py-4">
+                <i class="las la-spinner la-spin fs-4"></i> Loading…
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="/static/js/email_dispatch.js"></script>
+{% endblock %}

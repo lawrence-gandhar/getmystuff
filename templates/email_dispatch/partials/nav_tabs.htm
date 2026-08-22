@@ -1,0 +1,34 @@
+{# The three pages of one feature. Included by each of them rather than living in
+   the layout, because the sidebar has a single "Email" entry — servers, templates
+   and the log are three views of the same thing and splitting them in the sidebar
+   would make an operator hunt for the log.
+
+   `tab` is set by each page. Plain links rather than hx-get: these are whole pages
+   with their own scripts and modals, and swapping one into another would leave the
+   previous page's handlers bound to elements that no longer exist. #}
+<ul class="nav nav-tabs mb-3">
+    <li class="nav-item">
+        <a class="nav-link {% if tab == 'messages' %}active{% endif %}"
+           href="/emails/messages/">
+            <i class="las la-paper-plane"></i> Delivery log
+        </a>
+    </li>
+    <li class="nav-item">
+        <a class="nav-link {% if tab == 'templates' %}active{% endif %}"
+           href="/emails/templates/">
+            <i class="las la-file-alt"></i> Templates
+        </a>
+    </li>
+    <li class="nav-item">
+        <a class="nav-link {% if tab == 'triggers' %}active{% endif %}"
+           href="/emails/triggers/">
+            <i class="las la-bolt"></i> Triggers
+        </a>
+    </li>
+    <li class="nav-item">
+        <a class="nav-link {% if tab == 'smtp' %}active{% endif %}"
+           href="/emails/smtp/">
+            <i class="las la-server"></i> SMTP servers
+        </a>
+    </li>
+</ul>

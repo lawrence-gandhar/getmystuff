@@ -42,6 +42,47 @@ datasource. An operator can build and run a complete flow without ever opening T
 
 ---
 
+# The in-app help page
+
+`/flow-builder/help` (`templates/flow_builder/help.htm`) is this file written for the person
+in front of the canvas: the same eleven blocks, the same ceilings and the same refusal
+messages, said as *what to draw* and *what to fill in*. Nine worked scenarios — a greeting, a
+collected name, a menu, a validated answer, a shared ending via `Goto`, an AI hand-over, a
+`Run Graph` lookup, an email notification, and one whole triage flow — plus the limits in one
+table and every validator refusal with its fix.
+
+The third instance of a shape this codebase now has three times, after `tool_configs/help.htm`
+and `graph_designer/help.htm`, and it copies their three decisions verbatim:
+
+* **A route, not a link to the markdown.** A help page has to arrive inside the application's
+  own layout, behind the same auth as the page it explains.
+* **A literal path**, declared above `/{flow_id:uuid}/…` in the controller, so it can never be
+  read as a uuid.
+* **The whole body inside `{% raw %}`.** Here that is load-bearing in a way it is not on the
+  other two: the page's central warning is that message text does **not** interpolate, so an
+  unescaped `{{NAME}}` would render as an empty string and demonstrate the exact opposite of
+  what the section says. A route test asserts the samples arrive as written.
+
+Linked from **both** the library and the canvas, both `target="_blank"` — the canvas is where a
+port or an operator actually needs explaining, and going back for it would mean leaving unsaved
+work.
+
+## The one place it deviates
+
+GRAPH_DESIGNER.md recommends copying its completeness test, which walks the server-owned
+`NODE_TYPES` tuple and requires every palette label to appear in the rendered page. Flow Builder
+has no such tuple: the labels live in `static/js/flow_builder.js` and the server knows only
+`flow_service._VALID_NODE_TYPES`, a set of bare type ids with no display names.
+
+So the test pins a mapping instead — `_BLOCK_LABELS` in
+`tests/unit/routes/flow_builder/test_flow_builder_routes.py` — and asserts its keys equal
+`_VALID_NODE_TYPES` before checking each label appears. Adding a block type to the validator
+fails the suite until both the mapping and the help page follow it. That is the same guarantee
+by a weaker mechanism, and the honest way to close it would be to move the labels server-side
+as the Graph Designer did.
+
+---
+
 # Where the flow stops, and what is behind it
 
 `chatbot_turn_service._run_turn` gives an active flow first refusal on every turn. When the
@@ -225,7 +266,9 @@ still re-asks the same menu, and records nothing.
   (`GET /flow-builder/`) and the builder canvas: create/rename/publish/delete a flow, load/save
   its graph, list a user's AI Settings keys for the node property panel. No chatbot key in any
   URL; attaching happens in `ChatbotSettingsController.save_flow`
-  (`POST /chatbot-settings/{key_id:uuid}/flow`).
+  (`POST /chatbot-settings/{key_id:uuid}/flow`). Also `GET /flow-builder/help`, a static
+  template and the only handler here that touches neither the database nor a service — see
+  *The in-app help page* above.
 * **KnowledgeBaseController** (`knowledge_base_routes.py`, path
   `/flow-builder/{flow_id:uuid}/nodes/{node_id:str}/knowledge-base`) — per-node
   knowledge base management (upload, train, list, delete documents). Returns JSON rather than

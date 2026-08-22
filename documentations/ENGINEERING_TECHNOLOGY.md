@@ -341,6 +341,15 @@ the folder boundary tracks what the module *is*, not who calls it.
 generating SQL from a schema needs a datasource and nothing else, so it lives in its own
 service, route and template folders. Tool Configs *calls* it; it does not belong to it.
 
+`email_dispatch` is the case that tests the rule hardest, because its Email node appears on
+**three** other canvases. The node runners live in
+`app/services/email_dispatch/nodes/{graph_designer,integration,flow_builder}_runner.py`, and
+each host feature contributes only a registry entry and a validator call. Splitting it the
+other way — a runner inside each canvas — would put three copies of "how this application
+sends email" in three folders, and the next change to rendering or retrying would have to
+find all three. The one-line entry in `node_runners._RUNNERS` is the seam; everything behind
+it is one module.
+
 ### Which layers a feature deliberately lacks
 
 This is documentation, not omission. Each absence is an assertion about the feature:
@@ -354,6 +363,7 @@ This is documentation, not omission. Each absence is an assertion about the feat
 | `graph_designer` | — (owns three tables) | The deliberate opposite: its graph is *authored*, so the drawing — positions included — is the source of truth and nothing can recompute it |
 | `downloader_agents` | `templates/` | No pages; reaches the user through an agent's conversation plus two download routes |
 | `dashboard` | `schemas/` | One route rendering a page from the session user; reads nothing from the request |
+| `email_dispatch` | — (owns five tables) | Every send is recorded permanently, because the question asked in practice is not "can we send email" but "did that customer get it". `utils/events.py` sits outside it on purpose: the publishers are graph and integration runs, and neither should import an email module to say something happened |
 
 ### The one service folder with subfolders
 
@@ -2348,6 +2358,53 @@ That is also why `GraphSaveRequest` deliberately does *not* pin the node types: 
 two places would mean two edits every time one is added, so the schema checks only what can be
 decided without the vocabulary.
 
+### The help page, and why it is a route
+
+`GET /graph-designer/help` renders `templates/graph_designer/help.htm` — GRAPH_DESIGNER.md written
+for the operator, with sixteen worked scenarios, the ceilings in one table and every refusal with
+its fix. It is the second instance of a shape this codebase now has twice, `tool_configs/help.htm`
+being the first, and all three of its decisions are that page's:
+
+* **A route rather than a link to the markdown.** Help has to arrive inside the application's own
+  layout, behind the same auth as the page it explains. No service call, no schema, no query
+  parameters — the handler takes `user` and returns a `Template`.
+* **A literal path**, declared above `/{graph_id:uuid}/…` in the controller, so a help URL can
+  never be parsed as a uuid.
+* **The whole body inside `{% raw %}`.** The page is mostly SQL, JSON and `{{VARIABLE}}` samples.
+  Unescaped, `{{TABLE}}` renders as an undefined variable — the section on variables would then
+  demonstrate the opposite of what it says — so a route test asserts the samples arrive as written.
+
+One test is worth copying to the next help page: it walks `NODE_TYPES` and requires every palette
+label to appear in the rendered page, so a node type added later fails the suite until the help
+describes it. The vocabulary being server-owned (above) is what makes that assertion possible.
+
+Linked from the library **and** the canvas, both `target="_blank"`. The canvas is where a port or a
+binding mode needs explaining and its unsaved state lives only in the DOM, so navigating away to
+read the help would cost the drawing.
+
+**Flow Builder is now the third**, at `GET /flow-builder/help` from
+`templates/flow_builder/help.htm`: eleven blocks, nine worked scenarios, the limits in one table
+and every validator refusal with its fix. Same route shape, same literal path above
+`/{flow_id:uuid}/…`, same `{% raw %}` body, same pair of `target="_blank"` links from the library
+and the canvas. Two things about it are worth carrying forward.
+
+*The `{% raw %}` is load-bearing for a different reason than on the other two.* There the risk was
+a `{{TABLE}}` sample rendering empty; here the page's central warning is that Flow Builder message
+text is **not** a template — it is sent to the visitor verbatim, braces and all — so an unescaped
+`Thanks {{NAME}}!` in the example would render as `Thanks !` and demonstrate the precise opposite
+of the paragraph above it. That is the one help-page escaping bug that would actively teach the
+wrong thing rather than merely look broken, and there is a test on the literal string.
+
+*The completeness test degraded, and the reason is a real gap.* The recommendation above — walk the
+server-owned label vocabulary and require every label in the page — could not be followed, because
+Flow Builder has no such vocabulary: the display names live in `static/js/flow_builder.js` and the
+server knows only `flow_service._VALID_NODE_TYPES`, a set of bare ids. The test therefore pins a
+`_BLOCK_LABELS` mapping and asserts its keys equal that set before checking each label renders, so
+adding a block type still fails the suite until the mapping and the page both follow. It is the
+same guarantee through one more link, and it is an argument for moving Flow Builder's labels
+server-side the way the Graph Designer's are — the drift this catches by hand is the drift that
+vocabulary catches by construction.
+
 The three Value kinds — `list` (flat scalars, the shape an `IN` takes), `array` (nesting allowed),
 `dict` (named values) — exist separately because **they validate differently, and validating them
 alike lets a shape through that the node downstream cannot use.** A `dict` where a `list` was
@@ -2373,6 +2430,81 @@ arbitrary code even by its own author. Same decision as the flow engine's condit
 **`0` and `False` are not empty.** A SQL node returning a count of zero has produced a real answer,
 and treating it as empty would send a graph down its nothing-found path when the thing it found was
 zero — which is why `_is_empty` is a function rather than `not value`.
+
+### `{{VARIABLE}}` on any node — the fourth statement of one policy
+
+`node_variables.py` lets any node declare named values bound to earlier nodes' outputs and write
+them into its own text fields. **It substitutes; it does not evaluate.** No filters, no
+conditionals, no template engine, nothing reaching `eval`.
+
+That rule is now written down in four modules, and the repetition is deliberate — it is the
+sentence somebody is most likely to reach for an exception to:
+
+| Module | What it substitutes into |
+|---|---|
+| `email_dispatch/rendering.py` | an email's subject, body and recipients |
+| `email_dispatch/variable_sources.py` | resolving a binding to a value |
+| `integrations/engine/transform.py` | a closed table of named transforms |
+| `graph_designer/node_variables.py` | a graph node's own text fields |
+
+The machinery is shared rather than re-implemented: the same regex renderer, the same binding
+resolver, the same restricted dotted-path reader. What is new is a per-node-type table of *which
+fields* take a variable — pinned at import against `NODE_TYPE_VALUES`, so a new node type cannot
+be added without deciding, including deciding "none".
+
+Every refusal is an `HTTPException(400)`. Not laziness about error types: `graph_service`'s
+validators already speak it, and `run_node` already has an `except HTTPException` branch that
+writes the failed step with the detail and re-raises it as a `NodeFailure`. Raising anything else
+would lose the sentence to `run_node`'s catch-all, which reports "the reason has been logged".
+
+**`render_node` returns a copy, and that is load-bearing.** The compiler captures each node in a
+closure once per run and a loop body re-enters the *same* closure every pass, so writing rendered
+text back would bake pass one's values in and every later pass would substitute into text that had
+already been substituted.
+
+**The SQL case is the one with a threat model.** A `{{VAR}}` can carry a value out of a database
+row nobody reviewed, so four things guard it: a placeholder may not sit inside a literal or comment
+(save time, via `sql_guard.stripped_literals`); a substituted value must match a name-or-integer
+regex (run time); `_run_sql` re-runs `validated_tool_sql` over the *substituted* statement; and the
+`table_names` allow-list still binds. The first is the load-bearing one, and its justification is
+that a bind parameter already expresses every **value** — the one thing it cannot express is an
+**identifier**, which is exactly the gap this feature fills and the only gap it should fill.
+
+Excluded on purpose: `branch` and `do_until` condition values. `branch_port` and `loop_continues`
+are each called twice per visit — once by the runner, once by the router after the node's output
+merged — and they are one function precisely so the logged port and the taken port cannot differ.
+
+### Timers, and the one place a run may wait
+
+`timers.py` is pure: no LangGraph, no database, no Litestar. Two things make it testable.
+
+**Every transition takes its `moment` as an argument**, so a test measuring a forty-second pause
+passes two datetimes forty seconds apart and gets an answer instantly. **`now()` and `sleep()` are
+module-level seams** for the runner tests, which cannot pass a moment in — and callers must reach
+them through the module (`timers.now()`), never `from … import now`, because the second form binds
+the object and `monkeypatch.setattr` would replace something nobody is looking at. Same call
+`integrations/engine/scheduler.py` makes about its own `now()`.
+
+A timer's shared record lives in a new `timers` channel on `GraphState`, keyed by the *starting*
+node's id — not in `outputs`. A pause writing it into `outputs` would have to write under another
+node's key, misreporting what that node produced (a step row's `output_preview` is built from
+exactly that key), and `_merge` is last-write-wins so a loop would keep only each box's final
+visit. Each box still writes its own flat snapshot under its own id, flat because a downstream
+binding reads it with a dotted path.
+
+**No scheduler was added to this package, and the `wait` node is an in-process `asyncio.sleep`
+capped at 900 seconds.** Parking and resuming would need a new run status across eight consumers, a
+migration, a scheduler loop, and — the hard part — LangGraph's only park mechanism here is
+`interrupt()`, so a parked wait becomes a Human node that answers itself. The honest cost of the
+cheaper choice is that a wait does not survive a restart, and that is stated in the panel, on the
+node box and in `GRAPH_DESIGNER.md` rather than buried.
+
+**One pre-existing bug surfaced by it.** `cancel_run` marks the row and cancels the task;
+`CancelledError` is a `BaseException`, so it passed straight through `run_node`'s `except
+Exception` and the step row it had opened was never closed — a node spinning forever in the dock
+under a run already listed as cancelled. True of every node; a node that sleeps merely makes it
+easy to hit. `run_node` now has an `except asyncio.CancelledError` that closes the row and
+re-raises untouched.
 
 ### The cycle rule
 
@@ -2414,6 +2546,33 @@ answers one question — where does the run go from here — and answers it for 
 branch, the loop and the failure **in the same place.** Mixing `add_edge` for "simple" nodes with
 `add_conditional_edges` for the rest would mean a node that gained an error path had to change edge
 *kind*, and the failure path would be the one that never got tested.
+
+**With no exceptions, since the outcome nodes gained an exit.** `success` and `failure` used to get a
+plain `add_edge(node_id, END)`, on the reasoning that a terminal node has nothing to decide. It has
+one thing to decide — whether the author drew anything after it — and what these nodes actually *do*
+is record what the run is reported as, which is the moment there is finally something worth
+announcing. Announcing it takes a node, so forbidding a successor forced the announcement to be
+drawn *before* the box saying what happened.
+
+Two consequences worth stating, because each was a live defect:
+
+- **The router asks "is this an outcome node" first**, ahead of both failure checks. A `failure` node
+  sets `failed_at` to *its own id* as its entire job, which is indistinguishable — from inside the
+  router — from a node whose runner blew up. Asking the generic question first sends every `failure`
+  node to `END` and silently drops whatever follows it: no error, no step row, nothing in the log.
+  This is the one ordering in `_router` that is load-bearing rather than tidy.
+- **A tested selection chains through them now.** Chaining sends each disconnected piece's dead ends
+  into the next piece's entry, and an outcome node with nothing after it is such a dead end — but
+  `add_edge(node_id, END)` ignores `fallthrough`, so the second piece never ran, and because it was
+  *chosen* it was not marked skipped either. Its nodes were absent from the log with nothing to
+  explain them.
+
+What a successor cannot do is change the verdict — `failed_at` is set and nothing clears it — so
+`_validate_edges` refuses **one outcome node leading to the other** rather than let the drawing
+promise a green run that reports as failed. Refused rather than documented: the drawing is the thing
+people trust. The Integrations engine keeps the stricter original rule (`flow_rules`), which is a
+knowing divergence and not drift — a sync's outcome node is the end of a batch pipeline, and nothing
+there has asked to announce anything yet.
 
 ### How a failure travels — two channels, not one flag
 
@@ -4333,6 +4492,16 @@ The alternatives matter as much as the choices, because most of them look better
 | Redis / Celery / arq for the export queue | Throughput this feature will never need, and a service to operate that it would not justify. **A locked row is durable, cross-process, and visible in the same database** |
 | `pd.concat` to merge export parts | Holds the whole export in memory — the thing the feature avoids — and turns an int column with a NULL into floats |
 | pandas for the aggregation fold | Holds the GIL, which would serialise the fan-out and leave the wave pattern doing nothing |
+| Redis / Celery / arq for the **email** queue | The third time this was considered and refused, and the reasoning has not moved: a locked row is durable, cross-process, and visible in the same database as the delivery log it belongs to |
+| `smtplib` in `asyncio.to_thread` instead of `aiosmtplib` | One SMTP conversation against a slow relay routinely runs past 30 s, and `to_thread` borrows from the same executor `polars`/`pyarrow` work already contends for. Two send workers would block two of those threads for half a minute each, paid for by unrelated features |
+| Render the email in the **worker** rather than at enqueue | The values come from a live run whose state is gone by then, and a log holding a template id cannot answer "what did we actually send" once the template has been edited |
+| **Resume** an email whose worker died, as the export queue does | An export part is invisible outside this application; an email is not. The relay may already have delivered it and nothing here can tell, so it is failed with "delivery unknown" and a person decides |
+| Bound email concurrency with a worker-count limit alone | A worker-side "is this server busy" check is a check-then-act with two workers in the window. The refusal lives in the claim, so N replicas cannot become N connections to one provider — which is what gets a sending domain blocked |
+| Jitter on the email retry backoff | The claim serialises per server, so retries against one provider are single-file whatever the timings say. Leaving it out buys a backoff that is exactly reproducible in a test |
+| Resolve a missing email variable to `""` | Sends "Dear ," to a real person. Omitting it instead lets the template's own default or required flag decide, per variable, which puts the strictness where an operator can see it |
+| A durable outbox behind the event bus | Buys at-least-once delivery for the price of a second background loop. The gap it closes — a crash between a publisher's commit and its subscriber — costs one notification; the loop is permanent |
+| Truncate an over-large email batch to the send limit | The operator would believe everyone had been emailed. The step fails and sends nothing instead |
+| Render a template's HTML in the preview and the log | An operator can paste anything into a body, and rendering it executes it with their session — stored XSS opened by the *viewer* rather than the email. Both panes show source |
 
 ### Prompts and models
 
@@ -4388,11 +4557,63 @@ Stated rather than hidden. Each is a real limitation somebody will otherwise red
   no idempotency key and a create that times out after reaching the server has already
   happened.
 
+  [Brevo](BREVO_CONNECTOR.md) has since landed as well, and it is the **first connector that
+  writes**: contacts and lists out, create-or-update-contact and add-to-list in. That half
+  needed no runtime changes at all — which is the claim the Shopify work was making; the
+  eCommerce section below needed one, and only one. Its create is
+  retry-safe for a reason worth naming, because it is the property Shopify lacks: the body
+  carries a literal `updateEnabled: true`, which makes `POST /contacts` an upsert matched on
+  the email address, so a create that timed out after reaching Brevo lands on the same contact
+  when it is retried. Transactional email is deliberately **not** an operation on it: a send
+  cannot be made idempotent, and sending belongs to [Email](EMAIL_DISPATCH.md).
+
+  Brevo's **eCommerce section** — orders, products and categories, three reads and three
+  writes — followed, and it is the first real *destination* the platform has: a Shopify read
+  now has somewhere for its records to go. It repeats the upsert argument three times with a
+  twist worth knowing, which is that `POST /orders/status` upserts on the supplied id
+  natively while products and categories need `updateEnabled`, so one of the three writes
+  deliberately does not send a flag the other two must.
+
+  It also forced the one runtime change the contacts half did not need:
+  **`OperationSpec.rate_limits`, plus a `rate_limit_group`**. Brevo meters the endpoints
+  behind a single connection at rates differing by 180× — 10/second for contacts, 5 for order
+  writes, 2 for product writes, 100 **per hour** for the rest — and a connector-wide figure
+  has to be wrong for most of them in one direction or the other: the slowest throttles an
+  order sync to a record every 36 seconds, the fastest exhausts the retry engine against the
+  hourly ceiling. Three decisions in that field are the transferable part. The **group**
+  names the bucket rather than the operation doing so, because a vendor quota is usually
+  shared by a family of endpoints and four buckets against one shared hundred-an-hour would
+  spend four times it while reading as correct; `validated()` therefore refuses a group that
+  names no allowance, since that combination reads like an operation with its own budget and
+  has not got one. It is **excluded from `canonical()`**, on the same rule as
+  `has_more_path` — a limit decides when a request leaves, never what it says, and retuning
+  one must not move every fingerprint at once and make every prior run look like it ran
+  something else. And it is **not loadable from a database row**, deliberately rather than
+  unfinished: a row is a form somebody filled in, and an operation that could set its own
+  send rate would let that form decide how fast we hammer a third party from our egress
+  address. An operation declaring nothing keeps the bare connection key, so Shopify — whose
+  limit is per shop and shared across its operations — is byte-identical to before.
+
+  The Integration Platform's three pages are now **Apps / Connections / Workflows**, and the
+  nav lands on Apps. An "app" is not a new entity: it is a `ConnectorSpec` from the registry
+  plus this user's connection counts, and connecting one calls the same
+  `create_connection` the Connections page calls — see
+  [INTEGRATIONS.md](INTEGRATIONS.md#the-apps-gallery). Two decisions in it are worth carrying
+  elsewhere. The tile shows *working*, *needs attention* and *switched off* as three counts
+  that add up to the total, rather than a `connected` boolean — a revoked connection still has
+  a row, and calling that connected is a page lying about a nightly failure, while counting a
+  deliberately parked one as a problem teaches people to ignore the badge that is not. And the
+  connect dialog's body is rendered
+  server-side per connector rather than switched by script — the opposite choice from the
+  Connections page's Add dialog, and right for the opposite reason: there the user picks the
+  system *inside* the form, here the tile already picked it.
+
   Still specified rather than built: **Shopify writes**, GoHighLevel, SAP, and with them
-  OAuth, inbound webhooks and cron schedules. Shopify needed no OAuth — a custom app token
-  does not expire — so the OAuth path remains half-present: the `integration_oauth_states`
-  table, the CAS refresh lock and the `AUTH_OAUTH2` send branch all exist and are all unused,
-  and `ensure_fresh_token` has zero callers.
+  OAuth, inbound webhooks and cron schedules. Neither Shopify nor Brevo needed OAuth — a
+  custom app token does not expire and a Brevo account key does not either — so the OAuth path
+  remains half-present: the `integration_oauth_states` table, the CAS refresh lock and the
+  `AUTH_OAUTH2` send branch all exist and are all unused, and `ensure_fresh_token` has zero
+  callers.
 
   The three defects that blocked storing a third-party credential at all (a hardcoded Fernet
   key, an SSRF guard trapped inside the chatbot service, type coercion trapped with it) are
@@ -4467,6 +4688,23 @@ Stated rather than hidden. Each is a real limitation somebody will otherwise red
 - **There is no JavaScript test harness.** The headless-browser runs are manual.
 
 ---
+
+### Email Dispatch
+
+- **No scheduled email triggers.** An event or a webhook fires a trigger; there is no "every
+  morning at nine". Adding one means adding a second background loop to a process that now
+  runs five, and that trade should be made deliberately rather than by adding a column.
+- **No bounce or complaint handling.** SMTP tells us at send time whether a recipient was
+  refused and that is recorded, but an asynchronous bounce needs an inbound mail path that
+  does not exist. An address that accepts and then bounces reads as `sent` here.
+- **No attachments.** Nothing asked for them, and they need a settled answer to where the
+  bytes come from — an export? an upload? — which is a feature of its own.
+- **The event bus is not a delivery guarantee.** A crash between a publisher's commit and its
+  subscriber loses that one notification. See [EVENT_BUS.md](EVENT_BUS.md) for why that is
+  the chosen trade.
+- **Two events are drafted and unpublished.** `datasource.status_changed` needs a status
+  column that does not exist; `download_job.finished` needs an owner an export does not have.
+  Both refusals are recorded in `app/utils/events.py` so they are not re-proposed.
 
 # 31. Reading map
 

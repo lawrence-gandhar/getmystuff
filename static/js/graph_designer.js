@@ -97,8 +97,31 @@ window.GraphDesigner = (function () {
                 { port: "done", label: "done" },
             ];
         },
-        success: function () { return []; },
-        failure: function () { return []; },
+        email: function () {
+            // `error` is for a refusal that is knowable now — an unresolvable binding, a
+            // switched-off template. A relay refusing the message tomorrow is not knowable
+            // now and cannot route anywhere; that lives in the delivery log.
+            return [
+                { port: "default", label: "queued" },
+                { port: "error", label: "not sent", kind: "error" },
+            ];
+        },
+        // Both outcome nodes offer one exit. They decide what the run is *reported* as,
+        // which is settled the moment they run — so anything drawn after them still runs,
+        // and cannot change that verdict. Leaving it connected to nothing is the ordinary
+        // case and ends the run, exactly as it did when these had no exit at all.
+        //
+        // "then" rather than "next" or "default": it reads as a consequence of the outcome,
+        // which is what it is. The one thing it may not lead to is the other outcome node,
+        // and the server says so by name if you try.
+        // One exit each. A timer's illegal transition — stopping one nobody started — is
+        // an authoring mistake, not a condition to route around, and carrying on with a
+        // timer in an undefined state is worse than stopping. A wait cannot fail for a
+        // reason a graph could act on; a bad duration is refused at save.
+        timer: function () { return [{ port: "default", label: "" }]; },
+        wait: function () { return [{ port: "default", label: "" }]; },
+        success: function () { return [{ port: "default", label: "then" }]; },
+        failure: function () { return [{ port: "default", label: "then" }]; },
     };
 
     const ICONS = {
@@ -110,6 +133,9 @@ window.GraphDesigner = (function () {
         branch: "la-code-branch",
         for_each: "la-redo",
         do_until: "la-sync",
+        email: "la-envelope",
+        timer: "la-stopwatch",
+        wait: "la-hourglass-half",
         success: "la-check-circle",
         failure: "la-times-circle",
     };
@@ -191,6 +217,19 @@ window.GraphDesigner = (function () {
         return builder ? builder(node.data || {}) : [];
     }
 
+    /** Is this one of the two nodes that decide what the run is reported as? */
+    function isOutcome(node) {
+        return !!node && (node.type === "success" || node.type === "failure");
+    }
+
+    // Refused on the canvas as well as on the server, for the same reason the
+    // self-connection is: the server's version of this sentence arrives at save time and
+    // this one arrives while the connector is still in your hand. Kept as one constant so
+    // the two gestures that can draw such an edge cannot drift into wording it differently.
+    const OUTCOME_CHAIN_REFUSAL =
+        "That node already decides how the run ends, so it cannot lead to another " +
+        "outcome — the first one is the one reported.";
+
     function labelOf(node) {
         const explicit = ((node.data || {}).label || "").trim();
         if (explicit) return explicit;
@@ -217,13 +256,18 @@ window.GraphDesigner = (function () {
             case "sql_union":
                 return Object.assign(base, {
                     datasource_id: "", sql_query: "", table_names: [], params: [], bindings: {},
+                    variables: {},
                 });
             case "value":
-                return Object.assign(base, { value_kind: "list", value_json: "[]" });
+                return Object.assign(base, {
+                    value_kind: "list", value_json: "[]", variables: {},
+                });
             case "tool_config":
                 return Object.assign(base, { tool_config_id: "" });
             case "human":
-                return Object.assign(base, { prompt: "", expects: "confirm", choices: [] });
+                return Object.assign(base, {
+                    prompt: "", expects: "confirm", choices: [], variables: {},
+                });
             case "branch":
                 return Object.assign(base, { conditions: [] });
             case "for_each":
@@ -239,9 +283,24 @@ window.GraphDesigner = (function () {
                     condition: { source_node: "", operator: "not_empty", value: "", field: "" },
                     max_iterations: state.vocabulary.default_max_iterations,
                 });
+            case "email":
+                return Object.assign(base, {
+                    template_id: "", smtp_config_id: "",
+                    recipients: { to: [], cc: [], bcc: [] },
+                    variable_bindings: {},
+                });
+            // A timer instance is a Start until told otherwise, because a Start is the
+            // only one that is valid on its own — the other three need a timer to name,
+            // and defaulting to one of those would create a node that cannot be saved.
+            case "timer":
+                return Object.assign(base, { action: "start", timer_node: "" });
+            case "wait":
+                return Object.assign(base, {
+                    seconds: state.vocabulary.default_wait_seconds || 30,
+                });
             case "success":
             case "failure":
-                return Object.assign(base, { message: "" });
+                return Object.assign(base, { message: "", variables: {} });
             default:
                 return base;
         }
@@ -281,6 +340,24 @@ window.GraphDesigner = (function () {
                 return "until " + (c.source_node ? nodeLabelById(c.source_node) : "?") +
                     " " + (c.operator || "");
             }
+            case "email": {
+                // This case was missing, so an Email node's box body was blank and the
+                // only way to see what it sent was to open the panel.
+                const template = optionLabel("email_templates", d.template_id);
+                const to = ((d.recipients || {}).to || []).join(", ");
+                return (template ? "sends " + template : "(no template selected)")
+                    + (to ? "\nto " + to : "");
+            }
+            case "timer": {
+                const action = d.action || "start";
+                if (action === "start") return "starts timing";
+                return action + "s " + (d.timer_node ? nodeLabelById(d.timer_node) : "?");
+            }
+            case "wait":
+                // The restart caveat goes on the box rather than only in the panel: it is
+                // the one thing about this node somebody needs to know without clicking,
+                // and it is cheapest to read here.
+                return "waits " + (d.seconds || 0) + "s\ndoes not survive a restart";
             case "success":
             case "failure":
                 return d.message || "";
@@ -730,6 +807,13 @@ window.GraphDesigner = (function () {
             return;
         }
 
+        if (isOutcome(findNode(p.nodeId)) && isOutcome(target)) {
+            flash(OUTCOME_CHAIN_REFUSAL);
+            renderAllNodes();
+            renderAllEdges();
+            return;
+        }
+
         const taken = state.edges.some(function (e) {
             return e.source === p.nodeId && (e.source_port || "default") === p.port;
         });
@@ -891,12 +975,21 @@ window.GraphDesigner = (function () {
             const target = findNode(nodeId);
             if (target && target.type === "start") {
                 flash("Nothing can connect into the Start node.");
+            } else if (isOutcome(findNode(edge.source)) && isOutcome(target)) {
+                flash(OUTCOME_CHAIN_REFUSAL);
             } else if (nodeId !== edge.source) {
                 edge.target = nodeId;
                 markDirty();
             }
         } else if (nodeId !== edge.target) {
-            const ports = portsOf(findNode(nodeId) || {});
+            const moving = findNode(nodeId);
+            if (isOutcome(moving) && isOutcome(findNode(edge.target))) {
+                flash(OUTCOME_CHAIN_REFUSAL);
+                renderAllNodes();
+                renderAllEdges();
+                return;
+            }
+            const ports = portsOf(moving || {});
             const free = ports.find(function (spec) {
                 return !state.edges.some(function (other) {
                     return other !== edge && other.source === nodeId &&
@@ -1043,6 +1136,9 @@ window.GraphDesigner = (function () {
             case "branch": branchFields(form, draft, node); break;
             case "for_each": forEachFields(form, draft, node); break;
             case "do_until": doUntilFields(form, draft, node); break;
+            case "email": emailFields(form, draft, node); break;
+            case "timer": timerFields(form, draft, node); break;
+            case "wait": waitFields(form, draft); break;
             case "success":
             case "failure":
                 form.appendChild(textareaField("Message", draft.message || "", 2, function (v) {
@@ -1053,6 +1149,12 @@ window.GraphDesigner = (function () {
                 break;
         }
 
+        // After the per-type fields, because a variable is written *into* one of them and
+        // the panel should read in that order. Draws nothing for a type the server says
+        // substitutes nothing, so the Email node — whose variables come from its template
+        // — does not get two competing Variables sections.
+        variablesFields(form, draft, node);
+
         const actions = document.createElement("div");
         actions.className = "d-flex gap-2 mt-3";
 
@@ -1061,6 +1163,16 @@ window.GraphDesigner = (function () {
         save.className = "btn btn-primary btn-sm";
         save.innerHTML = '<i class="las la-check"></i> Apply';
         save.addEventListener("click", function () {
+            // Checked here as well as on the server, which is the house rule: the server
+            // is the authority and refuses the same things, but being told at the keyboard
+            // beats being told after a round trip that closed the panel.
+            const wrong = variablesProblem(draft, node);
+
+            if (wrong) {
+                flash(wrong);
+                return;
+            }
+
             node.data = draft;
             markDirty();
             renderAllNodes();
@@ -1352,6 +1464,152 @@ window.GraphDesigner = (function () {
         ));
     }
 
+    /**
+     * An Email node: which template, which server, who it goes to, and where each of the
+     * template's declared variables gets its value.
+     *
+     * The binding rows are rebuilt whenever the template changes, from the `variables` that
+     * ride along on each entry of `state.options.email_templates` — which is why
+     * `node_options` sends them rather than making this fetch them separately. Fetching
+     * would let somebody Apply the node before its rows had loaded.
+     *
+     * A graph offers two sources and no more: an earlier node's output, or a fixed value.
+     * There is no chat session and no record here, and a graph is not attached to a chatbot
+     * so there is no agent whose prompt variables it could read. `_validate_email_node`
+     * refuses anything else on save, so offering more would build a form the server
+     * rejects.
+     */
+    function emailFields(form, draft, node) {
+        const templates = (state.options ? state.options.email_templates : []) || [];
+        const servers = (state.options ? state.options.smtp_configs : []) || [];
+
+        form.appendChild(selectField(
+            "Template", draft.template_id || "", templates,
+            function (v) { draft.template_id = v; renderBindings(); },
+            "What the email says. Editing the template later does not change emails already sent.",
+        ));
+
+        form.appendChild(selectField(
+            "Send through", draft.smtp_config_id || "", servers,
+            function (v) { draft.smtp_config_id = v; },
+        ));
+
+        draft.recipients = draft.recipients || { to: [], cc: [], bcc: [] };
+
+        ["to", "cc", "bcc"].forEach(function (key) {
+            const label = key === "to" ? "To" : key === "cc" ? "Cc" : "Bcc";
+            form.appendChild(textField(
+                label,
+                (draft.recipients[key] || []).join(", "),
+                function (v) {
+                    draft.recipients[key] = v
+                        .split(",")
+                        .map(function (part) { return part.trim(); })
+                        .filter(function (part) { return part !== ""; });
+                },
+                key === "to"
+                    ? "Comma-separated. Each entry may be a fixed address or a {{VARIABLE}}."
+                    : "",
+            ));
+        });
+
+        // The container the binding rows are drawn into, so changing the template can
+        // replace them without rebuilding the whole panel and losing the other fields.
+        const bindingsWrap = document.createElement("div");
+        bindingsWrap.className = "mt-3";
+        form.appendChild(bindingsWrap);
+
+        function renderBindings() {
+            bindingsWrap.textContent = "";
+            draft.variable_bindings = draft.variable_bindings || {};
+
+            const chosen = templates.find(function (t) { return t.uuid === draft.template_id; });
+            const declared = (chosen && chosen.variables) || [];
+
+            const heading = document.createElement("div");
+            heading.className = "form-label fw-semibold mb-1";
+            heading.textContent = "Variables";
+            bindingsWrap.appendChild(heading);
+
+            if (!draft.template_id) {
+                const hint = document.createElement("div");
+                hint.className = "form-text";
+                hint.textContent = "Choose a template to see what it needs.";
+                bindingsWrap.appendChild(hint);
+                return;
+            }
+            if (!declared.length) {
+                const hint = document.createElement("div");
+                hint.className = "form-text";
+                hint.textContent = "This template declares no variables.";
+                bindingsWrap.appendChild(hint);
+                return;
+            }
+
+            // Every node that could have produced something, as binding targets.
+            //
+            // `otherNodes` rather than a filter written out here: there is no `state.graph`
+            // — the nodes live at `state.nodes` — so the hand-written version threw a
+            // TypeError the moment a template declaring a variable was chosen. It went
+            // unnoticed only because the Template picker was itself always empty (the
+            // response schema was dropping the list), so this line was unreachable.
+            //
+            // The shared helper also excludes the Start node, which is right: binding to
+            // its `{"started": true}` is never useful.
+            const upstream = otherNodes(node);
+
+            declared.forEach(function (variable) {
+                const current = draft.variable_bindings[variable.name] || {};
+
+                const row = document.createElement("div");
+                row.className = "border rounded p-2 mb-2";
+
+                const name = document.createElement("div");
+                name.className = "small fw-semibold";
+                // textContent: the name came from a saved template and must not be markup.
+                name.textContent = "{{" + variable.name + "}}"
+                    + (variable.required ? " (required)" : "");
+                row.appendChild(name);
+
+                row.appendChild(selectField(
+                    "From", current.source || "",
+                    [
+                        { uuid: "node", label: "An earlier node's output" },
+                        { uuid: "literal", label: "A fixed value" },
+                    ],
+                    function (v) {
+                        draft.variable_bindings[variable.name] =
+                            Object.assign({}, draft.variable_bindings[variable.name], { source: v });
+                        renderBindings();
+                    },
+                ));
+
+                if (current.source === "node") {
+                    row.appendChild(selectField(
+                        "Node", current.node_id || "", upstream,
+                        function (v) {
+                            draft.variable_bindings[variable.name].node_id = v;
+                        },
+                    ));
+                    row.appendChild(textField(
+                        "Field", current.path || "",
+                        function (v) { draft.variable_bindings[variable.name].path = v; },
+                        "Optional. A path into that node's output, such as rows[0].email.",
+                    ));
+                } else if (current.source === "literal") {
+                    row.appendChild(textField(
+                        "Value", current.value || "",
+                        function (v) { draft.variable_bindings[variable.name].value = v; },
+                    ));
+                }
+
+                bindingsWrap.appendChild(row);
+            });
+        }
+
+        renderBindings();
+    }
+
     function humanFields(form, draft) {
         form.appendChild(textareaField("Question", draft.prompt || "", 3, function (v) {
             draft.prompt = v;
@@ -1559,6 +1817,351 @@ window.GraphDesigner = (function () {
             .map(function (n) { return { uuid: n.id, label: labelOf(n) }; });
     }
 
+    /**
+     * Every Timer node set to Start, as the things a Pause/Resume/Stop may point at.
+     *
+     * Mirrors the server's rule rather than offering every node and letting the save
+     * refuse most of them — the same call `bodyNodes` makes for a loop's collection. A
+     * picker whose options are mostly invalid teaches nothing about why.
+     */
+    function startTimerNodes(node) {
+        return state.nodes
+            .filter(function (n) {
+                return n.type === "timer"
+                    && ((n.data || {}).action || "start") === "start"
+                    && n.id !== node.id;
+            })
+            .map(function (n) { return { uuid: n.id, label: labelOf(n) }; });
+    }
+
+    /**
+     * A Timer node: which of the four things it does, and to which timer.
+     *
+     * The Timer picker appears only for the three that act on somebody else's timer, so
+     * the form is re-rendered when the action changes. A Start *is* the timer and naming
+     * one on it is refused by the server, which is why the field is removed rather than
+     * disabled.
+     */
+    function timerFields(form, draft, node) {
+        const wrap = document.createElement("div");
+        form.appendChild(wrap);
+
+        function render() {
+            wrap.textContent = "";
+
+            wrap.appendChild(selectField(
+                "What this node does", draft.action || "start",
+                (state.vocabulary.timer_actions || []).map(function (a) {
+                    return { uuid: a.value, label: a.label };
+                }),
+                function (v) {
+                    draft.action = v;
+                    // A Start names no timer. Cleared rather than left behind, or the
+                    // stale id would be posted and refused.
+                    if (v === "start") draft.timer_node = "";
+                    render();
+                },
+                "Start begins timing. Pause and Resume bracket a stretch that should not "
+                + "count. Stop ends it and works out how long it took.",
+            ));
+
+            if ((draft.action || "start") === "start") {
+                attachHelp(wrap, "Later nodes read this timer by pointing at this box.");
+                return;
+            }
+
+            wrap.appendChild(selectField(
+                "Timer", draft.timer_node || "", startTimerNodes(node),
+                function (v) { draft.timer_node = v; },
+                "The Timer node set to Start that begins this measurement.",
+            ));
+        }
+
+        render();
+    }
+
+    /**
+     * A Wait node: one number.
+     *
+     * Not a duration plus a unit. Two fields have to be reconciled into one number
+     * server-side, and a stored graph then has two sources of truth for the same fact.
+     */
+    function waitFields(form, draft) {
+        const ceiling = state.vocabulary.max_wait_seconds || 900;
+
+        form.appendChild(numberField(
+            "Seconds to wait", draft.seconds == null ? "" : draft.seconds,
+            function (v) { draft.seconds = v; },
+            "At most " + ceiling + " (" + Math.round(ceiling / 60) + " minutes). "
+            + "A waiting run does not survive a restart — for anything longer, use an "
+            + "Integrations schedule.",
+        ));
+    }
+
+    /**
+     * The Variables section, on every node type whose fields can use one.
+     *
+     * Which fields those are comes from the server, not from a list here: the server's
+     * table is what the validator enforces, and a panel that offered a variable in a
+     * field the validator ignores would substitute nothing and say nothing about it.
+     */
+    function variablesFields(form, draft, node) {
+        const fields = (state.vocabulary.variable_fields || {})[node.type] || [];
+
+        if (!fields.length) return;
+
+        const section = document.createElement("div");
+        section.className = "mt-3 pt-3 border-top";
+        form.appendChild(section);
+
+        const heading = document.createElement("div");
+        heading.className = "form-label fw-semibold mb-1";
+        heading.textContent = "Variables";
+        section.appendChild(heading);
+
+        const hint = document.createElement("div");
+        hint.className = "form-text small mb-2";
+        hint.textContent = "Write {{NAME}} in: " + fields.join(", ") + ".";
+        section.appendChild(hint);
+
+        const rows = document.createElement("div");
+        section.appendChild(rows);
+
+        function render() {
+            rows.textContent = "";
+            draft.variables = draft.variables || {};
+
+            Object.keys(draft.variables).forEach(function (name) {
+                rows.appendChild(variableRow(name, draft, node, render));
+            });
+
+            if (!Object.keys(draft.variables).length) {
+                const empty = document.createElement("div");
+                empty.className = "form-text small";
+                empty.textContent = "None yet.";
+                rows.appendChild(empty);
+            }
+        }
+
+        const add = document.createElement("button");
+        add.type = "button";
+        add.className = "btn btn-outline-secondary btn-sm mt-1";
+        add.innerHTML = '<i class="las la-plus"></i> Add variable';
+        add.addEventListener("click", function () {
+            draft.variables = draft.variables || {};
+
+            const cap = state.vocabulary.max_node_variables || 30;
+
+            if (Object.keys(draft.variables).length >= cap) {
+                flash("A node may declare at most " + cap + " variables.");
+                return;
+            }
+
+            draft.variables[nextVariableName(draft.variables)] = { source: "node", node_id: "" };
+            render();
+        });
+        section.appendChild(add);
+
+        render();
+    }
+
+    /**
+     * What is wrong with this node's variables, in the server's own words, or ``""``.
+     *
+     * A deliberate echo of ``node_variables.assert_valid`` rather than a second opinion.
+     * The server stays the authority — this only saves a round trip that would close the
+     * panel and lose the edit.
+     */
+    function variablesProblem(draft, node) {
+        const fields = (state.vocabulary.variable_fields || {})[node.type] || [];
+        const declared = draft.variables || {};
+        const names = Object.keys(declared);
+
+        if (!fields.length) return names.length ? "This node cannot use variables." : "";
+
+        const cap = state.vocabulary.max_node_variables || 30;
+
+        if (names.length > cap) {
+            return "A node may declare at most " + cap + " variables.";
+        }
+
+        for (let i = 0; i < names.length; i += 1) {
+            const name = names[i];
+
+            if (!/^[A-Z][A-Z0-9_]{0,49}$/.test(name)) {
+                return "'" + name + "' is not a usable variable name. Start with a letter "
+                    + "and use capitals, digits and underscores only.";
+            }
+
+            const binding = declared[name] || {};
+
+            if ((binding.source || "node") === "node" && !binding.node_id) {
+                return "{{" + name + "}} reads an earlier node's output but no node is chosen.";
+            }
+        }
+
+        const missing = usedVariableNames(draft, node).filter(function (name) {
+            return !Object.prototype.hasOwnProperty.call(declared, name);
+        });
+
+        if (missing.length) {
+            return "This node uses {{" + missing.join("}}, {{") + "}} but nothing declares "
+                + "it. Add it under Variables, or remove it from the text.";
+        }
+
+        return "";
+    }
+
+    /** Every ``{{NAME}}`` written into this node's substitutable fields, upper-cased. */
+    function usedVariableNames(draft, node) {
+        // Keyed by the panel's own labels, which is what the server sends. Each maps to
+        // the `data` key it edits — the one place the two vocabularies meet.
+        const KEYS = {
+            "SQL statement": "sql_query", "Tables": "table_names",
+            "Value": "value_json", "Question": "prompt", "Choices": "choices",
+            "Message": "message",
+        };
+        const fields = (state.vocabulary.variable_fields || {})[node.type] || [];
+        const found = {};
+
+        fields.forEach(function (label) {
+            const raw = draft[KEYS[label]];
+            const texts = Array.isArray(raw) ? raw : [raw];
+
+            texts.forEach(function (text) {
+                if (typeof text !== "string") return;
+                const matches = text.match(/\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g) || [];
+                matches.forEach(function (match) {
+                    found[match.replace(/[{}\s]/g, "").toUpperCase()] = true;
+                });
+            });
+        });
+
+        return Object.keys(found);
+    }
+
+    /** A name nothing else on this node is using — ``NAME``, ``NAME_2``, and so on. */
+    function nextVariableName(existing) {
+        let index = 1;
+        let name = "NAME";
+
+        while (Object.prototype.hasOwnProperty.call(existing, name)) {
+            index += 1;
+            name = "NAME_" + index;
+        }
+
+        return name;
+    }
+
+    /**
+     * One declared variable: its name, where its value comes from, and what happens when
+     * there isn't one.
+     *
+     * The "If it has no value" select is how the form expresses *the `default` key is
+     * absent* as against *`default` is an empty string* — a distinction a bare text input
+     * cannot make, and one the server acts on: absent means fail the node and say which
+     * variable, present means carry on with this.
+     */
+    function variableRow(name, draft, node, rerender) {
+        const binding = draft.variables[name] || {};
+
+        const row = document.createElement("div");
+        row.className = "border rounded p-2 mb-2";
+
+        const head = document.createElement("div");
+        head.className = "d-flex align-items-start gap-2";
+        row.appendChild(head);
+
+        const nameWrap = document.createElement("div");
+        nameWrap.className = "flex-grow-1";
+        head.appendChild(nameWrap);
+
+        nameWrap.appendChild(textField("Name", name, function (v) {
+            // Upper-cased as it is typed, because the renderer upper-cases whatever it
+            // matches — so a lowercase declaration would look right and never be found.
+            const renamed = v.toUpperCase().trim();
+
+            if (!renamed || renamed === name) return;
+            if (Object.prototype.hasOwnProperty.call(draft.variables, renamed)) return;
+
+            // Rebuilt in order rather than deleted and re-added, so renaming a row does
+            // not send it to the bottom of the list while somebody is typing in it.
+            const rebuilt = {};
+            Object.keys(draft.variables).forEach(function (key) {
+                rebuilt[key === name ? renamed : key] = draft.variables[key];
+            });
+            draft.variables = rebuilt;
+            name = renamed;
+        }, "Referred to as {{" + name + "}}."));
+
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "btn btn-outline-danger btn-sm mt-4";
+        remove.innerHTML = '<i class="las la-trash"></i>';
+        remove.title = "Remove this variable";
+        remove.addEventListener("click", function () {
+            delete draft.variables[name];
+            rerender();
+        });
+        head.appendChild(remove);
+
+        row.appendChild(selectField(
+            "From", binding.source || "node",
+            [
+                { uuid: "node", label: "An earlier node's output" },
+                { uuid: "literal", label: "A fixed value" },
+            ],
+            function (v) {
+                draft.variables[name] = Object.assign({}, draft.variables[name], { source: v });
+                rerender();
+            },
+        ));
+
+        if ((binding.source || "node") === "node") {
+            row.appendChild(selectField(
+                "Node", binding.node_id || "", otherNodes(node),
+                function (v) { draft.variables[name].node_id = v; },
+            ));
+            row.appendChild(textField(
+                "Field", binding.path || "",
+                function (v) { draft.variables[name].path = v; },
+                "Optional. A path into that node's output, such as rows[0].email.",
+            ));
+        } else {
+            row.appendChild(textField(
+                "Value", binding.value || "",
+                function (v) { draft.variables[name].value = v; },
+            ));
+        }
+
+        const hasDefault = Object.prototype.hasOwnProperty.call(binding, "default");
+
+        row.appendChild(selectField(
+            "If it has no value", hasDefault ? "default" : "fail",
+            [
+                { uuid: "fail", label: "Stop the run and say which variable" },
+                { uuid: "default", label: "Use a default" },
+            ],
+            function (v) {
+                if (v === "default") {
+                    draft.variables[name].default = binding.default || "";
+                } else {
+                    delete draft.variables[name].default;
+                }
+                rerender();
+            },
+        ));
+
+        if (hasDefault) {
+            row.appendChild(textField(
+                "Default", binding.default || "",
+                function (v) { draft.variables[name].default = v; },
+            ));
+        }
+
+        return row;
+    }
+
     // ---- field builders ----
 
     function fieldWrap(labelText, help) {
@@ -1732,7 +2335,13 @@ window.GraphDesigner = (function () {
         } catch (err) {
             // Not fatal: the canvas still draws and the pickers are simply empty, which
             // is better than a page that will not open.
-            state.options = { datasources: [], tool_configs: [], data_agents: [] };
+            //
+            // Every list the panel reads has to appear here, or a failed fetch leaves the
+            // Email node's fields reading `undefined` and throwing on `.find`.
+            state.options = {
+                datasources: [], tool_configs: [], data_agents: [],
+                email_templates: [], smtp_configs: [],
+            };
         }
     }
 

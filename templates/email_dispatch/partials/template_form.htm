@@ -1,0 +1,128 @@
+{# Create and edit share this one form. `template` is None for a create.
+
+   The variable rows are built by email_dispatch.js and serialised into the single
+   hidden `variables_json` field below. One field rather than repeated inputs so
+   there is exactly one place to validate the shape — the same choice the Agents
+   section's `variables_json` makes, for the same reason. #}
+<form hx-post="{{ form_action }}"
+      hx-target="#emailTemplateResponse"
+      hx-swap="innerHTML"
+      data-email-template-form>
+    <div class="modal-header border-bottom">
+        <h5 class="modal-title">
+            <i class="las la-file-alt text-primary"></i>
+            {% if template %}Edit template{% else %}New template{% endif %}
+        </h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+    </div>
+
+    <div class="modal-body">
+        <div class="row g-3">
+            <div class="col-md-6">
+                <label class="form-label">Template name <span class="text-danger">*</span></label>
+                <input type="text" name="name" class="form-control" required maxlength="255"
+                       placeholder="Sync failed alert"
+                       value="{{ template.name if template else '' }}">
+            </div>
+
+            <div class="col-md-6">
+                <label class="form-label">Shared with workspace</label>
+                <select name="workspace_id" class="form-select">
+                    <option value="">Not shared</option>
+                    {% for workspace in workspaces %}
+                    <option value="{{ workspace.uuid }}"
+                        {% if workspace_id and workspace_id == workspace.uuid %}selected{% endif %}>
+                        {{ workspace.name }}{% if not workspace.is_active %} (archived){% endif %}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="col-12">
+                <label class="form-label">Description</label>
+                <input type="text" name="description" class="form-control" maxlength="2000"
+                       placeholder="What this email is for"
+                       value="{{ template.description if template else '' }}">
+            </div>
+
+            <!-- ============================================
+                 VARIABLES
+                 Declared first, because the subject and body may only reference
+                 names on this list — a placeholder with no row here is refused on
+                 save, since a node could never bind it.
+                 ============================================ -->
+            <div class="col-12">
+                <hr class="my-1">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <label class="form-label mb-0 fw-semibold">Variables</label>
+                    <button type="button" class="btn btn-sm btn-outline-primary"
+                            data-add-variable>
+                        <i class="las la-plus"></i> Add variable
+                    </button>
+                </div>
+                <div class="form-text mb-2">
+                    Each one becomes a <code>&#123;&#123;NAME&#125;&#125;</code> you can use below, and a
+                    field a node or a trigger fills in. Names are capitals, numbers and
+                    underscores. A variable marked required with no default stops the email
+                    being sent until something binds it.
+                </div>
+
+                {% if unused %}
+                <div class="alert alert-warning py-2 small">
+                    Declared but not used anywhere in this template:
+                    {% for name in unused %}<code>&#123;&#123;{{ name }}&#125;&#125;</code>{% endfor %}.
+                    That is fine — it just does nothing yet.
+                </div>
+                {% endif %}
+
+                <div id="templateVariableRows" class="vstack gap-2"></div>
+
+                {# The editor rehydrates from this, and serialises back into the hidden
+                   field on every change and on submit. #}
+                <script type="application/json" id="templateVariablesData">
+                    {{ (template.variables if template else []) | tojson }}
+                </script>
+                <input type="hidden" name="variables_json" id="templateVariablesJson" value="[]">
+            </div>
+
+            <!-- ============================================
+                 CONTENT
+                 ============================================ -->
+            <div class="col-12">
+                <hr class="my-1">
+                <label class="form-label">Subject <span class="text-danger">*</span></label>
+                <input type="text" name="subject_template" class="form-control" required maxlength="998"
+                       placeholder="&#123;&#123;WORKFLOW&#125;&#125; failed"
+                       value="{{ template.subject_template if template else '' }}">
+            </div>
+
+            <div class="col-12">
+                <label class="form-label">Message body (HTML) <span class="text-danger">*</span></label>
+                <textarea name="body_html_template" class="form-control font-monospace" rows="9"
+                          required maxlength="200000"
+                          placeholder="&lt;p&gt;&#123;&#123;WORKFLOW&#125;&#125; failed at &#123;&#123;WHEN&#125;&#125;.&lt;/p&gt;">{{ template.body_html_template if template else '' }}</textarea>
+                <div class="form-text">
+                    Variable values are HTML-escaped when they go in here, so a customer
+                    name containing <code>&amp;</code> or <code>&lt;</code> arrives intact.
+                    Put any markup you want in the template itself.
+                </div>
+            </div>
+
+            <div class="col-12">
+                <label class="form-label">Plain-text body</label>
+                <textarea name="body_text_template" class="form-control font-monospace" rows="5"
+                          maxlength="200000"
+                          placeholder="&#123;&#123;WORKFLOW&#125;&#125; failed at &#123;&#123;WHEN&#125;&#125;.">{{ template.body_text_template if template else '' }}</textarea>
+                <div class="form-text">
+                    Optional, and worth writing: when both are present the email is sent so
+                    that text-only clients get this version instead of raw markup.
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="submit" class="btn btn-primary">{{ submit_label }}</button>
+    </div>
+</form>

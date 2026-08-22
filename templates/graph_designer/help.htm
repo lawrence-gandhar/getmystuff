@@ -1,0 +1,1797 @@
+{# Pipelines — the in-app help page, opened in its own tab from the Help button on
+   /graph-designer/.
+
+   It is the browsable form of documentations/GRAPH_DESIGNER.md, written for the person
+   in front of the canvas rather than the person maintaining it: the same node
+   vocabulary, the same limits and the same refusal messages, said as "what to fill in"
+   and "what happens". Keep the two in step — when a ceiling or a validator's wording
+   changes, both say the new thing.
+
+   Deliberately static: no form, no HTMX, no context beyond what the layout needs.
+   That is why the whole body sits inside {% raw %} — the page is largely SQL, JSON and
+   {{VARIABLE}} examples, every one of which Jinja would otherwise try to read, and an
+   example escaped by hand into something you would not type is worth nothing. Same
+   decision, for the same reason, as tool_configs/help.htm. #}
+{% extends "base/layout.htm" %}
+{% block title %}Pipelines Help | GetMyStuff{% endblock %}
+
+{% block extra_css %}
+<style>
+    /* Prose column: measured for reading rather than filling the viewport. */
+    .help-body { max-width: 900px; }
+
+    /* The fixed navbar is 110px tall, so an anchor jump would land under it. */
+    .help-section { scroll-margin-top: 130px; }
+
+    .help-toc {
+        position: sticky;
+        top: 130px;
+        max-height: calc(100vh - 160px);
+        overflow-y: auto;
+    }
+    .help-toc a {
+        display: block;
+        padding: 4px 10px;
+        font-size: 13px;
+        color: #4b5563;
+        text-decoration: none;
+        border-left: 2px solid #e5e7eb;
+    }
+    .help-toc a:hover {
+        color: #2563eb;
+        background: #f9fafb;
+        border-left-color: #93c5fd;
+    }
+    .help-toc .help-toc-group {
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: .04em;
+        color: #9ca3af;
+        padding: 12px 10px 4px;
+    }
+
+    .help-body pre {
+        background: #0f172a;
+        color: #e2e8f0;
+        border-radius: 8px;
+        padding: 14px 16px;
+        font-size: 12.5px;
+        line-height: 1.6;
+        overflow-x: auto;
+        margin-bottom: 0;
+    }
+    .help-body pre code { color: inherit; }
+    .help-body :not(pre) > code {
+        background: #f3f4f6;
+        color: #b91c1c;
+        padding: 1px 5px;
+        border-radius: 4px;
+        font-size: 12.5px;
+    }
+    .help-body table { font-size: 13.5px; }
+    .help-body h6 {
+        font-size: 12px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: .04em;
+        color: #6b7280;
+    }
+    .help-scenario .card-header { background: #f9fafb; }
+    .help-ask {
+        font-style: italic;
+        color: #4b5563;
+        border-left: 3px solid #93c5fd;
+        padding-left: 12px;
+        margin-bottom: 0;
+    }
+    .help-model pre { background: #f9fafb; color: #111827; border: 1px solid #e5e7eb; }
+</style>
+{% endblock %}
+
+{% block content %}
+{% raw %}
+<div class="container-fluid mt-4">
+
+    <div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
+        <h5 class="fw-semibold mb-0">
+            <i class="las la-question-circle text-primary"></i> Pipelines — Help
+            <span class="text-muted small fw-normal ms-2">
+                every node, and one worked example per scenario
+            </span>
+        </h5>
+        <a href="/graph-designer/" class="btn btn-outline-primary btn-sm">
+            <i class="las la-arrow-left"></i> Back to Pipelines
+        </a>
+    </div>
+
+    <div class="row g-4">
+
+        <!-- ============ IN-PAGE NAV ============ -->
+        <div class="col-lg-3 d-none d-lg-block">
+            <nav class="help-toc">
+                <div class="help-toc-group">Start here</div>
+                <a href="#model">The mental model</a>
+                <a href="#nodes">The fourteen nodes, once</a>
+                <a href="#wiring">Drawing it</a>
+
+                <div class="help-toc-group">Building a pipeline</div>
+                <a href="#s1">1 · A straight line</a>
+                <a href="#s2">2 · A value into a statement</a>
+                <a href="#s3">3 · A branch</a>
+                <a href="#s4">4 · For each — one pass per row</a>
+                <a href="#s5">5 · Keeping every pass</a>
+                <a href="#s6">6 · One query instead of N</a>
+                <a href="#s7">7 · The Union node</a>
+                <a href="#s8">8 · Do until</a>
+
+                <div class="help-toc-group">Along the way</div>
+                <a href="#s9">9 · Ask a person mid-run</a>
+                <a href="#s10">10 · When a node fails</a>
+                <a href="#s11">11 · Timing something</a>
+                <a href="#s12">12 · Waiting</a>
+                <a href="#s13">13 · {{VARIABLES}}</a>
+                <a href="#s14">14 · Sending an email</a>
+
+                <div class="help-toc-group">Running it</div>
+                <a href="#s15">15 · Run, test, and the dock</a>
+                <a href="#s16">16 · Publish, and who may call it</a>
+
+                <div class="help-toc-group">Reference</div>
+                <a href="#limits">Limits</a>
+                <a href="#errors">When a save is refused</a>
+                <a href="#library">A worked pipeline</a>
+            </nav>
+        </div>
+
+        <!-- ============ CONTENT ============ -->
+        <div class="col-lg-9">
+            <div class="help-body">
+
+                <!-- ============ MENTAL MODEL ============ -->
+                <section id="model" class="help-section mb-5">
+                    <h6>Start here</h6>
+                    <h4 class="fw-semibold mb-3">The mental model</h4>
+
+                    <pre><code>Pipeline              one drawing, one job                      (this page)
+  └── Node            one step — a query, a value, a question, a decision
+        ├── Its settings, in the panel that opens from the right
+        ├── Its output, which every later node can read
+        └── Its outputs (the dots down its right edge) — where the run goes next</code></pre>
+
+                    <p class="mt-3">
+                        A <a href="/tool-configs">tool config</a> is one question answered by
+                        one query. A pipeline is what you draw when the answer needs
+                        <em>several</em> steps in a particular order — run this, loop over
+                        what it returned, take a different path if nothing matched, ask
+                        somebody before the last step. Every one of those is control flow,
+                        and control flow is a drawing.
+                    </p>
+
+                    <div class="row g-3">
+                        <div class="col-md-4">
+                            <div class="card h-100 border-0 bg-light">
+                                <div class="card-body">
+                                    <p class="fw-semibold small mb-1">
+                                        The run follows the lines you drew
+                                    </p>
+                                    <p class="small text-muted mb-0">
+                                        Nothing infers an order. A node runs when something
+                                        leads to it, and the run goes wherever that node's
+                                        output dot points. Nodes run one at a time, in
+                                        sequence — there are no parallel branches.
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="card h-100 border-0 bg-light">
+                                <div class="card-body">
+                                    <p class="fw-semibold small mb-1">
+                                        Every node keeps its output
+                                    </p>
+                                    <p class="small text-muted mb-0">
+                                        What a node produced stays readable by every node
+                                        after it — by name, in a condition, in a parameter
+                                        wiring, in a <code>{{VARIABLE}}</code>. That is what
+                                        makes a second box worth drawing instead of a longer
+                                        statement.
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="card h-100 border-0 bg-light">
+                                <div class="card-body">
+                                    <p class="fw-semibold small mb-1">
+                                        Nothing here writes to your data
+                                    </p>
+                                    <p class="small text-muted mb-0">
+                                        Every SQL node is one read-only statement, checked
+                                        when you save it and again on every run. Values are
+                                        always <strong>bound</strong>, never spliced into the
+                                        text, and no condition is ever evaluated as code.
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="alert alert-light border small mt-3 mb-0">
+                        <i class="las la-info-circle text-primary"></i>
+                        The page is called <strong>Pipelines</strong>; the address is
+                        <code>/graph-designer</code> and a pipeline is stored as a
+                        <em>graph</em>. Same thing — the address kept its original name so
+                        existing bookmarks keep working.
+                    </div>
+                </section>
+
+                <!-- ============ NODES ============ -->
+                <section id="nodes" class="help-section mb-5">
+                    <h4 class="fw-semibold mb-3">The fourteen nodes, once</h4>
+
+                    <p class="small">
+                        <strong>Add Node</strong> opens the palette. Five nodes hold
+                        something, six decide where the run goes, three act on the world or
+                        the clock. Every node also has a <strong>Label</strong> — worth
+                        setting, because every refusal and every log line names a node by it.
+                    </p>
+
+                    <div class="table-responsive">
+                        <table class="table table-sm table-bordered align-middle">
+                            <thead class="table-light">
+                                <tr>
+                                    <th style="width:150px;">Node</th>
+                                    <th style="width:170px;">Outputs</th>
+                                    <th>What it holds</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><strong>Start</strong></td>
+                                    <td>one</td>
+                                    <td>
+                                        Nothing. It says where the run begins. Exactly one
+                                        per pipeline, and nothing may lead into it.
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><strong>SQL statement</strong></td>
+                                    <td><code>·</code>, <code>on error</code></td>
+                                    <td>
+                                        A datasource, one read-only statement, the tables it
+                                        reads, and the <code>:name</code> values it needs.
+                                        <a href="#s1">Scenario 1</a>.
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Union</strong></td>
+                                    <td><code>next</code>, <code>execute</code>, <code>on error</code></td>
+                                    <td>
+                                        The same, but appended once per pass of the loop it
+                                        sits in and run once at the end.
+                                        <a href="#s7">Scenario 7</a>.
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Value</strong></td>
+                                    <td>one</td>
+                                    <td>
+                                        JSON, declared as a <em>list</em>, an <em>array</em>
+                                        or a <em>dictionary</em>. See below.
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Tool config</strong></td>
+                                    <td><code>·</code>, <code>on error</code></td>
+                                    <td>
+                                        An existing <a href="/tool-configs">tool config</a>,
+                                        run exactly as an agent would run it — including its
+                                        200-row cap.
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Ask a human</strong></td>
+                                    <td>one</td>
+                                    <td>
+                                        A question, and what kind of answer it expects — yes
+                                        or no, one of a list, or free text.
+                                        <a href="#s9">Scenario 9</a>.
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Branch</strong></td>
+                                    <td>one per condition, plus <code>else</code></td>
+                                    <td>
+                                        An ordered list of comparisons. First match wins.
+                                        <a href="#s3">Scenario 3</a>.
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><strong>For each</strong></td>
+                                    <td><code>each</code>, <code>done</code></td>
+                                    <td>
+                                        Which node's result to loop over, a ceiling, and
+                                        optionally what to collect.
+                                        <a href="#s4">Scenarios 4–5</a>.
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Do until</strong></td>
+                                    <td><code>body</code>, <code>done</code></td>
+                                    <td>
+                                        A condition to repeat until, and a ceiling.
+                                        <a href="#s8">Scenario 8</a>.
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Send an email</strong></td>
+                                    <td><code>queued</code>, <code>not sent</code></td>
+                                    <td>
+                                        A template, a server, recipients, and a value for each
+                                        variable the template declares.
+                                        <a href="#s14">Scenario 14</a>.
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Timer</strong></td>
+                                    <td>one</td>
+                                    <td>
+                                        Start, Pause, Resume or Stop.
+                                        <a href="#s11">Scenario 11</a>.
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Wait</strong></td>
+                                    <td>one</td>
+                                    <td>
+                                        A number of seconds to pause the run for.
+                                        <a href="#s12">Scenario 12</a>.
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Success</strong></td>
+                                    <td>one</td>
+                                    <td>A message. Records the run as having worked.</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Failure</strong></td>
+                                    <td>one</td>
+                                    <td>A message. Records the run as having failed.</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <h6 class="mt-4">The three Value kinds are not decoration</h6>
+                    <p class="small">
+                        All three are parsed from JSON, and the picker says which the node
+                        promises. They validate differently because a shape the node
+                        downstream cannot use is worth refusing at the form rather than
+                        halfway through a run.
+                    </p>
+
+                    <pre><code>List of values   ["php", "wordpress", "laravel"]   flat, scalars only — the shape an IN takes
+Array            [[1, "a"], [2, "b"]]             an array; nesting allowed. Rows, tuples
+Dictionary       {"region": "north", "cap": 50}   an object. Named values</code></pre>
+
+                    <div class="alert alert-info small mt-3 mb-0">
+                        <strong>Success and Failure both have an exit.</strong> They decide
+                        what the run is <em>reported</em> as, and that is the first moment
+                        there is something worth announcing — so an email or a
+                        writes-a-row-somewhere step can follow the box that says what
+                        happened, rather than having to sit before it. Leaving the exit
+                        connected to nothing is the ordinary case and ends the run. What a
+                        successor cannot do is change the verdict, so
+                        <strong>one outcome node may not lead to the other</strong> — a
+                        Success drawn after a Failure would picture a green run that reports
+                        as failed.
+                    </div>
+                </section>
+
+                <!-- ============ WIRING ============ -->
+                <section id="wiring" class="help-section mb-5">
+                    <h4 class="fw-semibold mb-3">Drawing it</h4>
+
+                    <div class="table-responsive">
+                        <table class="table table-sm table-bordered align-middle">
+                            <tbody>
+                                <tr>
+                                    <th scope="row" class="fw-normal" style="width:190px;">Connect two nodes</th>
+                                    <td>
+                                        Either <strong>drag</strong> from an output dot and
+                                        release anywhere on the target, or <strong>click</strong>
+                                        the output dot and then click the target. Both work;
+                                        clicking empty canvas cancels.
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <th scope="row" class="fw-normal">Move a node</th>
+                                    <td>Drag its header.</td>
+                                </tr>
+                                <tr>
+                                    <th scope="row" class="fw-normal">Re-point a connector</th>
+                                    <td>Drag its end onto a different node.</td>
+                                </tr>
+                                <tr>
+                                    <th scope="row" class="fw-normal">Edit a node</th>
+                                    <td>
+                                        Its <strong>Settings</strong> button. The panel opens
+                                        from the right and applies on <strong>Apply</strong>.
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <th scope="row" class="fw-normal">Pick nodes to test</th>
+                                    <td>
+                                        <strong>Shift-click</strong> them, then
+                                        <strong>Test selection</strong>.
+                                        <a href="#s15">Scenario 15</a>.
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="alert alert-warning small mb-0">
+                        <strong>One connector per output dot.</strong> Two would mean the run
+                        takes one of them and which one is not something the drawing says. To
+                        go two ways, that is what a <a href="#s3">Branch</a> is for.
+                        <br><br>
+                        <strong>Save is not Publish.</strong> Save stores the drawing (and
+                        validates it — a refused save leaves your work on the canvas and says
+                        why). Publish is on the library page and is what makes the pipeline
+                        callable by an agent. <strong>Reload</strong> discards unsaved changes
+                        and re-reads what the database holds.
+                    </div>
+                </section>
+
+                <hr class="my-5">
+
+                <!-- ============ SCENARIO 1 ============ -->
+                <section id="s1" class="help-section help-scenario mb-4">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="badge bg-primary-subtle text-primary-emphasis border border-primary-subtle">SQL</span>
+                            <strong class="ms-1">1 · A straight line</strong>
+                        </div>
+                        <div class="card-body">
+                            <p class="help-ask mb-3">
+                                "Run last month's revenue query and record that it worked."
+                            </p>
+
+                            <pre><code>Start ──→ SQL statement ──→ Success</code></pre>
+
+                            <h6 class="mt-4">What to fill in on the SQL node</h6>
+                            <table class="table table-sm table-bordered">
+                                <tbody>
+                                    <tr><th scope="row" class="fw-normal" style="width:230px;">Label</th><td><code>Monthly revenue</code></td></tr>
+                                    <tr><th scope="row" class="fw-normal">Datasource</th><td>Any relational one</td></tr>
+                                    <tr><th scope="row" class="fw-normal">Tables this statement reads</th><td><code>orders, clients</code></td></tr>
+                                    <tr><th scope="row" class="fw-normal">SQL statement</th><td>the statement below</td></tr>
+                                </tbody>
+                            </table>
+
+                            <pre class="mt-3"><code>SELECT c.name, SUM(o.total) AS revenue
+FROM orders o
+JOIN clients c ON c.id = o.client_id
+WHERE o.placed_at &gt;= '2026-07-01'
+GROUP BY c.name
+ORDER BY revenue DESC</code></pre>
+
+                            <div class="alert alert-danger small mt-3 mb-0">
+                                <strong>Tables is not bureaucracy.</strong> Nothing here parses
+                                your statement, so the list you type is the only thing that
+                                lets a table switched off in
+                                <a href="/datasource">Data Sources</a> stop this node. A node
+                                with no declared tables would make a pipeline a way
+                                <em>around</em> those switches rather than a way to use them —
+                                which is why the save refuses one.
+                                <br><br>
+                                One read-only statement: <code>SELECT</code>, or a
+                                <code>WITH</code> ending in one. <code>DISTINCT</code>,
+                                <code>ORDER BY</code>, <code>LIMIT</code>, <code>HAVING</code>,
+                                subqueries, CTEs and window functions are all fine; a second
+                                statement or a write verb is refused. Syntax is not checked
+                                here — dialects differ — so the run is where a typo surfaces,
+                                readably, as a failed step.
+                                <br><br>
+                                <strong>Nothing caps the rows a SQL node returns.</strong> A
+                                <code>LIMIT</code> in the statement is the only thing that
+                                bounds it, which puts the size of the answer where you can see
+                                it. The <em>log</em> is capped at 20 sample rows and always
+                                states the real total.
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ============ SCENARIO 2 ============ -->
+                <section id="s2" class="help-section help-scenario mb-4">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="badge bg-primary-subtle text-primary-emphasis border border-primary-subtle">SQL</span>
+                            <strong class="ms-1">2 · Putting a value into a statement</strong>
+                        </div>
+                        <div class="card-body">
+                            <p class="help-ask mb-3">
+                                "Only the department the earlier step picked."
+                            </p>
+
+                            <p class="small">
+                                Write <code>:name</code> where the value belongs, declare that
+                                name under <strong>Parameters</strong>, and say where it comes
+                                from.
+                            </p>
+
+                            <pre><code>SELECT name, salary FROM employees WHERE department_id = :dept_id</code></pre>
+
+                            <h6 class="mt-4">The parameter row</h6>
+                            <table class="table table-sm table-bordered">
+                                <tbody>
+                                    <tr><th scope="row" class="fw-normal" style="width:230px;">Name (written as :name)</th><td><code>dept_id</code></td></tr>
+                                    <tr><th scope="row" class="fw-normal">Holds</th><td><strong>Number</strong></td></tr>
+                                    <tr><th scope="row" class="fw-normal">Required</th><td>✓</td></tr>
+                                    <tr><th scope="row" class="fw-normal">Value comes from</th><td>the node that produced it</td></tr>
+                                    <tr><th scope="row" class="fw-normal">Field (optional)</th><td><code>id</code> — one column of that node's row</td></tr>
+                                    <tr><th scope="row" class="fw-normal">Takes</th><td><strong>One value</strong></td></tr>
+                                </tbody>
+                            </table>
+
+                            <h6 class="mt-4">Where a value can come from — first one wins</h6>
+                            <div class="table-responsive">
+                                <table class="table table-sm table-bordered align-middle">
+                                    <thead class="table-light">
+                                        <tr><th style="width:210px;">Source</th><th>When</th></tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td>A <strong>wiring</strong> — an earlier node, optionally one field of it</td>
+                                            <td>The most specific thing available: you drew that line about this parameter.</td>
+                                        </tr>
+                                        <tr>
+                                            <td>The run's <strong>inputs</strong></td>
+                                            <td>What a data agent passed when it called the pipeline as a tool.</td>
+                                        </tr>
+                                        <tr>
+                                            <td>The <strong>enclosing loop's item</strong></td>
+                                            <td>
+                                                A parameter whose name <em>is</em> the loop's
+                                                item name is filled with the current pass's
+                                                item, with nothing to wire.
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            <div class="alert alert-info small mt-3">
+                                <strong>A declared parameter that is not wired is not a
+                                mistake</strong> — that is exactly how a value reaches the
+                                pipeline from outside, and it is what an agent's tool arguments
+                                are built from. But pressing <strong>Run</strong> on this canvas
+                                supplies no inputs, so when you are testing, either wire it or
+                                point it at a <strong>Value</strong> node.
+                                <br><br>
+                                <strong>The item's value follows one rule everywhere.</strong> A
+                                scalar item is itself. A single-column row — <code>{"id": 7}</code>,
+                                which is what <code>SELECT id FROM departments</code> yields — is
+                                that column's value, so the ordinary case needs no wiring. A row
+                                with several columns has no single value and is
+                                <strong>refused rather than guessed at</strong>, because binding
+                                an arbitrary column would filter on the wrong thing and the
+                                result would look entirely normal. Name the column in
+                                <strong>Field</strong> to pick one.
+                            </div>
+
+                            <h6 class="mt-4">One value, or the whole list</h6>
+                            <div class="table-responsive">
+                                <table class="table table-sm table-bordered align-middle">
+                                    <thead class="table-light">
+                                        <tr>
+                                            <th style="width:170px;">Takes</th>
+                                            <th style="width:230px;">Write it as</th>
+                                            <th>Runs</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td><strong>One value</strong> <span class="text-muted">(default)</span></td>
+                                            <td><code>dept_id = :dept_id</code></td>
+                                            <td>once, with a plain scalar bound</td>
+                                        </tr>
+                                        <tr>
+                                            <td><strong>All the values, as a list</strong></td>
+                                            <td><code>dept_id IN :dept_ids</code></td>
+                                            <td>once, for the whole list</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            <div class="alert alert-danger small mb-0">
+                                <strong>Written as <code>IN :name</code>, never
+                                <code>IN (:name)</code>.</strong> A list parameter renders its
+                                own parentheses, so the second is a syntax error. Getting it the
+                                wrong way round in either direction is refused
+                                <em>when you save</em> — because the alternative is a syntax
+                                error the database reports mid-run, long after the panel that
+                                caused it was closed.
+                                <br><br>
+                                <strong><code>:name</code>, with no space after the colon.</strong>
+                                <code>where id = : dept_id</code> is refused too, and it earns
+                                its own check: the space hides the placeholder from every other
+                                rule here, so the statement would save clean as one that uses no
+                                parameters at all and then come back from the database quoting
+                                <code>': dept_id'</code>.
+                                <br><br>
+                                <strong>The statement is never rewritten.</strong> Values are
+                                bound by the driver, so what runs is the text you approved.
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ============ SCENARIO 3 ============ -->
+                <section id="s3" class="help-section help-scenario mb-4">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="badge bg-info-subtle text-info-emphasis border border-info-subtle">Control flow</span>
+                            <strong class="ms-1">3 · A branch</strong>
+                        </div>
+                        <div class="card-body">
+                            <p class="help-ask mb-3">
+                                "If the check found anything, email it. Otherwise stop
+                                quietly."
+                            </p>
+
+                            <pre><code>SQL ──→ Branch ──found──→ Send an email ──→ Success
+                 └──else───→ Success</code></pre>
+
+                            <h6 class="mt-4">The condition row</h6>
+                            <table class="table table-sm table-bordered">
+                                <tbody>
+                                    <tr><th scope="row" class="fw-normal" style="width:190px;">Read from node</th><td>the SQL node</td></tr>
+                                    <tr><th scope="row" class="fw-normal">Field (optional)</th><td>blank — the whole result</td></tr>
+                                    <tr><th scope="row" class="fw-normal">Comparison</th><td><strong>is not empty</strong></td></tr>
+                                    <tr><th scope="row" class="fw-normal">Outcome name</th><td><code>found</code> — this becomes the output dot's name</td></tr>
+                                </tbody>
+                            </table>
+
+                            <h6 class="mt-4">The eight comparisons</h6>
+                            <pre><code>is equal to        is not equal to
+contains           does not contain
+is empty           is not empty          ← compare against nothing
+is greater than    is less than</code></pre>
+
+                            <div class="alert alert-warning small mt-3 mb-0">
+                                <strong>Conditions are compared, never evaluated.</strong> Every
+                                comparison is a name from that fixed list and it happens in
+                                Python — there is no expression language on this path and
+                                nothing reaches <code>eval</code>, so a pipeline cannot be used
+                                to run arbitrary code even by the person who drew it.
+                                <br><br>
+                                <strong><code>0</code> and <code>false</code> are not
+                                empty.</strong> A query returning a count of zero has produced a
+                                real answer, and treating it as empty would send the run down
+                                its nothing-found path when the thing it found was zero.
+                                <br><br>
+                                Conditions are tried <strong>in order</strong> and the first
+                                match wins. <code>else</code> is always there and is where a run
+                                goes when none matched — so it is worth connecting even when you
+                                think it cannot happen. Two conditions may not share an outcome
+                                name, and none may be called <code>else</code>.
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ============ SCENARIO 4 ============ -->
+                <section id="s4" class="help-section help-scenario mb-4">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="badge bg-info-subtle text-info-emphasis border border-info-subtle">Loop</span>
+                            <strong class="ms-1">4 · For each — one pass per row</strong>
+                        </div>
+                        <div class="card-body">
+                            <p class="help-ask mb-3">
+                                "For each active department, the highest-paid employee."
+                            </p>
+
+                            <pre><code>departments ──→ For each ──each──→ top earner (SQL) ──┐
+                    │                                │
+                    └──done──→ Success               └──→ back to For each</code></pre>
+
+                            <h6 class="mt-4">What to fill in on the loop</h6>
+                            <table class="table table-sm table-bordered">
+                                <tbody>
+                                    <tr><th scope="row" class="fw-normal" style="width:250px;">Loop over the result of</th><td>the <code>departments</code> SQL node</td></tr>
+                                    <tr><th scope="row" class="fw-normal">Call each one</th><td><code>dept</code></td></tr>
+                                    <tr><th scope="row" class="fw-normal">Most passes allowed</th><td><code>200</code> — the default</td></tr>
+                                </tbody>
+                            </table>
+
+                            <h6 class="mt-4">And on the body's statement</h6>
+                            <pre><code>SELECT name, salary
+FROM employees
+WHERE department_id = :dept
+ORDER BY salary DESC
+LIMIT 1</code></pre>
+
+                            <p class="small mt-3">
+                                The parameter is called <code>dept</code> — the loop's item
+                                name — so it fills itself from the current pass with no wiring
+                                at all. That works because <code>SELECT id FROM departments</code>
+                                yields single-column rows; for a wider row, wire the parameter
+                                to the loop and name the column in <strong>Field</strong>.
+                            </p>
+
+                            <div class="alert alert-danger small mb-0">
+                                <strong>The body must lead back to the loop.</strong> This is
+                                the mistake worth knowing about, because nothing about the
+                                drawing looks broken: the loop has a source, a ceiling and a
+                                body wired onward to Success. What happens is one pass, and then
+                                the run carries straight on — one pass of eighty-two, reported
+                                as a success, with nothing in the log saying the other
+                                eighty-one were never attempted. So a save refuses a loop with
+                                nothing on <code>each</code>, or a body with no edge back.
+                                <strong>Any</strong> edge back counts, from any port.
+                                <br><br>
+                                <strong>A cycle needs a loop node on it.</strong> A plain
+                                <code>A → B → A</code> is refused: it has no cursor and no
+                                ceiling, and what stops it is an internal error a long way from
+                                the two lines that caused it. A cycle through a loop's
+                                <code>done</code> port is refused too — <code>done</code> is the
+                                way out.
+                                <br><br>
+                                <strong>The ceiling refuses rather than truncating.</strong> Rows
+                                from the first two of three departments are indistinguishable
+                                from rows for all three, and a total over them is a plausible
+                                number that is wrong. The run stops and names the node.
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ============ SCENARIO 5 ============ -->
+                <section id="s5" class="help-section help-scenario mb-4">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="badge bg-info-subtle text-info-emphasis border border-info-subtle">Loop</span>
+                            <strong class="ms-1">5 · Keeping every pass, not just the last</strong>
+                        </div>
+                        <div class="card-body">
+                            <p class="small mb-3">
+                                Scenario 4 as drawn has a flaw you only notice after
+                                <code>done</code>: a node's output is keyed by the node, so
+                                pass 82 overwrote pass 81. Two optional fields on the
+                                <strong>For each</strong> fix it.
+                            </p>
+
+                            <table class="table table-sm table-bordered">
+                                <tbody>
+                                    <tr>
+                                        <th scope="row" class="fw-normal" style="width:250px;">Collect the result of</th>
+                                        <td>
+                                            the <code>top earner</code> node. Every pass's rows
+                                            are put together.
+                                        </td>
+                                    </tr>
+                                    <tr>
+                                        <th scope="row" class="fw-normal">Record the item as</th>
+                                        <td>
+                                            <code>department_id</code> — a column added to each
+                                            collected row, holding the item that produced it.
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+
+                            <div class="alert alert-info small mt-3 mb-0">
+                                <strong>The loop's own output becomes the union once the loop is
+                                over.</strong> While it turns, reading the loop gives you the
+                                current item; on the visit that leaves by <code>done</code> it
+                                is the collected rows. So a node after <code>done</code> wired
+                                to the loop reads every pass, <em>as rows</em> — a condition, a
+                                parameter, another loop and the dock's preview all work with
+                                nothing further arranged.
+                                <br><br>
+                                <strong>"Record the item as" is how you keep the result
+                                readable.</strong> Rows from twenty passes of one statement are
+                                otherwise indistinguishable once concatenated — filtering on a
+                                department without selecting it is perfectly ordinary SQL. Leave
+                                it blank only when the statement already returns the value;
+                                asking for a name the statement already returns is refused as a
+                                column collision rather than one value quietly replacing the
+                                other.
+                                <br><br>
+                                <strong>Only a node inside the body may be collected.</strong>
+                                One outside it ran once, before the loop, so every pass would
+                                append the same rows — and a union of duplicates looks exactly
+                                like a union. The picker offers exactly the nodes that qualify,
+                                which is also why it looks empty until the back edge is drawn.
+                                A <strong>Do until</strong> cannot collect at all: only a loop
+                                that knows which pass is its last can publish a union.
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ============ SCENARIO 6 ============ -->
+                <section id="s6" class="help-section help-scenario mb-4">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="badge bg-primary-subtle text-primary-emphasis border border-primary-subtle">SQL</span>
+                            <strong class="ms-1">6 · One query instead of N</strong>
+                        </div>
+                        <div class="card-body">
+                            <p class="help-ask mb-3">
+                                "Every employee in any of those departments."
+                            </p>
+
+                            <p class="small">
+                                A loop is N round trips. When every item goes into the
+                                <em>same</em> comparison, you do not need one — set the
+                                parameter's <strong>Takes</strong> to
+                                <em>All the values, as a list</em> and drop the loop entirely.
+                            </p>
+
+                            <pre><code>departments ──→ SQL ──→ Success
+
+SELECT name, department_id FROM employees WHERE department_id IN :dept_ids</code></pre>
+
+                            <h6 class="mt-4">Which of the three unions</h6>
+                            <div class="table-responsive">
+                                <table class="table table-sm table-bordered align-middle">
+                                    <thead class="table-light">
+                                        <tr>
+                                            <th style="width:210px;"></th>
+                                            <th style="width:80px;">Queries</th>
+                                            <th>Reach for it when</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td><code>IN :ids</code> on one SQL node</td>
+                                            <td>1</td>
+                                            <td>
+                                                every item goes into the same comparison.
+                                                <strong>Almost always the right answer.</strong>
+                                            </td>
+                                        </tr>
+                                        <tr>
+                                            <td>A loop's <strong>Collect the result of</strong></td>
+                                            <td>N</td>
+                                            <td>
+                                                the per-item statement differs and N round trips
+                                                are acceptable
+                                            </td>
+                                        </tr>
+                                        <tr>
+                                            <td>A <strong>Union</strong> node</td>
+                                            <td>1</td>
+                                            <td>
+                                                the per-item statement differs and one round trip
+                                                matters — <a href="#s7">scenario 7</a>
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            <p class="small text-muted mb-0">
+                                A union of eighty-two copies of one shape is a join written out
+                                longhand. Before drawing one, check whether the question is
+                                really one statement.
+                            </p>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ============ SCENARIO 7 ============ -->
+                <section id="s7" class="help-section help-scenario mb-4">
+                    <div class="card border-primary-subtle">
+                        <div class="card-header">
+                            <span class="badge bg-primary-subtle text-primary-emphasis border border-primary-subtle">SQL</span>
+                            <span class="badge bg-info-subtle text-info-emphasis border border-info-subtle">Loop</span>
+                            <strong class="ms-1">7 · The Union node — one statement built per pass</strong>
+                        </div>
+                        <div class="card-body">
+                            <p class="help-ask mb-3">
+                                "Eighty-two departments, a different fragment per department,
+                                and I want one round trip."
+                            </p>
+
+                            <p class="small">
+                                A <strong>Union</strong> node is a SQL node that
+                                <em>does not run when it is reached</em>. It sits in a
+                                <strong>For each</strong> body, adds one copy of its statement
+                                per pass, and on the pass the loop hands it the last item it
+                                runs the whole thing as a single query — leaving by
+                                <code>execute</code> instead of going round again.
+                            </p>
+
+                            <pre><code>select id from departments        82 ids
+        │
+   ┌────▼─────┐  each   ┌───────────────┐
+   │ For each │────────►│ Union         │  next ──┐  appends fragment 1…81
+   │          │◄────────┤               │         │
+   └────┬─────┘         │  execute ─────┼──► runs fragments 1…82 as one query
+        │ done          └───────────────┘
+        ▼
+   (only reached when the list is empty)</code></pre>
+
+                            <div class="alert alert-success small mt-3">
+                                <strong>Values are still bound.</strong> This is the only place
+                                in the application that <em>writes</em> SQL, so it is worth
+                                saying how it stays safe: each pass's copy has its placeholders
+                                renamed — pass 7's <code>:id</code> becomes
+                                <code>:id__p7</code> — and pass 7's value is bound under that
+                                name. Eighty-two fragments carry eighty-two bind parameters and
+                                no value is ever written into the text. (A parameter you name
+                                <code>id__p7</code> yourself is refused at save: it would
+                                collide with a generated name and one pass would be filled with
+                                another pass's value.)
+                            </div>
+
+                            <div class="alert alert-danger small mb-0">
+                                <strong>Three rules, each with a reason:</strong>
+                                <ul class="mb-0 mt-2">
+                                    <li>
+                                        <strong>It must sit inside a For each body.</strong>
+                                        Which pass of how many is a fact only a loop's cursor
+                                        has. Outside a loop the node would add one fragment,
+                                        take <code>next</code>, and the statement it built would
+                                        never run — a silent nothing from a box that says it
+                                        succeeded. A <strong>Do until</strong> cannot host one
+                                        either.
+                                    </li>
+                                    <li>
+                                        <strong>No <code>ORDER BY</code> or <code>LIMIT</code>
+                                        in the fragment.</strong> Unparenthesised, either binds
+                                        to the whole union rather than the member it was written
+                                        on, so it would quietly sort or truncate every pass at
+                                        once. Sort or cut in a node after <code>execute</code>.
+                                    </li>
+                                    <li>
+                                        <strong>The length ceiling refuses rather than
+                                        truncating.</strong> A union short of its last fragments
+                                        is short of whole <em>departments</em>, and no row count
+                                        says so.
+                                    </li>
+                                </ul>
+                                <br>
+                                A query that <em>failed</em> takes the <code>on error</code>
+                                path, never <code>execute</code> — a query that did not run
+                                cannot leave by the port that means "here are the rows".
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ============ SCENARIO 8 ============ -->
+                <section id="s8" class="help-section help-scenario mb-4">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="badge bg-info-subtle text-info-emphasis border border-info-subtle">Loop</span>
+                            <strong class="ms-1">8 · Do until</strong>
+                        </div>
+                        <div class="card-body">
+                            <p class="help-ask mb-3">
+                                "Keep re-checking until the backlog is clear."
+                            </p>
+
+                            <p class="small">
+                                A <strong>For each</strong> loops over a list it was handed. A
+                                <strong>Do until</strong> loops over nothing in particular and
+                                stops when a condition becomes true — the same condition row a
+                                Branch uses, under <strong>Repeat until this is true</strong>.
+                            </p>
+
+                            <pre><code>Do until ──body──→ re-check (SQL) ──→ back to Do until
+    │
+    └──done──→ Success</code></pre>
+
+                            <div class="alert alert-warning small mb-0">
+                                A condition that never becomes true stops at
+                                <strong>Most passes allowed</strong> and says so, naming the
+                                node — it does not run forever and it does not report success.
+                                The same body-must-lead-back rule as scenario 4 applies. And a
+                                <strong>Do until</strong> cannot collect and cannot host a Union
+                                node: it learns which pass was its last only after that pass has
+                                already run, so there is no visit on which it could publish
+                                anything.
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ============ SCENARIO 9 ============ -->
+                <section id="s9" class="help-section help-scenario mb-4">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="badge bg-light text-dark border">People</span>
+                            <strong class="ms-1">9 · Ask a person mid-run</strong>
+                        </div>
+                        <div class="card-body">
+                            <p class="help-ask mb-3">
+                                "Show me what it found and let me confirm before it emails
+                                anyone."
+                            </p>
+
+                            <table class="table table-sm table-bordered">
+                                <tbody>
+                                    <tr>
+                                        <th scope="row" class="fw-normal" style="width:190px;">Question</th>
+                                        <td>
+                                            <em>"18 clients would be emailed. Go ahead?"</em>
+                                            — a <code>{{VARIABLE}}</code> is allowed here, so
+                                            the figure can be the real one
+                                        </td>
+                                    </tr>
+                                    <tr>
+                                        <th scope="row" class="fw-normal">Answer</th>
+                                        <td>
+                                            <strong>Yes or no</strong> · One of a list · Free
+                                            text
+                                        </td>
+                                    </tr>
+                                    <tr>
+                                        <th scope="row" class="fw-normal">Choices</th>
+                                        <td>Comma separated. Only used for "one of a list".</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+
+                            <p class="small mt-3">
+                                The run <strong>parks</strong>. The question appears above the
+                                dock whichever tab you are on, and the run resumes when you
+                                answer. An answer that does not fit is refused while you are
+                                still looking at the prompt, rather than failing a node three
+                                steps later.
+                            </p>
+
+                            <div class="alert alert-info small mb-0">
+                                <strong>The same node works inside a conversation.</strong> When
+                                an agent calls a published pipeline that pauses, there is no
+                                dock — so the question is handed to the model to relay
+                                <strong>word for word</strong>, and a companion
+                                <code>answer_…</code> tool resumes the parked run on a later
+                                turn. It is not paraphrased, because a reworded question asks
+                                the user something else. That answering tool is offered only
+                                when the pipeline actually contains a question node.
+                                <br><br>
+                                One exception worth knowing:
+                                <em>Let an agent read and filter its whole result</em>
+                                (<a href="#s16">scenario 16</a>) <strong>refuses</strong> a
+                                pipeline that stops to ask, quoting the question — reading a
+                                whole result set and holding it across two turns are two
+                                different shapes.
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ============ SCENARIO 10 ============ -->
+                <section id="s10" class="help-section help-scenario mb-4">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="badge bg-danger-subtle text-danger-emphasis border border-danger-subtle">Failure</span>
+                            <strong class="ms-1">10 · When a node fails</strong>
+                        </div>
+                        <div class="card-body">
+                            <p class="small mb-3">
+                                A SQL, Union, Tool config or Email node has a second output —
+                                <code>on error</code> / <code>not sent</code>. Whether you
+                                connect it changes what a failure <em>means</em>.
+                            </p>
+
+                            <div class="table-responsive">
+                                <table class="table table-sm table-bordered align-middle">
+                                    <thead class="table-light">
+                                        <tr>
+                                            <th style="width:230px;">You drew…</th>
+                                            <th>…and the node fails</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td>nothing on <code>on error</code></td>
+                                            <td>
+                                                The run ends and is reported as
+                                                <strong>failed</strong>, with the node's message.
+                                            </td>
+                                        </tr>
+                                        <tr>
+                                            <td>an error path</td>
+                                            <td>
+                                                The run takes it. <strong>The run is not marked
+                                                failed</strong> — you said what to do about it.
+                                                The step is still logged as failed, so the log
+                                                does not hide it.
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            <pre class="mt-3"><code>SQL ────→ Success ──→ Send an email  ("the nightly check passed")
+ │
+ └─on error──→ Failure ──→ Send an email  ("the nightly check did not run")</code></pre>
+
+                            <div class="alert alert-info small mt-3 mb-0">
+                                "This node failed and we handled it" and "this run failed" are
+                                different facts, which is why they are recorded separately: a
+                                pipeline that recovered from a failed node reporting the whole
+                                run as failed would be the opposite of what drawing a recovery
+                                path means.
+                                <br><br>
+                                Because both outcome nodes have an exit, the announcement can
+                                sit <em>after</em> the box that says what happened — which on
+                                the failure side is the only order that reads correctly.
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ============ SCENARIO 11 ============ -->
+                <section id="s11" class="help-section help-scenario mb-4">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="badge bg-light text-dark border">Clock</span>
+                            <strong class="ms-1">11 · Timing something</strong>
+                        </div>
+                        <div class="card-body">
+                            <p class="help-ask mb-3">"How long did the export part take?"</p>
+
+                            <p class="small">
+                                A <strong>Timer</strong> is a stopwatch: one node type carrying
+                                four actions. The instance set to <strong>Start</strong>
+                                <em>is</em> the timer; the other three point at it by picking it
+                                from a list, so a save can prove the reference is real.
+                            </p>
+
+                            <pre><code>Timer (Start) ──→ …work… ──→ Timer (Stop, pointing at the Start) ──→ Success
+
+Pause and Resume bracket a stretch that should not count —
+a question you are waiting on a person to answer, say.</code></pre>
+
+                            <h6 class="mt-4">What a Stop publishes</h6>
+                            <pre><code>{"started_at": "...", "ended_at": "...", "elapsed_seconds": 3852.117,
+ "total_elapsed_seconds": 3852.117, "paused_seconds": 40.0,
+ "elapsed_human": "1h 4m 12s", "running": false, "phase": "stopped"}</code></pre>
+
+                            <p class="small mt-3">
+                                <code>elapsed_human</code> is there because the obvious thing to
+                                do with the number is put it in a sentence —
+                                <code>{{ELAPSED}}</code> in a Success message, bound to that
+                                field. The datetimes are deliberately <em>not</em> formatted for
+                                a reader: that needs a timezone and a locale, which belong to
+                                whoever is reading, not to the run.
+                            </p>
+
+                            <div class="alert alert-warning small mb-0">
+                                <strong>Every illegal transition is refused, never quietly
+                                ignored</strong> — pausing a paused timer, resuming a running
+                                one, stopping one twice, acting on one never started. A timer
+                                that silently ignored a Stop would report a number that looks
+                                plausible and is wrong.
+                                <br><br>
+                                <strong>Starting one twice is refused</strong> — except inside a
+                                loop body, where it means "this pass begins now": the timer
+                                restarts, <code>elapsed_seconds</code> answers "how long did
+                                <em>this</em> pass take" and <code>total_elapsed_seconds</code>
+                                answers "how long has the loop spent in here altogether".
+                                <br><br>
+                                Two things the save refuses outright: a Pause/Resume/Stop its
+                                Start <strong>cannot reach by any path</strong> (provably dead —
+                                no run could have started the timer before arriving), and one
+                                <strong>inside a loop body whose Start sits outside it</strong>
+                                (green on pass one, red on pass two — the worst failure mode
+                                available). A Start with no Stop is fine: a pipeline that only
+                                wants to know when something began is a legitimate pipeline.
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ============ SCENARIO 12 ============ -->
+                <section id="s12" class="help-section help-scenario mb-4">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="badge bg-light text-dark border">Clock</span>
+                            <strong class="ms-1">12 · Waiting</strong>
+                        </div>
+                        <div class="card-body">
+                            <p class="small mb-3">
+                                One field: <strong>Seconds to wait</strong>. At most
+                                <strong>900</strong> (15 minutes).
+                            </p>
+
+                            <div class="alert alert-danger small mb-0">
+                                <strong>A waiting run does not survive a restart.</strong> A
+                                deploy landing inside a wait leaves the run cancelled, and
+                                nothing resumes it. That is the first thing to know about the
+                                node, and it is the price of not building a second scheduler —
+                                for anything measured in hours, use an
+                                <a href="/integrations">Integrations schedule</a>, which is
+                                persisted.
+                                <br><br>
+                                Longer than 900 is <strong>refused at save, never
+                                clamped</strong>: a drawing saying two hours while the run
+                                waited fifteen minutes is a picture that lies about the run,
+                                which is worse than a refusal that explains itself.
+                                <br><br>
+                                One consequence for a pipeline an agent calls: the agent waits
+                                about 90 seconds, so any wait beyond that makes the tool report
+                                "still being worked out" rather than an answer.
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ============ SCENARIO 13 ============ -->
+                <section id="s13" class="help-section help-scenario mb-4">
+                    <div class="card border-primary-subtle">
+                        <div class="card-header">
+                            <span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle">Advanced</span>
+                            <strong class="ms-1">13 · <code>{{VARIABLES}}</code> — a value inside the text</strong>
+                        </div>
+                        <div class="card-body">
+                            <p class="help-ask mb-3">
+                                "The table name is different per region, and I do not want
+                                eleven near-identical nodes."
+                            </p>
+
+                            <p class="small">
+                                A parameter puts a <em>value</em> into a statement. A variable
+                                puts text into the text — a table name, a figure in a message,
+                                a number in a question. Declare it under
+                                <strong>Variables</strong> on the node, then write
+                                <code>{{NAME}}</code> in one of that node's variable-enabled
+                                fields (the panel lists which).
+                            </p>
+
+                            <pre><code>SELECT region, SUM(total) FROM {{TABLE}} GROUP BY region
+
+Variables
+  TABLE   From: An earlier node's output   Node: regions   Field: rows[0].table_name
+          If it has no value: Fail and name the variable</code></pre>
+
+                            <h6 class="mt-4">Which fields take one</h6>
+                            <div class="table-responsive">
+                                <table class="table table-sm table-bordered align-middle">
+                                    <thead class="table-light">
+                                        <tr><th style="width:220px;">Node</th><th>Fields</th></tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr><td><strong>SQL statement</strong>, <strong>Union</strong></td><td>the statement, and each table name</td></tr>
+                                        <tr><td><strong>Value</strong></td><td>the JSON</td></tr>
+                                        <tr><td><strong>Ask a human</strong></td><td>the question, and each choice</td></tr>
+                                        <tr><td><strong>Success</strong>, <strong>Failure</strong></td><td>the message</td></tr>
+                                        <tr><td>everything else</td><td class="text-muted">— none</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            <div class="alert alert-warning small mt-3">
+                                <strong>This is substitution, not evaluation.</strong> There is
+                                no expression language, no filters, no conditionals.
+                                <code>{{NAME}}</code> is replaced by a value a binding resolved,
+                                and everything else in the text is text.
+                                <br><br>
+                                <strong>A variable with no value: you decide which.</strong>
+                                <em>Fail and name the variable</em>, or <em>use this
+                                default</em>. The presence of a default is the switch — an empty
+                                default and no default are different instructions, which is why
+                                it is a picker rather than a text box.
+                            </div>
+
+                            <div class="alert alert-danger small mb-0">
+                                <strong>In a SQL statement, a variable is for an
+                                <em>identifier</em> — never a value.</strong> A bind parameter
+                                already expresses every value and the driver binds it, so it
+                                cannot change what the statement does. The one thing a bind
+                                parameter cannot express is a name: no driver lets
+                                <code>FROM :table</code> name a table. Four rules keep it there:
+                                <ul class="mb-0 mt-2">
+                                    <li>
+                                        <strong>A <code>{{NAME}}</code> inside a string literal
+                                        or a comment is refused at save</strong> — that is
+                                        somebody reaching for it to do a value's job.
+                                    </li>
+                                    <li>
+                                        <strong>A substituted value must be a name or a whole
+                                        number</strong> — a dotted identifier up to three parts,
+                                        or up to 18 digits. That refuses a space, a quote, a
+                                        semicolon, a parenthesis and the empty string. It
+                                        applies to fixed values too.
+                                    </li>
+                                    <li>
+                                        <strong>The statement is re-checked after
+                                        substitution</strong>, so a second statement or a write
+                                        verb is still refused.
+                                    </li>
+                                    <li>
+                                        <strong>The table list still binds.</strong> A
+                                        substituted table name must still appear in
+                                        <em>Tables this statement reads</em>, and a table
+                                        switched off in Data Sources still stops the node.
+                                    </li>
+                                </ul>
+                                <br>
+                                Two consequences: a value that renders a <code>:something</code>
+                                into the text becomes an unbound placeholder and the driver
+                                errors; and a variable named <code>UPDATE</code> or
+                                <code>DELETE</code> is refused by the write-verb check, so name
+                                it something else.
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ============ SCENARIO 14 ============ -->
+                <section id="s14" class="help-section help-scenario mb-4">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="badge bg-light text-dark border">Acts on the world</span>
+                            <strong class="ms-1">14 · Sending an email</strong>
+                        </div>
+                        <div class="card-body">
+                            <p class="small mb-3">
+                                A <strong>Send an email</strong> node sends an
+                                <a href="/emails/templates">email template</a> through one of
+                                your SMTP servers.
+                            </p>
+
+                            <table class="table table-sm table-bordered">
+                                <tbody>
+                                    <tr><th scope="row" class="fw-normal" style="width:170px;">Template</th><td>What the email says. Editing it later does not change emails already sent.</td></tr>
+                                    <tr><th scope="row" class="fw-normal">Send through</th><td>An SMTP server.</td></tr>
+                                    <tr><th scope="row" class="fw-normal">To / Cc / Bcc</th><td>Comma separated. At least one <strong>To</strong>. Each entry may be a fixed address or a <code>{{VARIABLE}}</code> the template declares.</td></tr>
+                                    <tr><th scope="row" class="fw-normal">Variables</th><td>One row per variable the chosen template declares — from an earlier node's output, or a fixed value.</td></tr>
+                                </tbody>
+                            </table>
+
+                            <div class="alert alert-info small mt-3 mb-0">
+                                <strong>An Email node has no Variables section of its
+                                own</strong>, and declaring one there is refused. Its variables
+                                come from the <em>template</em>, and a substitution pass here
+                                would eat <code>{{CUSTOMER}}</code> before the email renderer
+                                ever saw it.
+                                <br><br>
+                                The <code>not sent</code> output is for a refusal knowable
+                                <em>now</em> — an unresolvable binding, a switched-off template.
+                                A relay bouncing the message tomorrow is not knowable now and
+                                cannot route anywhere on this canvas; that lives in the delivery
+                                log.
+                                <br><br>
+                                A template you own but have shared with a team is still yours to
+                                send — sharing a template does not remove your own access to it.
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ============ SCENARIO 15 ============ -->
+                <section id="s15" class="help-section help-scenario mb-4">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="badge bg-success-subtle text-success-emphasis border border-success-subtle">Running</span>
+                            <strong class="ms-1">15 · Run, test a selection, and the dock</strong>
+                        </div>
+                        <div class="card-body">
+                            <div class="table-responsive">
+                                <table class="table table-sm table-bordered align-middle">
+                                    <thead class="table-light">
+                                        <tr><th style="width:180px;">Button</th><th>What it does</th></tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td><strong>Run</strong></td>
+                                            <td>Runs the whole pipeline, from Start.</td>
+                                        </tr>
+                                        <tr>
+                                            <td><strong>Test selection</strong></td>
+                                            <td>
+                                                Shift-click nodes first. Runs only those —
+                                                enabled only once something is picked, so it
+                                                cannot silently mean "run everything".
+                                            </td>
+                                        </tr>
+                                        <tr>
+                                            <td><strong>Stop</strong></td>
+                                            <td>
+                                                Cancels a run in flight. The step it was inside
+                                                is closed and says so.
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            <div class="alert alert-success small">
+                                <strong>Testing a node, testing a group and running the whole
+                                thing are the same code with a different scope.</strong> That is
+                                the guarantee the feature rests on: the node that passes a test
+                                is the node that will run — not a rehearsal of it.
+                            </div>
+
+                            <h6 class="mt-4">The dock, below the canvas</h6>
+                            <table class="table table-sm table-bordered">
+                                <tbody>
+                                    <tr><th scope="row" class="fw-normal" style="width:120px;">Output</th><td>One row per step: node, type, pass, status, duration, and the preview on expand.</td></tr>
+                                    <tr><th scope="row" class="fw-normal">State</th><td>What the run knows after the selected step.</td></tr>
+                                    <tr><th scope="row" class="fw-normal">Log</th><td>The timeline, one line per step.</td></tr>
+                                </tbody>
+                            </table>
+
+                            <p class="small mt-3">
+                                Node status is painted back onto the canvas as the run moves,
+                                which is what makes the page a monitor rather than a diagram. A
+                                node inside a loop has one box and one row <em>per pass</em>, so
+                                the box shows its latest pass and the dock lists them all. Drag
+                                the dock's top edge to resize it.
+                            </p>
+
+                            <div class="alert alert-warning small mb-0">
+                                <strong>Nodes you left out get a "skipped" row</strong>, because
+                                a node missing from the log is indistinguishable from one the
+                                run never reached. And a node in your selection that reads a
+                                node <em>outside</em> it <strong>fails, naming what is
+                                missing</strong> — a loop over an absent list would otherwise
+                                loop zero times and report success, which is a green tick on a
+                                test that tested nothing.
+                                <br><br>
+                                The preview always states the <strong>real</strong> count, not
+                                the sample size: twenty rows shown, two thousand reported, if
+                                that is what happened.
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ============ SCENARIO 16 ============ -->
+                <section id="s16" class="help-section help-scenario mb-5">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="badge bg-success-subtle text-success-emphasis border border-success-subtle">Running</span>
+                            <strong class="ms-1">16 · Publish, and who may call it</strong>
+                        </div>
+                        <div class="card-body">
+                            <p class="small mb-3">
+                                A pipeline is callable by a data agent when <strong>both</strong>
+                                are true: it is <strong>published</strong>, and it has an
+                                attachment. Two switches rather than one, so a pipeline can be
+                                parked mid-edit without losing its attachment, and a draft can
+                                sit attached while it is finished.
+                            </p>
+
+                            <div class="table-responsive">
+                                <table class="table table-sm table-bordered align-middle">
+                                    <thead class="table-light">
+                                        <tr>
+                                            <th style="width:180px;">Where</th>
+                                            <th style="width:150px;">Control</th>
+                                            <th>What it does</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td>The library row</td>
+                                            <td><strong>Publish</strong> / <strong>Make Draft</strong></td>
+                                            <td>
+                                                Publishing validates the drawing, so it can be
+                                                refused — the reason lands above the table.
+                                            </td>
+                                        </tr>
+                                        <tr>
+                                            <td>The <strong>Edit</strong> dialog</td>
+                                            <td><strong>Data agent</strong></td>
+                                            <td>
+                                                One agent, and one pipeline per agent. Adding a
+                                                new agent means attaching one to it.
+                                            </td>
+                                        </tr>
+                                        <tr>
+                                            <td>The <strong>Edit</strong> dialog</td>
+                                            <td><strong>Workspace</strong></td>
+                                            <td>
+                                                Every agent in that workspace can call it —
+                                                including agents added next month, with nobody
+                                                attaching anything. That is the whole point of
+                                                it.
+                                            </td>
+                                        </tr>
+                                        <tr>
+                                            <td>The <strong>Edit</strong> dialog</td>
+                                            <td>
+                                                <strong>Let an agent read and filter its whole
+                                                result</strong>
+                                            </td>
+                                            <td>
+                                                Off by default. See below.
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            <div class="alert alert-info small mt-3">
+                                <strong>The two attachments are mutually exclusive, and setting
+                                either clears the other.</strong> Holding both would hand the
+                                same pipeline to one agent twice — once as its own, once through
+                                its workspace — and a model offered two identically named tools
+                                cannot choose between them. The
+                                <strong>Callable by</strong> column names whichever is set.
+                                <br><br>
+                                <strong>One name per shelf.</strong> A pipeline's tool name comes
+                                from the name you wrote, so "Monthly revenue" and
+                                "monthly-revenue" both become <code>monthly_revenue</code>.
+                                Attaching the second is refused, quoting the first. Drafts count,
+                                since a colliding draft becomes a live collision the moment
+                                somebody presses Publish.
+                                <br><br>
+                                <strong>The description is what the model routes on</strong>, so
+                                write it as the question the pipeline answers — the same advice
+                                a <a href="/tool-configs/help#description">tool config's
+                                description</a> gets, for the same reason.
+                            </div>
+
+                            <div class="alert alert-warning small mb-0">
+                                <strong>"Let an agent read and filter its whole result"</strong>
+                                lets an agent answer questions the pipeline itself takes no
+                                parameter for — "revenue for the Python department in March"
+                                against a pipeline that returns every department and every
+                                month. Every record is read, so the answer states the exact
+                                number that matched rather than a number counted off a sample.
+                                <br><br>
+                                It is off by default, and it means slightly more here than on a
+                                tool config: a tool config is one statement, while a pipeline can
+                                be a loop over eighty-two departments, so "run the whole thing
+                                and hold the result" is a larger promise. A pipeline that stops
+                                to ask a question is refused on this path, with the question
+                                quoted.
+                                <br><br>
+                                <strong>What the model is told is the last node that produced
+                                data</strong>, not simply the last node to run — a pipeline
+                                almost always ends at a Success node, and reporting
+                                <code>{"succeeded": true}</code> would describe a run that read
+                                two hundred rows as having returned nothing.
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <hr class="my-5">
+
+                <!-- ============ LIMITS ============ -->
+                <section id="limits" class="help-section mb-5">
+                    <h6>Reference</h6>
+                    <h4 class="fw-semibold mb-3">Limits, in one place</h4>
+
+                    <div class="table-responsive">
+                        <table class="table table-sm table-bordered">
+                            <tbody>
+                                <tr><th scope="row" class="fw-normal" style="width:340px;">Nodes or connectors in a pipeline</th><td>no cap — what bounds a <em>run</em> is each loop's ceiling</td></tr>
+                                <tr><th scope="row" class="fw-normal">Start nodes</th><td>exactly 1</td></tr>
+                                <tr><th scope="row" class="fw-normal">Connectors per output dot</th><td>1</td></tr>
+                                <tr><th scope="row" class="fw-normal">Loop passes</th><td>200 by default, 1–100,000 — refused, never truncated</td></tr>
+                                <tr><th scope="row" class="fw-normal">SQL statement</th><td>8,000 characters</td></tr>
+                                <tr><th scope="row" class="fw-normal">A Union node's built statement</th><td>200,000 characters — refused, never truncated</td></tr>
+                                <tr><th scope="row" class="fw-normal"><code>{{VARIABLES}}</code> per node</th><td>30</td></tr>
+                                <tr><th scope="row" class="fw-normal">Wait</th><td>1–900 seconds</td></tr>
+                                <tr><th scope="row" class="fw-normal">Pipeline name / description</th><td>255 / 2,000 characters</td></tr>
+                                <tr><th scope="row" class="fw-normal">Rows a SQL or Union node returns</th><td>uncapped — a <code>LIMIT</code> in the statement is the only bound</td></tr>
+                                <tr><th scope="row" class="fw-normal">Rows a Tool config node returns</th><td>200 — the tool's own cap, deliberately kept</td></tr>
+                                <tr><th scope="row" class="fw-normal">Rows shown in the dock and sent to a model</th><td>20 sample rows, with the real total stated</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <!-- ============ ERRORS ============ -->
+                <section id="errors" class="help-section mb-5">
+                    <h4 class="fw-semibold mb-3">When a save is refused</h4>
+
+                    <p class="small">
+                        Every one of these produces a <em>plausible wrong run</em> rather than
+                        an obvious error, which is why none is left until execution — and the
+                        run applies the same rules as the save, so a run can never be looser
+                        than what you were allowed to store. Every message names the node
+                        <strong>by its label</strong>.
+                    </p>
+
+                    <div class="table-responsive">
+                        <table class="table table-sm table-bordered align-middle">
+                            <thead class="table-light">
+                                <tr><th style="width:52%;">Message</th><th>What to do</th></tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><em>No start node</em> / <em>two start nodes</em></td>
+                                    <td>A drawing with no reading order, or two pipelines in one.</td>
+                                </tr>
+                                <tr>
+                                    <td><em>Two connectors leave the same output</em></td>
+                                    <td>Delete one. To go two ways, use a <a href="#s3">Branch</a>.</td>
+                                </tr>
+                                <tr>
+                                    <td><em>…must say which tables its statement reads</em></td>
+                                    <td>Fill in <strong>Tables</strong> — <a href="#s1">scenario 1</a>.</td>
+                                </tr>
+                                <tr>
+                                    <td><em>…uses ':x', which nothing declares</em></td>
+                                    <td>Add a Parameters row for it, or take it out of the statement.</td>
+                                </tr>
+                                <tr>
+                                    <td><em>…wires a value into ':x', which it does not declare as a parameter</em></td>
+                                    <td>The other direction: declare it, or remove the wiring.</td>
+                                </tr>
+                                <tr>
+                                    <td><em>…compares against ':x' as a single value, but the node it comes from sends a list</em></td>
+                                    <td>Either write <code>IN :x</code>, or set <strong>Takes</strong> to <em>One value</em> — <a href="#s2">scenario 2</a>.</td>
+                                </tr>
+                                <tr>
+                                    <td><em>…has a space after the ':'</em></td>
+                                    <td>Close the space and make sure the name is declared.</td>
+                                </tr>
+                                <tr>
+                                    <td><em>…has no conditions, so nothing after it could ever run</em></td>
+                                    <td>A Branch needs at least one. Outcome names must be unique and none may be <code>else</code>.</td>
+                                </tr>
+                                <tr>
+                                    <td><em>…loops over another node's result, and the node it names is not in this graph</em></td>
+                                    <td>Re-pick <strong>Loop over the result of</strong>.</td>
+                                </tr>
+                                <tr>
+                                    <td><em>A loop with nothing on its <code>each</code> output</em>, or a body that never returns</td>
+                                    <td>Draw the body, and draw an edge back to the loop — <a href="#s4">scenario 4</a>.</td>
+                                </tr>
+                                <tr>
+                                    <td><em>A cycle with no loop node on it</em></td>
+                                    <td>Put a <strong>For each</strong> or <strong>Do until</strong> on it, or break it.</td>
+                                </tr>
+                                <tr>
+                                    <td><em>…collects the result of a node that is not in its body</em></td>
+                                    <td>Only a body node may be collected — <a href="#s5">scenario 5</a>.</td>
+                                </tr>
+                                <tr>
+                                    <td><em>Record the item as</em> with nothing collected</td>
+                                    <td>Set <strong>Collect the result of</strong>, or clear the alias.</td>
+                                </tr>
+                                <tr>
+                                    <td><em>…is set to hold a list, but its value is not one</em></td>
+                                    <td>The Value node's JSON must match the kind it promises.</td>
+                                </tr>
+                                <tr>
+                                    <td><em>…has no question to ask, so the run would pause silently</em></td>
+                                    <td>Fill in the question; a "one of a list" answer also needs choices.</td>
+                                </tr>
+                                <tr>
+                                    <td><em>{{NAME}} … nothing on this node declares it</em></td>
+                                    <td>Add the variable, or fix the spelling — <a href="#s13">scenario 13</a>.</td>
+                                </tr>
+                                <tr>
+                                    <td><em>A {{NAME}} inside quotes or a comment</em></td>
+                                    <td>A value belongs in a <code>:parameter</code>. Variables are for identifiers.</td>
+                                </tr>
+                                <tr>
+                                    <td><em>…points at a timer that is not a Start</em>, or one its Start cannot reach</td>
+                                    <td><a href="#s11">Scenario 11</a>.</td>
+                                </tr>
+                                <tr>
+                                    <td><em>A Wait of more than 900 seconds</em></td>
+                                    <td><a href="#s12">Scenario 12</a>. Refused rather than clamped.</td>
+                                </tr>
+                                <tr>
+                                    <td><em>…ends with ORDER BY, which in a union would apply to every pass</em></td>
+                                    <td>Sort in a node after <code>execute</code> — <a href="#s7">scenario 7</a>.</td>
+                                </tr>
+                                <tr>
+                                    <td><em>An edge from one outcome node to the other</em></td>
+                                    <td>The second cannot undo the first. An edge out of one to anything else is fine.</td>
+                                </tr>
+                                <tr>
+                                    <td><em>Publish before changing who may call it</em></td>
+                                    <td>A draft attachment would silently do nothing — <a href="#s16">scenario 16</a>.</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="alert alert-warning small mb-0">
+                        SQL syntax errors and unknown columns are <strong>not</strong> in this
+                        list, by design: nothing here parses your statement strictly enough to
+                        be trusted with them. A <strong>Run</strong> or a
+                        <strong>Test selection</strong> is how you find those, and the failed
+                        step reports what the database said.
+                    </div>
+                </section>
+
+                <!-- ============ LIBRARY ============ -->
+                <section id="library" class="help-section mb-5">
+                    <h4 class="fw-semibold mb-3">A worked pipeline</h4>
+
+                    <p class="small">
+                        What a real one looks like end to end — a nightly check that emails
+                        only when there is something to say, and reports either way.
+                    </p>
+
+                    <pre><code>Start
+  └→ Timer (Start)                       label: "clock"
+      └→ stale_projects (SQL)            projects with no update in 30 days
+          ├─on error──→ Failure ──→ Send an email  "the nightly check did not run"
+          └→ Branch
+               ├─found──→ For each  over stale_projects, call each one "proj"
+               │            each ──→ owner_of (SQL)   WHERE project_id = :proj
+               │                       └──→ back to For each
+               │            done ──→ Ask a human  "{{COUNT}} owners will be emailed. Go ahead?"
+               │                       └→ Send an email
+               │                            └→ Timer (Stop, → clock)
+               │                                 └→ Success  "done in {{ELAPSED}}"
+               └─else───→ Success  "nothing stale"</code></pre>
+
+                    <div class="table-responsive mt-4">
+                        <table class="table table-sm table-bordered align-middle">
+                            <thead class="table-light">
+                                <tr>
+                                    <th style="width:210px;">Node</th>
+                                    <th>Why it is a separate box</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><code>stale_projects</code></td>
+                                    <td>Its result is read three times — by the branch, by the loop, and by the count in the question.</td>
+                                </tr>
+                                <tr>
+                                    <td><code>Branch</code></td>
+                                    <td>So a quiet night reports success instead of emailing nobody about nothing.</td>
+                                </tr>
+                                <tr>
+                                    <td><code>For each</code> + <code>Collect the result of</code></td>
+                                    <td>The per-project statement differs, and every pass's rows are wanted — not just the last.</td>
+                                </tr>
+                                <tr>
+                                    <td><code>Ask a human</code></td>
+                                    <td>The one step that touches people outside the team. <code>{{COUNT}}</code> makes the question the real one.</td>
+                                </tr>
+                                <tr>
+                                    <td>The <code>on error</code> path</td>
+                                    <td>A check that failed silently is worse than one that failed loudly; the Failure node's exit is what carries the alert.</td>
+                                </tr>
+                                <tr>
+                                    <td><code>Timer</code></td>
+                                    <td>So "done in 4m 12s" is a measurement rather than a guess — and the pause while a person answers can be bracketed out.</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <p class="small text-muted mb-0">
+                        Nine boxes, one sentence each, and every path drawn — including the two
+                        nobody wants to take.
+                    </p>
+                </section>
+
+                <div class="d-flex gap-2 mb-5">
+                    <a href="/graph-designer/" class="btn btn-primary btn-sm">
+                        <i class="las la-arrow-left"></i> Back to Pipelines
+                    </a>
+                    <a href="/tool-configs" class="btn btn-outline-secondary btn-sm">
+                        <i class="las la-tools"></i> Tool Configs
+                    </a>
+                    <a href="/data-agents" class="btn btn-outline-secondary btn-sm">
+                        <i class="las la-robot"></i> Data Agents
+                    </a>
+                    <a href="/datasource" class="btn btn-outline-secondary btn-sm">
+                        <i class="las la-database"></i> Data Sources
+                    </a>
+                </div>
+
+            </div>
+        </div>
+    </div>
+</div>
+{% endraw %}
+{% endblock %}

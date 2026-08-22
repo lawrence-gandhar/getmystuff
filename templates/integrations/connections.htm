@@ -8,10 +8,8 @@
         <h5 class="fw-semibold mb-0">
             <i class="las la-plug text-primary"></i> Connections
         </h5>
+        {# Actions only — the tab strip below moves between the three pages. #}
         <div class="d-flex gap-2">
-            <a href="/integrations/" class="btn btn-outline-secondary btn-sm">
-                <i class="las la-exchange-alt"></i> Workflows
-            </a>
             <button
                 class="btn btn-primary btn-sm"
                 type="button"
@@ -22,6 +20,8 @@
             </button>
         </div>
     </div>
+
+    {% include "integrations/partials/tabs.htm" %}
 
     <p class="text-muted small mb-3">
         A connection is one authenticated relationship with one external system — a store,

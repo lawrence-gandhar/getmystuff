@@ -34,6 +34,10 @@ _VALID_NODE_TYPES = {
     # and note that a graph containing an "Ask a human" node makes this node end the turn
     # waiting for a reply, which no other non-prompt node does.
     "run_graph",
+    # Queues an email mid-conversation. Like `run_graph`, its work happens outside this
+    # feature — see `engine_service._step_send_email` — but unlike it, it never ends the
+    # turn: it queues and hops on, saying nothing to the visitor.
+    "send_email",
 }
 _VALID_OPERATORS = {"equals", "contains", "not_empty"}
 _VALID_CONTEXT_SOURCES = {"datasource", "knowledge_base", "prompt"}
@@ -274,6 +278,75 @@ def _validate_node(node: dict, node_by_id: dict) -> None:
         )
     elif node_type == "ai_fallback":
         _validate_ai_fallback_data(data)
+    elif node_type == "send_email":
+        _validate_send_email_data(data)
+
+
+def _validate_send_email_data(data: dict) -> None:
+    """
+    An Email node: a template, a server, a recipient, and bindings a flow can actually
+    satisfy.
+
+    The available sources come from the runner's own module rather than being restated here,
+    so a node the validator accepts cannot be one the runner refuses. A flow has the
+    conversation's variables and the agent's prompt variables and nothing else — no upstream
+    node outputs, because this engine's state is one flat string map.
+
+    The template's declared variables are not checked: that needs the database, and this
+    validator is synchronous like the rest of the file. A binding naming a variable the
+    template no longer declares is refused at enqueue, with a sentence naming it.
+    """
+    from app.services.email_dispatch.errors import RenderError
+    from app.services.email_dispatch.nodes.flow_builder_runner import (
+        FLOW_BINDING_SOURCES,
+    )
+    from app.services.email_dispatch import variable_sources
+
+    if not str(data.get("template_id") or "").strip():
+        raise HTTPException(
+            status_code=400, detail="Email node is missing an email template",
+        )
+    if not str(data.get("smtp_config_id") or "").strip():
+        raise HTTPException(
+            status_code=400, detail="Email node is missing an SMTP server",
+        )
+
+    recipients = data.get("recipients") or {}
+    if not isinstance(recipients, dict) or not (recipients.get("to") or []):
+        raise HTTPException(
+            status_code=400,
+            detail="Email node needs at least one TO address (it may be a {{VARIABLE}})",
+        )
+
+    bindings = data.get("variable_bindings") or {}
+    if not isinstance(bindings, dict):
+        raise HTTPException(
+            status_code=400, detail="Email node's variable bindings could not be read",
+        )
+
+    for name, binding in bindings.items():
+        shown = str(name).upper()
+        if not isinstance(binding, dict):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Email node's binding for {{{{{shown}}}}} could not be read",
+            )
+        source = str(binding.get("source") or "").strip().lower()
+        if source not in FLOW_BINDING_SOURCES:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Email node binds {{{{{shown}}}}} to '{source}', which a conversation "
+                    "cannot provide. Use a value the chat collected, an agent variable, or "
+                    "a fixed value."
+                ),
+            )
+        path = str(binding.get("path") or "").strip()
+        if path:
+            try:
+                variable_sources.assert_path(path, name=shown)
+            except RenderError as exc:
+                raise HTTPException(status_code=400, detail=exc.message) from exc
 
 
 def _validate_ai_fallback_data(data: dict) -> None:

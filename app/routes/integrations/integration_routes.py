@@ -99,6 +99,10 @@ class IntegrationsController(Controller):
                 "user": user,
                 "flows": FlowView.payload_for_many(views),
                 "active": "integrations",
+                # Which tab of the feature this page is. Set by the route rather than
+                # worked out in the template from the URL, so a path that changes does not
+                # silently highlight the wrong tab.
+                "tab": "workflows",
             },
         )
 

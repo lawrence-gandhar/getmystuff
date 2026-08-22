@@ -10,8 +10,16 @@ values, existing tool configs, questions for a person, branches and loops — th
 or any part of it, and watches the flow, the state and a limited output in a dock below the
 canvas.
 
+**It is called *Pipelines* in the product and `graph_designer` in the code.** The sidebar
+entry, the page headings and every operator-facing sentence say "Pipelines"; the route
+(`/graph-designer`), the package, the templates, the CSS and the JS all keep the original
+name. Renaming those would break bookmarks and every stored path for a label change, so the
+split is deliberate rather than half-finished work — when this file says "Graph Designer"
+below, it is naming the module.
+
 ```
 GET  /graph-designer/                    → the library
+GET  /graph-designer/help                → this file, browsable, for the operator
 GET  /graph-designer/{id}/edit-form      → the record's edit dialog (name, who may call it)
 POST /graph-designer/{id}/update          → save that dialog
 GET  /graph-designer/{id}/edit           → the canvas + the run dock
@@ -27,6 +35,35 @@ GET  /graph-designer/node-options         → what the property pickers offer
 
 Three tables: `tool_graphs` (the drawing), `tool_graph_runs` (one execution) and
 `tool_graph_run_steps` (one node, one pass).
+
+## The in-app help page
+
+`/graph-designer/help` (`templates/graph_designer/help.htm`) is this file written for the
+person in front of the canvas: the same node vocabulary, the same ceilings and the same
+refusal messages, said as *what to fill in* and *what happens*. Sixteen worked scenarios —
+a straight line, a parameter, a branch, a `for_each`, collecting the passes, `IN :ids`, the
+Union node, `do_until`, a question, an error path, timers, waits, `{{VARIABLES}}`, an email,
+running and testing, and publishing — plus the limits in one table and every refusal with
+its fix.
+
+Three decisions it copies verbatim from `tool_configs/help.htm`, for the same reasons:
+
+* **A route, not a link to the markdown.** A help page has to arrive inside the
+  application's own layout, behind the same auth as the page it explains.
+* **A literal path**, so it can never be read as `/{graph_id:uuid}/…`.
+* **The whole body inside `{% raw %}`.** The page is largely SQL, JSON and `{{VARIABLE}}`
+  samples, every one of which Jinja would otherwise try to read — and `{{TABLE}}` in
+  particular would render as an undefined variable, teaching the opposite of what the
+  section says. A route test asserts the samples arrive as written.
+
+It is linked from **both** the library and the canvas. The canvas is where a port or a
+binding mode actually needs explaining, and going back to the library for it would mean
+leaving unsaved work; both links open a new tab for the same reason the Tool Configs one
+does — the page is read *while* a panel is open, so it must not be the thing covering it.
+
+A route test walks `NODE_TYPES` and requires every palette label to appear on the page, so a
+node type added later fails the suite until the help describes it. Keep the two files in
+step whenever a ceiling, a port name or a validator's wording changes.
 
 ---
 
@@ -50,20 +87,39 @@ Every one of those is control flow, and control flow is a drawing.
 
 # The node vocabulary
 
-Ten types. The four that hold something, and six that decide where the run goes.
+Fourteen types. The five that hold something, six that decide where the run goes, and
+three that act on the world or on the clock.
 
 | type | ports out | holds |
 |---|---|---|
 | `start` | `default` | nothing — it says where the run begins |
 | `sql` | `default`, `error` | a statement, its datasource, **the tables it reads**, declared parameters |
+| `sql_union` | `default`, `execute`, `error` | the same, appended once per pass and run on the last |
 | `value` | `default` | JSON: a `list`, an `array` or a `dict` |
 | `tool_config` | `default`, `error` | an existing tool config, run exactly as an agent would |
 | `human` | `default` | a question, and what kind of answer it expects |
 | `branch` | one per condition, plus `else` | an ordered list of comparisons |
 | `for_each` | `body`, `done` | which node's result to loop over, and a ceiling |
 | `do_until` | `body`, `done` | a condition to repeat until, and a ceiling |
-| `success` | — | a message; ends the run as having worked |
-| `failure` | — | a message; ends the run as having failed |
+| `email` | `default`, `error` | a template, a server, recipients, and a value per declared variable |
+| `timer` | `default` | one of *start / pause / resume / stop*, and which timer |
+| `wait` | `default` | a number of seconds to pause the run for |
+| `success` | `default` | a message; records the run as having worked |
+| `failure` | `default` | a message; records the run as having failed |
+
+**The two outcome nodes have an exit.** They used to have none, on the reasoning that they
+end the run — but what they actually do is *decide what the run is reported as*, and that is
+the moment there is finally something worth announcing. Announcing it takes a node (an
+Email, a tool config, a statement that writes a row), so forbidding a successor forced the
+author to put the announcement *before* the box that says what happened. On the failure side
+especially, that reads backwards.
+
+Leaving the exit connected to nothing is the ordinary case and ends the run, exactly as
+before. What a successor cannot do is change the verdict: `failed_at` is already set by then
+and nothing clears it, so **one outcome node may not lead to another** — a `success` drawn
+after a `failure` would picture a green run that reports as failed. `_validate_edges`
+refuses it by name, and the canvas refuses the gesture while the connector is still in your
+hand.
 
 **The vocabulary lives in one place.** `graph_service` owns it, the routes send it to the
 browser as `#gdVocabulary`, and the canvas builds its palette and its property forms from
@@ -188,6 +244,237 @@ thing it found was zero — which is why `_is_empty` is a function rather than `
 
 ---
 
+# Variables on any node
+
+What a node produced has always been readable by the node after it — that is
+`GraphState.outputs`, keyed by node id. What was missing was a way to write it *into*
+something. A node can now declare named variables and use them as `{{NAME}}` in its own
+text: a table name in a statement, a duration in a Success message, a figure in the
+question a Human node asks.
+
+```jsonc
+"data": {
+  "sql_query": "SELECT region, SUM(total) FROM {{TABLE}} GROUP BY region",
+  "variables": {
+    "TABLE":  {"source": "node", "node_id": "n_3", "path": "rows[0].table_name"},
+    "REGION": {"source": "node", "node_id": "n_3", "path": "region", "default": "unknown"},
+    "LIMIT":  {"source": "literal", "value": "50"}
+  }
+}
+```
+
+**This is substitution, not evaluation.** There is no expression language, no filters, no
+conditionals, and nothing reaches `eval`. `{{NAME}}` is replaced by a value a structured
+binding resolved, and everything else in the text is text. That rule is now stated in four
+places — `email_dispatch/variable_sources.py`, `email_dispatch/rendering.py`,
+`integrations/engine/transform.py` and `graph_designer/node_variables.py` — and the
+machinery is shared rather than rebuilt: the same renderer, the same binding resolver, the
+same restricted path reader the Email node already used.
+
+## Which fields, and which do not
+
+| node type | fields | treated as |
+|---|---|---|
+| `sql`, `sql_union` | the statement, each table name | SQL — see below |
+| `value` | the JSON | escaped as a JSON string body first |
+| `human` | the question, each choice | text |
+| `success`, `failure` | the message | text |
+| everything else | — | none |
+
+Deliberately absent: any `*_id` (a picker's uuid, not prose); `source_node`,
+`collect_from` and `timer_node` (node ids the validator resolves against the drawing);
+`item_name` and `label_item_as` (read at compile time, before any state exists to
+substitute from); `params` and `bindings` (the typed parameter system, which is safer than
+interpolation and which this must not give anyone a reason to abandon); and everything on
+an Email node, whose subject, body and recipients are rendered by the email module against
+the *template's* declaration — a pass here would eat `{{CUSTOMER}}` before that renderer
+ever saw it.
+
+**A `branch`'s and a `do_until`'s condition values are excluded for a sharper reason.**
+`branch_port` and `loop_continues` are each called twice per visit — once by the runner and
+once by the compiler's router, after the node's own output has merged — and they are one
+function precisely so the port in the log and the port the run takes cannot differ. A
+rendered condition could resolve differently between those two calls. A condition already
+has a typed way to read another node.
+
+## A variable with no value
+
+`resolve_bindings` leaves a binding that found nothing *out* rather than blanking it, so
+something has to decide what that means. An email defers to its template's declared
+default; a graph node has no template, so the author decides per variable: **fail and name
+the variable**, or **use this default**. The presence of the `default` key is the switch,
+which is why the panel offers a select rather than a text box — an empty default and no
+default are different instructions.
+
+## SQL and variables — the honest part
+
+A statement has always been raw author-authored text. What changes is that a `{{VAR}}` can
+carry a value out of **a database row nobody reviewed**, and putting one into statement
+text is string-concatenated SQL by another name. Four things stand in the way:
+
+1. **A placeholder may not sit inside a string literal or a comment** (refused at save,
+   using `sql_guard.stripped_literals`). This is what gives the feature a reason to exist
+   *and* takes away its reason to be dangerous: a bind parameter already expresses every
+   **value** and the driver binds it, so it cannot change what the statement does. The one
+   thing a bind parameter cannot express is an **identifier** — no driver lets `FROM :table`
+   name a table. So `{{VAR}}` is for identifiers, and one found inside quotes is somebody
+   reaching for it to do a value's job.
+2. **A substituted value must be a name or a whole number** (refused at run time): a dotted
+   identifier up to three parts, or up to 18 digits. That refuses a space, a quote, a
+   semicolon, a parenthesis, the empty string, and the `…` the resolver appends when it
+   truncates an over-long value. Applied to fixed values too — one rule is easier to reason
+   about than two, and an author who needs something exotic can type it into the statement
+   where a reviewer can see it.
+3. **The statement is re-validated after substitution.** `_run_sql` runs
+   `validated_tool_sql` over the node it was handed, which is the rendered one — so a
+   second statement or a write verb is still refused. This is the net, not the fence.
+4. **The table allow-list still binds.** A substituted table name must still appear in
+   `table_names`, and a table switched off in Data Sources still stops the node.
+
+Two consequences worth knowing: a value that renders a `:something` into the text becomes
+an unbound placeholder and the driver errors (readably, as a failed step); and a variable
+named `UPDATE` or `DELETE` is refused at save by the write-verb check, so name it
+something else.
+
+## The drawing is never edited
+
+`render_node` returns a copy. That is load-bearing rather than tidy: the compiler captures
+each node in a closure once per run, and a loop body re-enters the *same* closure on every
+pass. Writing the rendered text back would bake the first pass's values in, and every later
+pass would substitute into text that had already been substituted.
+
+---
+
+# Measuring how long something took
+
+A `timer` is a stopwatch. One node type carrying four actions — **start**, **pause**,
+**resume**, **stop** — rather than four node types, because a timer is a single state
+machine and four palette boxes sharing one machine is four validators to keep in step.
+
+The instance set to *start* **is** the timer; the other three name its node id. A node id
+rather than a typed-in name so that a save can prove the reference is real and
+`referenced_nodes` can report the dependency — a free-text name could do neither, and a
+typo would surface at run time as "that timer has not been started", which is
+indistinguishable from a branch the run did not take.
+
+Every action records `datetime.now(timezone.utc)`. Nothing here waits.
+
+## Where the record lives, and why not in `outputs`
+
+The shared record goes in a `timers` channel on the state, keyed by the *starting* node's
+id. Not in `outputs`, for two reasons. A pause writing the shared record into `outputs`
+would have to write it under the **start** node's key — misreporting what that node
+produced, since a step row's `output_preview` is built from exactly that key. And
+`_merge` is last-write-wins per key, so inside a loop each instance would keep only its
+final visit and the segment history would vanish silently.
+
+Each box still writes its own **snapshot** into `outputs` under its own id, and that
+snapshot is deliberately **flat** — a downstream binding reads it with a dotted path, so
+`elapsed_human` has to be one hop from the top or an email's variable row would depend on
+this module's internals.
+
+```jsonc
+{"started_at": "...", "ended_at": "...", "elapsed_seconds": 3852.117,
+ "total_elapsed_seconds": 3852.117, "paused_seconds": 40.0,
+ "elapsed_human": "1h 4m 12s", "running": false, "phase": "stopped",
+ "action": "stop", "restarts": 0, "segments": [...]}
+```
+
+`elapsed_human` earns its place because the obvious binding renders `3852.117` into a
+sentence. Formatting the *datetimes* for a reader is deliberately not done — that needs a
+timezone and a locale, which are the reader's, not the run's.
+
+## The maths
+
+`segments` are the spans the clock was **ticking**, not the paused ones. One list, one
+definition, and the paused time falls out as arithmetic rather than needing a second list
+that could disagree with the first:
+
+```
+elapsed = Σ(segments)                      # this pass
+wall    = (ended_at or now) − started_at
+paused  = max(0, wall − elapsed)
+total   = carried + elapsed                # across loop restarts
+```
+
+`max(0, …)` because `wall` and `elapsed` are independent subtractions of the same clock and
+can disagree in the last microsecond on a timer that was never paused.
+
+## Inside a loop
+
+A second *start* means different things in different places, and the difference is a
+compile-time fact rather than a guess: `enclosing_loop` is set by the compiler, which is
+the only thing that knows the drawing's nesting.
+
+* **Inside a loop body** — this pass begins now. The timer restarts, folding what earlier
+  passes measured into `carried_seconds`, so `elapsed_seconds` answers "how long did *this*
+  pass take" and `total_elapsed_seconds` answers "how long has the loop spent in here
+  altogether". Reporting only one would make the other unobtainable.
+* **Anywhere else** — the author has started a timer twice, which has no sensible reading,
+  and it is refused.
+
+Every other illegal transition is refused too: pausing a paused timer, resuming one that is
+running, stopping one twice, and acting on one that was never started. None of them is a
+quiet no-op, because a timer that silently ignored a Stop would report a number that looks
+plausible and is wrong.
+
+## What the save can and cannot prove
+
+It refuses a pause/resume/stop whose *start* cannot reach it by any path — that is
+provably dead, since no run could have started the timer before arriving. **Reachability
+proves impossible, never certain**: a branch whose other port also leads there means a run
+can still arrive without passing the start, and that is left to run time, where the message
+names the branch as the likely reason.
+
+It also refuses a pause/resume/stop **inside** a loop body whose start sits outside it.
+That combination goes green on pass one and red on pass two — the worst failure mode
+available — and it is statically detectable with the same body definition the collection
+rule uses.
+
+It does **not** require a stop for every start. A graph that only wants to know when
+something began is a legitimate graph.
+
+---
+
+# Waiting
+
+A `wait` node pauses the run for a fixed number of seconds. **It does not survive a
+restart.** `stop_all_runs` cancels every live run on shutdown, so a deploy landing inside a
+wait leaves the run cancelled and nothing resumes it. The panel says so, the node box says
+so, and it is the first thing to know about the node.
+
+That is the price of not building a second scheduler. Parking and resuming would need a new
+run status across eight consumers, a migration, a scheduler loop in this package, and —
+the hard part — LangGraph's only park mechanism here is `interrupt()`, so a parked wait
+becomes a Human node that answers itself. For a node whose common case is thirty seconds.
+Anything measured in hours belongs in an Integrations schedule, which *is* persisted.
+
+The ceiling is **900 seconds**, chosen against three other numbers: under
+`MAX_STREAM_SECONDS` (3600) so the dock's stream outlives any wait; under the integrations
+engine's node timeout (3600), keeping this canvas the more conservative of the two; and
+short enough that a deploy rarely lands inside one. Longer is **refused at save, never
+clamped** — clamping would leave the drawing saying two hours while the run waited fifteen
+minutes, and a picture that lies about the run is worse than a refusal that explains
+itself. The duration is re-validated in the runner too, because `graph_data` is JSONB that
+can be edited by hand and there is no `asyncio.wait_for` around a runner in this package.
+
+One consequence for graphs called as an agent's tool: `graph_runner.WAIT_SECONDS` is 90, so
+any wait beyond about a minute and a half makes the tool report "still being worked out".
+
+## Stopping a run mid-node
+
+`cancel_run` marks the row and then cancels the task. `CancelledError` derives from
+`BaseException`, so it sails past `run_node`'s `except Exception` — which meant the step row
+it had opened was never closed, leaving a node spinning forever in the dock underneath a run
+the list already showed as cancelled. That was true of **every** node; a node that sleeps
+merely makes it easy to hit rather than a matter of timing. `run_node` now closes the row
+with "The run was stopped while this step was running." and re-raises untouched.
+
+Known limitation, unchanged: `_RUNNING` is per-process, so `cancel_run` in one replica
+cannot cancel a task in another. Already true of every long node here.
+
+---
+
 # What is refused, and why
 
 Each of these produces a *plausible wrong run* rather than an obvious error, which is why
@@ -200,7 +487,8 @@ author could not have stored.
 | No start node, or two | a drawing has no reading order, so "where does it begin" cannot be inferred, and two starts is two graphs |
 | An edge naming a node that is not there | the compiled graph would have a dangling transition and the run would stop somewhere nobody drew |
 | Two edges on one output port | the run would take one of them, and which one would depend on dict ordering |
-| An edge into `start`, or out of `success`/`failure` | both are lies about the compiled graph: START has no inbound edge, END no outbound |
+| An edge into `start` | a lie about the compiled graph: START has no inbound edge |
+| An edge from one outcome node to the other | the second cannot undo the first, so the picture would promise a verdict the run does not report. An edge *out of* an outcome node to anything else is allowed — see [the node vocabulary](#the-node-vocabulary) |
 | **A cycle that no loop node sits on** | see below |
 | A `value` whose JSON does not match its kind | a `dict` where a list was promised feeds a downstream `IN` nothing usable |
 | A `sql` node with no statement, no datasource, no tables, or one that is not a single read | the guarantee above |
@@ -215,6 +503,24 @@ author could not have stored.
 | A `for_each` collecting a node outside its own body, or itself | that node ran once, so every pass would collect the same rows again |
 | A `do_until` that collects | only a loop that knows which pass is its last can publish a union — see [Unioning the passes](#unioning-the-passes) |
 | `Record the item as` with nothing collected, or not a plain column name | a field that silently does nothing is one the operator will swear they set; and it becomes a key in the result rows |
+| A `{{NAME}}` nothing on the node declares | it would render as itself into a statement, a question or a message — or, if it were emptied instead, turn `FROM {{TABLE}}` into `FROM ` |
+| A `{{NAME}}` inside quotes or a comment in a statement | a value belongs in a `:parameter`, which the driver binds and which therefore cannot change what the statement does — see [SQL and variables](#sql-and-variables--the-honest-part) |
+| A variable on an Email node | its variables come from the template it sends, and a second pass would consume them before the email renderer saw them |
+| A variable bound to `session`, `agent`, `record` or `event` | a graph has no chat session, no agent and no record in hand. Refused **by name** rather than resolving to blank |
+| A variable bound to a node that is not in the graph, or with no node chosen | a value from nowhere |
+| More than 30 variables on one node | a node needing more named values than that is describing a data structure, and the `value` node already exists for it |
+| A Timer with no action, or a Start that also points at a timer | a Start *is* the timer, so a reference on it draws a link that does nothing |
+| A Pause/Resume/Stop naming no timer, one not in the graph, or one that is not a Start | there would be nothing to act on, and the run-time failure looks identical to a branch not taken |
+| A Pause/Resume/Stop its Start cannot reach | provably dead: no run could have started the timer before arriving |
+| A Pause/Resume/Stop inside a loop whose Start is outside it | pass one is green and pass two finds the timer already finished — the worst failure mode available |
+| A Wait of less than a second, more than 900, or not a number | see [Waiting](#waiting). Refused rather than clamped, so the drawing cannot say one thing while the run does another |
+
+**Not** refused: an Email node sending a template shared with a different workspace. A
+template is *owned* by its user and merely shared with a team, so the owner's own graph may
+always send it — the picker names the team on the row and nothing is blocked. An earlier pass
+refused this and was wrong twice: it made sharing a template remove the owner's access to it,
+and since attaching a graph to an agent and sharing it into a workspace are mutually
+exclusive, it left every agent-attached graph unable to send any shared template.
 
 Every message names the node **by its label**, because the person reading it is looking at
 the drawing and a generated id like `n_msoez780_1` means nothing to them.
@@ -277,12 +583,28 @@ needs to make a decision lives next door and is testable without it — the same
 `tool_chain_service` / `tool_chain_graph` makes, and the reason
 `pytest.importorskip("langgraph")` guards only one test file.
 
-**Every node gets a conditional edge**, not a plain one. That is the central decision and it
-is what makes the rest simple: one router per node answers one question — where does the run
-go from here — and answers it for the ordinary case, the branch, the loop and the failure in
-the same place. Mixing `add_edge` for "simple" nodes with `add_conditional_edges` for the
-rest would mean a node that gained an error path had to change edge *kind*, and the failure
-path would be the one that never got tested.
+**Every node gets a conditional edge**, not a plain one — and since the outcome nodes gained
+an exit, that is true with no exceptions at all. It is the central decision and what makes
+the rest simple: one router per node answers one question — where does the run go from here —
+and answers it for the ordinary case, the branch, the loop and the failure in the same place.
+Mixing `add_edge` for "simple" nodes with `add_conditional_edges` for the rest would mean a
+node that gained an error path had to change edge *kind*, and the failure path would be the
+one that never got tested.
+
+**The router asks about outcome nodes first**, ahead of both failure checks, and that
+ordering is load-bearing rather than tidy. A `failure` node sets `failed_at` to *its own id*
+as its entire job, which is indistinguishable — from inside the router — from a node whose
+runner blew up. Asking the generic question first would send every `failure` node to `END`
+and silently drop whatever the author drew after it: no error, no step row, nothing in the
+log to look at. Pinned by
+`test_a_failure_node_still_runs_what_the_author_drew_after_it`.
+
+Removing the outcome nodes' old plain edge to `END` also fixed a quiet bug in **tested
+selections**. Chaining sends each disconnected piece's dead ends into the next piece's entry,
+and an outcome node with nothing after it is such a dead end — but `add_edge(node_id, END)`
+ignores the chaining, so the second piece never ran, and because it *was* chosen it was not
+marked skipped either. Its nodes were simply absent from the log with nothing to explain
+them.
 
 ```
 START → start ─→ sql ─→ for_each ──body──→ tool_config ─┐

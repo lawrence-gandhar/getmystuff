@@ -196,6 +196,8 @@ async def _persist_session(db: AsyncSession, session: ChatbotFlowSession) -> Non
     which would freeze `updated_at` at an old value and make every later turn
     look stale to _flow_edited_since_last_turn and _session_is_stale.
     """
+    queued_email = getattr(session, "_email_queued", False)
+
     await flow_session_crud.update(db, session.id, {
         "current_node_id": session.current_node_id,
         "variables": session.variables,
@@ -203,6 +205,21 @@ async def _persist_session(db: AsyncSession, session: ChatbotFlowSession) -> Non
         "flow_id": session.flow_id,
         "updated_at": datetime.now(timezone.utc),
     })
+
+    # An Email node ran this turn, and `update` has now committed — so the queued message is
+    # visible to a worker. Waking it here rather than in the node is the whole point: a
+    # worker woken *before* the commit looks, finds nothing, and sleeps for its full poll
+    # interval, which turns an instant send into a five-second one.
+    #
+    # Nudged from this one place because this is the single function that commits a turn, and
+    # there are four call sites that reach it. The flag is a plain attribute on the session
+    # object rather than a column: it is true for the rest of this turn only, and a column
+    # would be state nobody ever reads twice.
+    if queued_email:
+        from app.services.email_dispatch.nodes import flow_builder_runner
+
+        session._email_queued = False  # noqa: SLF001
+        flow_builder_runner.wake_worker()
 
 
 # --------------------------------------------------------------------------
@@ -741,6 +758,81 @@ def _loop_guard_result(graph_data: dict, session: ChatbotFlowSession, hops: int)
     return None
 
 
+
+async def _step_send_email(
+    db: AsyncSession,
+    chatbot_key: ChatbotApiKey,
+    graph_data: dict,
+    session: ChatbotFlowSession,
+    node: dict,
+) -> Optional[FlowEngineResult]:
+    """
+    Queue an email, and hop on without saying anything.
+
+    **Nothing is said to the visitor.** A node that announced "I have emailed the team"
+    would be putting words in the operator's mouth; if they want the visitor told, that is a
+    Send Message node next to this one, which they control. Same call a ``run_graph`` node
+    that finished quietly makes.
+
+    This is where "dynamic variables come from the Agents section" is most literal: the
+    bindings can read the conversation's own variables *and* the chatbot's prompt variables
+    from ``ChatbotAiSettings`` — ``{{COMPANY}}``, ``{{AGENT_NAME}}`` — so an email can mix
+    something the visitor typed with something the operator configured under Agents.
+
+    On failure: the ``error`` port if one is drawn, otherwise sign off. Never a silent hop
+    onward — a flow carrying on as though a step had succeeded is how a visitor gets told
+    something that is not true, which is the rule ``_step_run_graph`` states.
+
+    The message is enqueued in **this turn's session**, so it lands with the session's own
+    variable updates and the turn is atomic. The worker is woken after
+    ``_persist_session`` commits, which is why ``wake_worker`` is a separate call the caller
+    makes rather than something the runner does for itself.
+    """
+    from app.services.email_dispatch.errors import EmailFailure
+    from app.services.email_dispatch.nodes import flow_builder_runner
+
+    try:
+        queued = await flow_builder_runner.run_email_node(
+            db,
+            node,
+            chatbot_key=chatbot_key,
+            session_variables=dict(session.variables or {}),
+            session_token=session.session_token or "",
+        )
+    except Exception as exc:  # noqa: BLE001 — routed, not raised
+        message = (
+            exc.message
+            if isinstance(exc, EmailFailure)
+            else "an email step could not be completed"
+        )
+        logger.warning(
+            "Email node %s in flow session %s failed: %s",
+            node.get("id"),
+            session.id,
+            message,
+        )
+        error_edge = _find_edge(graph_data, node["id"], "error")
+        if error_edge:
+            session.current_node_id = error_edge["target"]
+            return None
+        return _end_of_flow(session)
+
+    # Recorded under the node's variable name if it has one, so a later If/Else can branch on
+    # whether an email went out. The uuid, never the bigint id — a flow variable can end up
+    # interpolated into a chat bubble.
+    _store_answer(session, node, queued["message_uuid"])
+
+    # Marked on the session so `advance_flow_session` knows to wake the worker after it
+    # commits. Set on the object rather than a column: it is true for the rest of this turn
+    # only, and a column would be state nobody reads twice.
+    session._email_queued = True  # noqa: SLF001
+
+    edge = _find_edge(graph_data, node["id"], "default")
+    if not _advance_or_complete(session, edge, node["id"]):
+        return _end_of_flow(session)
+    return None
+
+
 async def _run_one_hop(
     db: AsyncSession,
     chatbot_key: ChatbotApiKey,
@@ -771,6 +863,9 @@ async def _run_one_hop(
 
     if node_type == "run_graph":
         return await _step_run_graph(chatbot_key, graph_data, session, node)
+
+    if node_type == "send_email":
+        return await _step_send_email(db, chatbot_key, graph_data, session, node)
 
     # Unknown/unsupported node type reached at runtime — end gracefully.
     return _end_of_flow(session)

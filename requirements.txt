@@ -21,6 +21,25 @@ openpyxl
 asyncpg
 aiosqlite
 psycopg2-binary
+
+# --------------------------------------------------------------------------
+# Email Dispatch — app/services/email_dispatch/
+#
+# The stdlib's smtplib would work, wrapped in asyncio.to_thread. This is here instead
+# because of how long one SMTP conversation holds its thread: connect, STARTTLS, EHLO,
+# AUTH, MAIL FROM, RCPT TO, DATA and QUIT against a slow or greylisting relay routinely
+# runs past 30 seconds, and to_thread borrows from the same default executor that
+# polars/pyarrow work and the parquet writer already contend for. Two send workers
+# blocking two of those threads for half a minute each is a real cost paid by unrelated
+# features.
+#
+# aiosmtplib is imported at module scope in exactly ONE file — sender.py — and that is
+# deliberate rather than tidy: `sender.send_message` is the seam every test monkeypatches,
+# because tests/conftest.py's autouse `block_network` fixture raises on any non-loopback
+# TCP. Importing it anywhere else would make some other module untestable without a
+# network.
+# --------------------------------------------------------------------------
+aiosmtplib
 anthropic
 openai
 pypdf
@@ -87,3 +106,5 @@ psycopg[binary,pool]
 # swap this line for `polars-lts-cpu`. See documentations/AGENT_RECURSIVE_DATAFRAMES.md.
 # --------------------------------------------------------------------------
 polars
+
+

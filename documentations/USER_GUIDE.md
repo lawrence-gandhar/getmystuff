@@ -27,16 +27,17 @@ goes deeper.
 13. [Workflow: filters and totals over an entire result set](#13-workflow-filters-and-totals-over-an-entire-result-set)
 14. [Workflow: drawing a pipeline](#14-workflow-drawing-a-pipeline)
 15. [Workflow: moving records between systems](#15-workflow-moving-records-between-systems)
-16. [Workflow: seeing the shape of what you built](#15-workflow-seeing-the-shape-of-what-you-built)
-17. [Workflow: watching how it performs](#16-workflow-watching-how-it-performs)
-18. [The technology, explained without jargon](#17-the-technology-explained-without-jargon)
-19. [Choosing a language model](#18-choosing-a-language-model)
-20. [How your data is kept safe](#19-how-your-data-is-kept-safe)
-21. [The house rules — why refusals happen](#20-the-house-rules--why-refusals-happen)
-22. [Every limit, in one place](#21-every-limit-in-one-place)
-23. [Troubleshooting: what a message means](#22-troubleshooting-what-a-message-means)
-24. [Glossary](#23-glossary)
-25. [Where to read more](#24-where-to-read-more)
+16. [Workflow: telling someone when something happens](#16-workflow-telling-someone-when-something-happens)
+17. [Workflow: seeing the shape of what you built](#17-workflow-seeing-the-shape-of-what-you-built)
+18. [Workflow: watching how it performs](#18-workflow-watching-how-it-performs)
+19. [The technology, explained without jargon](#19-the-technology-explained-without-jargon)
+20. [Choosing a language model](#20-choosing-a-language-model)
+21. [How your data is kept safe](#21-how-your-data-is-kept-safe)
+22. [The house rules — why refusals happen](#22-the-house-rules--why-refusals-happen)
+23. [Every limit, in one place](#23-every-limit-in-one-place)
+24. [Troubleshooting: what a message means](#24-troubleshooting-what-a-message-means)
+25. [Glossary](#25-glossary)
+26. [Where to read more](#26-where-to-read-more)
 
 ---
 
@@ -154,8 +155,8 @@ hides one when you pick the other.
 | **Data Agents** | Create assistants, write their standing instructions, open their test console |
 | **Tool Configs** | Build the queries an assistant is allowed to run (there's a **Help** button here) |
 | **Tool Graphs** | See your tools drawn as diagrams (read-only) |
-| **Graph Designer** | Draw and run a data pipeline on a canvas — and use it from an agent, a workspace, a tool config or a flow |
-| **Integrations** | Move records between outside systems on a schedule — and manage the connections they use |
+| **Pipelines** | Draw and run a data pipeline on a canvas — and use it from an agent, a workspace, a tool config or a flow |
+| **Integrations** | Connect the outside systems you use (**Apps**), keep their credentials (**Connections**), and move records between them on a schedule (**Workflows**) |
 | **Aggregations** | Ask for a total over an entire result set, without spending a chat turn |
 | **Agents** | Create and configure publishable chat widgets |
 | **Flow Builder** | Draw scripted conversations |
@@ -644,6 +645,15 @@ Not every turn should go to an AI. **Flow Builder** is a canvas where you draw w
 widget says at each step — a welcome, a set of buttons, a branch on what they picked, a
 scripted reply.
 
+> **There is a Help page.** The **Help** button on the Flow Builder list — and on the canvas
+> toolbar, so you never have to leave a half-drawn flow to reach it — opens every block
+> explained, nine worked flows to copy, all the limits, and every "save refused" message with
+> what to do about it. It opens in its own tab.
+>
+> If you read one thing there first, make it **Variables, honestly**: writing `{{NAME}}` in a
+> message shows the visitor those exact characters. Message text is not a template, and that
+> catches almost everybody once.
+
 ### Ownership and the two switches
 
 Flows belong to **you**, not to a chatbot. You build one standalone, then attach it to an
@@ -681,7 +691,7 @@ Start node.
 
 ### The Run Graph node
 
-A flow block whose work is a whole **Graph Designer** graph: pick a published one and it runs
+A flow block whose work is a whole **Pipelines** graph: pick a published one and it runs
 as a single step of the conversation. Two exits — *done* and *failed* — and you should draw
 the failed one; without it a graph that could not run ends the conversation, deliberately,
 because a flow carrying on as though a step succeeded is how a visitor gets told something
@@ -962,7 +972,7 @@ agent:
 | Source | Where to tick it |
 |---|---|
 | A **Tool Config** | *Allow whole-result grouping* on the tool form |
-| A **Graph Designer** graph | *Let an agent read and filter its whole result* in the graph's **Edit** dialog |
+| A **Pipelines** graph | *Let an agent read and filter its whole result* in the graph's **Edit** dialog |
 
 A graph is worth a second thought before ticking: a tool is one query, but a graph can be a
 loop over eighty-two departments, so you're agreeing to run all of it and hold the result.
@@ -1048,9 +1058,16 @@ two data sources.
 
 # 14. Workflow: drawing a pipeline
 
-**Graph Designer** is a canvas where you compose a pipeline out of boxes and then run it —
+**Pipelines** is a canvas where you compose a pipeline out of boxes and then run it —
 whole, or one box at a time — watching the flow, the state and a capped output in a panel
 below.
+
+> **There is a Help button** on the Pipelines list *and* on the canvas itself. It opens
+> `/graph-designer/help` in a new tab: every box explained once, sixteen worked scenarios
+> (a straight line, a value in a statement, a branch, a loop, keeping every pass, the three
+> ways to union, a question mid-run, an error path, timers, waits, `{{VARIABLES}}`, an
+> email, running and testing, publishing), the limits in one table and every refusal with
+> its fix. It is this section, browsable, without leaving the drawing.
 
 ### Why it exists
 
@@ -1062,20 +1079,35 @@ way to say:
 
 Every one of those is control flow, and control flow is a drawing.
 
-### The ten boxes
+### The boxes
 
 | Box | What it holds |
 |---|---|
 | **Start** | Nothing — it says where the run begins |
 | **SQL** | A statement, its datasource, the tables it reads, declared values |
+| **Union** | The same, appended once per pass of a loop and run on the last |
 | **Value** | A literal: a flat list, a nested array, or a named object |
 | **Tool Config** | An existing tool, run exactly as an assistant would |
 | **Human** | A question, and what kind of answer it expects |
 | **Branch** | An ordered list of comparisons, plus an `else` path |
 | **For each** | Loop over another box's result, with a ceiling |
 | **Do until** | Repeat until a condition holds, with a ceiling |
-| **Success** | A message; ends the run as having worked |
-| **Failure** | A message; ends the run as having failed |
+| **Send an email** | A template, a server, who it goes to, and a value for each thing the template asks for |
+| **Timer** | Start, pause, resume or stop a stopwatch |
+| **Wait** | Pause the run for a number of seconds |
+| **Success** | A message; records the run as having worked |
+| **Failure** | A message; records the run as having failed |
+
+**Success and Failure can lead on to other boxes.** Leave the `then` dot connected to
+nothing and the run stops there, which is the usual case. But reaching an outcome is
+generally the moment you have something worth telling somebody, so you can carry on into a
+Send an email box, a Tool Config, or anything else — and on the Failure side that is exactly
+where an alert belongs: after the box that says what went wrong, not before it.
+
+Whatever follows cannot change the verdict. A run that passed through Failure is reported as
+failed even if it goes on to do three more things successfully, so you cannot join Failure to
+Success to "recover" — the canvas says so if you try. To recover from a failure, draw the
+`error` path out of the box that actually failed instead.
 
 Connect two boxes either by **dragging** from an output dot onto the target, or by
 **clicking** the output dot and then clicking the target. Both work, because users arrive
@@ -1097,6 +1129,11 @@ why none is left until execution:
 | A Branch with no conditions, or a duplicate outcome | An unreachable path, or an undefined overlap |
 | A loop over something not in the graph, or with no way out | A loop that can't finish |
 | A Human box with no question | A run that pauses silently |
+| A `{{NAME}}` nothing on that box declares | Nothing could fill it, so it would appear as itself in your statement, question or message |
+| A `{{NAME}}` inside quotes in a SQL statement | A value belongs in a declared value, which the database is handed separately and which therefore can't change what your statement does |
+| A Timer that stops one nothing can have started | No path reaches it from the Start box, so the drawing can't do what it appears to |
+| A Timer stop inside a loop whose start is outside | The first pass would work and every pass after it would find the timer already finished |
+| A Wait longer than 900 seconds | Refused rather than shortened, so the drawing never says one thing while the run does another |
 
 Every message names the box **by its label**, because you're looking at a drawing and a
 generated id means nothing to you.
@@ -1112,6 +1149,69 @@ ever executed as code, so a graph cannot be used to run arbitrary code even by i
 author. And **zero and false are not empty** — a query returning a count of zero has produced
 a real answer, and treating it as empty would send the graph down its nothing-found path
 when the thing it found was zero.
+
+### Using one box's answer inside another
+
+Any box can take values from an earlier box and write them into its own text. Open the box,
+scroll to **Variables**, press *Add variable*, and:
+
+1. **Name** it — capitals, digits and underscores, e.g. `TABLE`.
+2. **From**: *An earlier node's output* (then pick the box, and optionally a **Field** such
+   as `rows[0].name`), or *A fixed value*.
+3. **If it has no value**: stop the run and say which variable, or use a default you type.
+
+Then write `{{TABLE}}` wherever you want it — in a SQL statement, a Human question, a
+Success or Failure message, or a Value box's JSON. The panel tells you which fields on that
+particular box accept one.
+
+Two things to know. **There is no expression language** — `{{NAME}}` is replaced with a
+value and everything else is text. There are no filters, no `if`, and nothing is ever
+executed as code. And **inside a SQL statement a variable may only be a name or a whole
+number**, and only where a table or column name goes: put one inside quotes and the save
+refuses it, pointing you at a declared value instead. That is not an arbitrary rule — a
+declared value is handed to the database separately and cannot change what your statement
+does, whereas text pasted into a statement can. Use variables for the *shape* of a query
+and declared values for the *contents*.
+
+### Timing part of a run, and saying so in an email
+
+This is the recipe for "how long did it take, and tell me".
+
+1. Drop a **Timer** box where the work begins and leave it on **Start**. Give it a label —
+   *Nightly import*, say. That box *is* the timer.
+2. Do the work.
+3. Drop another **Timer**, set it to **Stop**, and choose *Nightly import* in its **Timer**
+   box.
+4. Add a **Send an email** box after it. For each thing your template asks for, choose *An
+   earlier node's output*, pick the Stop box, and type the **Field**:
+
+| Field | What you get |
+|---|---|
+| `started_at` | when it began |
+| `ended_at` | when it finished |
+| `elapsed_human` | `1h 4m 12s` — the one to put in a sentence |
+| `elapsed_seconds` | `3852.117`, if you want the number |
+| `paused_seconds` | how long it spent paused |
+
+**Pause and Resume** bracket a stretch that should not count — waiting for somebody to
+answer a Human box, for instance. Two more Timer boxes pointing at the same Start, one set
+to Pause and one to Resume. The paused time is reported separately, so nothing is lost.
+
+Put a Start/Stop pair **inside a loop** and it measures each pass on its own, with
+`elapsed_seconds` for the pass you're on and `total_elapsed_seconds` for all of them
+together. Anywhere else, starting the same timer twice is refused — it has no sensible
+meaning and it is much more likely to be a mistake.
+
+### Making the run wait
+
+A **Wait** box pauses the run for up to **900 seconds** (fifteen minutes), which is useful
+when another system needs a moment to catch up.
+
+**A waiting run does not survive a restart.** If the application is redeployed mid-wait, the
+run is stopped and does not carry on. That is why the ceiling is fifteen minutes rather than
+hours — for anything longer, use an **Integration** with a schedule, which is designed to
+survive restarts. A longer wait is refused when you save rather than quietly shortened, so
+the drawing never says one thing while the run does another.
 
 ### Testing part of one
 
@@ -1142,8 +1242,8 @@ does nothing is worse than one that says no.
 
 | Use it as | Where you set it up | What it gives you |
 |---|---|---|
-| One **Data Agent's** tool | Graph Designer list → **Edit** → *Data agent* | That agent can call the graph mid-conversation |
-| Every agent in a **Workspace** | Graph Designer list → **Edit** → *Workspace* | A team shelf: any agent in that workspace can call it, including ones you add later |
+| One **Data Agent's** tool | Pipelines list → **Edit** → *Data agent* | That agent can call the graph mid-conversation |
+| Every agent in a **Workspace** | Pipelines list → **Edit** → *Workspace* | A team shelf: any agent in that workspace can call it, including ones you add later |
 | A step inside a **Tool Config** | The tool's *Nested Tools* card | The graph runs first and its values filter that tool's query |
 | A step inside a **Flow** | A *Run Graph* block on the flow canvas | The graph runs as one step of a scripted conversation |
 
@@ -1239,25 +1339,46 @@ wait behind each other.
 **Integrations** is where a workflow reads records out of one system and writes them into
 another — on a schedule, unattended, with a record of what happened to every single one.
 
-Everything else in this platform *reads*. Graph Designer runs your queries; an assistant
+Everything else in this platform *reads*. Pipelines runs your queries; an assistant
 answers questions about your own database. This is the one part that **writes into somebody
 else's software**, which is why almost everything about it is arranged around being able to
 prove what it did.
 
-### The two pages
+### The three tabs
+
+Opening **Integrations** lands you on **Apps**, and the three tabs across the top are three
+views of the same feature.
+
+**Apps** is the gallery of systems this platform can talk to — Shopify, Brevo, and a general
+"REST API" tile for anything else that speaks JSON. Each tile says what that system can do
+(what it can read, what it can write) and how many of your own connections it already has.
+**Connect** on a tile asks only for what that system needs: Brevo wants a name and a key,
+Shopify wants your shop domain, a REST API wants an address.
 
 **Connections** is the list of systems you can reach: one entry per account, with the address
 and the credential. You can have as many as you need of the same kind — three stores and forty
-locations is the ordinary case, not an edge case.
+locations is the ordinary case, not an edge case. This is where **Test**, **Edit**, **Revoke**
+and **Delete** live.
 
 **Workflows** is the list of drawings. Each one opens on a canvas.
 
+A tile counts your connections in three groups, and the split matters: **working**, **needs
+attention**, and **switched off**. A connection whose key you revoked, or whose key the other
+system has stopped accepting, still exists — workflows point at it, so deleting it would break
+them — but it will not run until you reconnect it, and that is what "needs attention" means.
+One you switched off yourself is listed separately and never as a problem, because that was
+your decision; a page that nagged about it would teach you to ignore the badge that matters.
+
+Connecting an app **moves no data**. It gives a workflow somewhere to read from and write to;
+the workflow is what decides what travels where.
+
 ### Setting up a connection
 
-1. **Connections → Add Connection.** Choose the system, give it a name you will recognise on a
-   workflow step ("Shopify EU", not "API 2"), then fill in what it asks for. **The form
-   changes with the system you pick** — a plain REST API asks for an address, and Shopify asks
-   for your shop domain instead, because it works its own address out from that.
+1. **Apps → Connect** on the tile for the system you want, or **Connections → Add
+   Connection** if you would rather pick from a list. Give it a name you will recognise on a
+   workflow step ("Shopify EU", not "API 2"), then fill in what it asks for. **The questions
+   change with the system** — a plain REST API asks for an address, Shopify asks for your shop
+   domain instead because it works its own address out from that, and Brevo asks for neither.
 2. **Press Test.** This makes one real call and tells you what came back. A connection that
    *saves* is not the same as one that *works* — a key with the wrong permissions, an address
    missing its version number, and a security page answering instead of the data all look
@@ -1290,6 +1411,65 @@ quietly reporting success.
 On a **Read** step you can also set a **Filter**, using Shopify's own search wording — for
 example `updated_at:>2026-08-01` to read only what changed since a date, or
 `financial_status:paid`. Leave it empty to read everything.
+
+#### Connecting a Brevo account
+
+Brevo (formerly Sendinblue) is built in, and it **reads and writes** — it is the first system
+here a workflow can put records *into*. It covers two parts of your Brevo account:
+
+* **Contacts** — read your contacts and contact lists; add or update a contact, and add
+  contacts to a list.
+* **Shop data** — read your orders, products and product categories; and send any of the
+  three into Brevo.
+
+1. In Brevo: **SMTP & API → API keys → Generate a new API key.** Copy it.
+2. In GetMyStuff: **Apps → Brevo → Connect.** Give it a name and paste the key. There is
+   nothing else to fill in — Brevo is one service at one address for every account.
+3. **Press Test.**
+
+One key covers both parts, so you only ever need one Brevo connection.
+
+Every write is **safe to repeat**. Each one is an "add it, or update the one you already
+have" — matched on the email address for a contact, and on your own id for an order, product
+or category. So running yesterday's sync again updates the same records instead of creating
+duplicates, and a write that times out on the way back can be retried without a second copy
+appearing.
+
+Things to know when mapping into Brevo:
+
+* **Attributes are your account's own fields** (`FIRSTNAME`, `LASTNAME`, `SMS`, and whatever
+  else you have defined). Brevo refuses a field it does not know, so map to fields that exist
+  in your account.
+* **Adding contacts to a list needs the list's id**, not its name. Read it with the **Contact
+  lists** operation.
+
+##### Sending shop data to Brevo
+
+This is what powers Brevo's abandoned-cart emails, product recommendations and revenue
+reporting — none of them have anything to work with until your orders and products are in
+there.
+
+* **Switch the eCommerce app on in Brevo first.** Until you do, those six operations are
+  refused even though your key is perfectly good. Test only checks your contacts access, so
+  it can pass while an order sync still cannot run.
+* **Send categories first, then products, then orders.** Brevo will not invent a category
+  from a product that mentions one, and an order's lines refer to your product ids. Getting
+  the order wrong does not produce an error — it produces products filed under nothing.
+* **An order needs its lines.** Every line item must carry a product id, a price and a
+  quantity, and Brevo rejects the whole order if one line is missing any of them. Put a
+  **Validate** step before the write so a bad line is reported as one failed record instead
+  of taking the order down with it.
+* **Live orders need Backfill turned off.** It defaults to on, which imports the order
+  quietly. Leave it on for a one-off history import; set it to false for orders as they
+  happen, or nothing in Brevo will react to them.
+* **Reading shop data is rationed.** Brevo allows about a hundred of those reads an hour, so
+  set **Changed since** on a repeating sync rather than reading the whole catalogue every
+  time.
+
+**Sending email is not part of this connection**, on purpose. An email that has gone out cannot
+be recalled, so a retry would mean a second copy in somebody's inbox — sending belongs in
+**Email**, where it is built to be counted and traced. This connection is for your contact
+data.
 
 **Your key is never shown again.** It is encrypted before it is stored, and the edit form comes
 back empty with a note saying one is saved — leave it blank and it stays as it is. To remove it,
@@ -1414,7 +1594,117 @@ automatic resume after a crash either: a run whose worker stopped is marked fail
 sentence saying so, and you press Replay. Half-resuming a write into a CRM is worse than a
 clear failure with a button next to it.
 
-# 16. Workflow: seeing the shape of what you built
+# 16. Workflow: telling someone when something happens
+
+Everything up to here ends on a screen. **Email** is how a result leaves the building.
+
+You set up three things once, and then anything can send:
+
+```
+SMTP servers   how mail physically leaves — one per sending identity
+Templates      what it says, with {{PLACEHOLDERS}} for the parts that change
+Triggers       when, without building a flow at all
+```
+
+### The server
+
+Add one per sending identity — a transactional relay for receipts and a separate one for
+internal alerts, so a blown quota on one does not take out the other. Port 587 usually wants
+STARTTLS; port 465 wants SSL/TLS.
+
+**Press Test.** It connects, signs in and hangs up without sending anything, because
+operators press test buttons repeatedly and a probe that emails whoever was in the form is a
+test with a side effect. The result is remembered on the row, so when somebody reports "the
+email never arrived", the first question — did this ever work — already has an answer.
+
+Passwords are stored encrypted and **never shown again**. Editing a server comes back with
+the password box empty; leaving it empty keeps the stored one, and there is a separate tick
+to remove it.
+
+If your relay is inside your own network, it needs allow-listing in the environment rather
+than in the form — a form field that granted itself permission to reach internal addresses
+would be a security hole with a label on it. Your administrator sets
+`EMAIL_ALLOWED_PRIVATE_HOSTS` and `EMAIL_ALLOWED_PRIVATE_CIDRS`.
+
+### The template
+
+Write the subject and body, and declare every `{{PLACEHOLDER}}` you use as a variable. The
+declaration is what makes the placeholder fillable: every node, trigger and webhook that
+uses the template gets one field per declared variable.
+
+Mark a variable **required** if the email is wrong without it — the send is refused rather
+than going out with a gap. Give it a **default** if it is naturally sometimes absent, and
+that default is used instead. That is the one dial worth understanding: it decides, per
+variable, whether a missing value stops the email or is quietly filled in.
+
+Values are HTML-escaped in the HTML body, so a customer called `Bob & Sons` arrives intact
+rather than breaking the markup. Put any styling in the template itself.
+
+**Editing a template never changes an email already sent.** The log keeps the real text.
+
+### Filling variables in from elsewhere
+
+This is the part worth reading twice. A variable can take its value from:
+
+- **a fixed value** — typed into the node;
+- **the Agents section** — a prompt variable you set up under Agents, like `{{COMPANY}}`,
+  available in Flow Builder;
+- **the conversation** — something a visitor typed into an Ask-for-Input or Menu block,
+  available in Flow Builder;
+- **an earlier step's output** — in Pipelines and Integrations;
+- **the current record** — in Integrations, when sending one email per record;
+- **the incoming payload** — for event and webhook triggers.
+
+Not every source is available everywhere, and the ones that are not are **refused by name**
+rather than quietly left blank. A graph has no conversation behind it; a chat flow has no
+earlier query results. An email addressed to "Dear ," is worse than one not sent, so the
+form tells you which sources this place can actually offer.
+
+### Sending from inside something you built
+
+Drop an **Email** block into the Flow Builder, an **Send an email** node into the Graph
+Designer, or an **Send an email** step into an Integration. Pick the template, pick the
+server, fill in who it goes to, and bind each variable.
+
+Every one of them **queues** the email and carries on — it does not wait for the mail
+server, because a slow relay would otherwise hold up your whole flow. Nothing is said to a
+chat visitor unless you say it yourself with a Send Message block.
+
+Each has a **failed** exit you can draw an edge from. That covers the things knowable at the
+time — no template chosen, a variable that would not resolve. Whether the mail was
+*accepted* later is in the delivery log, not on the canvas.
+
+**In an Integration, read the mode carefully.** "One email for the whole batch" is the
+default. "One email per record" does what it says, and a batch here is routinely thousands
+of rows — so it has a limit, and a batch over that limit **fails the step and sends
+nothing** rather than emailing the first fifty. You will be told the numbers.
+
+### Sending without building anything
+
+A **trigger** is a standing instruction. Two kinds:
+
+- **When something happens in the app** — a Pipelines run finishing or failing, an
+  integration sync ending. You only ever get events about your own data.
+- **When an external system calls in** — you get a private URL and a signing secret. The
+  secret is shown **once**; copy it then. Rotating issues a new URL and secret together and
+  breaks whatever is using the old pair, which is the point of rotating.
+
+A webhook trigger needs a minimum gap between firings, because the URL is public and without
+a floor anyone holding it could make this send mail as fast as they can post.
+
+### The delivery log
+
+Every email this application has queued, with the text that actually went out. A failed one
+can be **retried**; one still waiting can be **cancelled**. Open any row to see every
+attempt, with the reason and how long it took — which is what answers "why was this an hour
+late".
+
+One message you should read carefully if you see it: *"The worker sending this email stopped
+responding, so whether it was delivered is unknown."* That means the process died in the
+middle of handing the mail over. It may have arrived. Retrying may send it twice. That
+choice is deliberately left to you rather than made for you.
+
+# 17. Workflow: seeing the shape of what you built
 
 **Tool Graphs** is a read-only page: a tree of Workspaces → Data Agents → Tools on the left,
 a canvas on the right, and a toggle between two drawings.
@@ -1469,7 +1759,7 @@ you can paste into a ticket.
 
 ---
 
-# 17. Workflow: watching how it performs
+# 18. Workflow: watching how it performs
 
 **Chatbot Analytics** reads a record written for every single visitor turn.
 
@@ -1511,7 +1801,7 @@ show a dash, rather than a fabricated zero-millisecond answer.
 
 ---
 
-# 18. The technology, explained without jargon
+# 19. The technology, explained without jargon
 
 You don't need this section to use the product. It's here because the *why* behind several
 of the platform's more opinionated behaviours lives in these choices.
@@ -1593,7 +1883,7 @@ the design rather than a claim about a prompt.
 ### Graphs: control flow you can see
 
 Several features are built as **graphs** — boxes with arrows, where each arrow is a decision
-about where to go next. Nested tools, downloads, whole-result grouping and Graph Designer
+about where to go next. Nested tools, downloads, whole-result grouping and Pipelines
 all work this way.
 
 Why not just write loops and if-statements? Because the behaviour asked for — *evaluate
@@ -1732,7 +2022,7 @@ stale.
 
 ---
 
-# 19. Choosing a language model
+# 20. Choosing a language model
 
 Three options, chosen per agent and per Ask AI request:
 
@@ -1815,7 +2105,7 @@ costs one extra write on the next answer and is never wrong.
 
 ---
 
-# 20. How your data is kept safe
+# 21. How your data is kept safe
 
 A consolidated view of what's already been mentioned in passing.
 
@@ -1842,7 +2132,7 @@ Closing it entirely needs a capability the HTTP library doesn't expose.
 
 ---
 
-# 21. The house rules — why refusals happen
+# 22. The house rules — why refusals happen
 
 Six principles show up everywhere. Once you recognise them, the platform's refusals stop
 feeling arbitrary.
@@ -1928,7 +2218,7 @@ projects tool sat beside it, enabled, reading the same table, and working.
 
 ---
 
-# 22. Every limit, in one place
+# 23. Every limit, in one place
 
 ### Tool Configs
 
@@ -1991,6 +2281,8 @@ projects tool sat beside it, enabled, reading the same table, and working.
 | Fields one operation may declare | 100 each way |
 | Shopify records per request | 250, Shopify's own maximum |
 | Shopify operations | 3, all read-only: orders, products, customers |
+| Brevo operations | 4: contacts and contact lists (read), create-or-update contact and add-to-list (write) |
+| Brevo records per request | 500 contacts, 50 lists — each endpoint's own maximum |
 | Private-address allow-list | 10 hosts and 10 ranges, no wildcards, administrators only |
 | A drafted workflow | 12 steps, 20 mappings per step, 5 assumptions |
 
@@ -2006,8 +2298,26 @@ projects tool sat beside it, enabled, reading the same table, and working.
 | Action response read / shown to a model | 256 KB / 4,000 characters |
 | Actions per turn | 1, no chaining |
 | Flow nodes / connectors | 500 / 2,000 |
-| Graph Designer boxes | **No limit** — what bounds a run is the per-loop ceiling |
+| Pipelines boxes | **No limit** — what bounds a run is the per-loop ceiling |
 | Loop ceiling | 1 to 100,000 |
+| Variables declared per graph box | 30 |
+| Wait box | 1 to 900 seconds (15 minutes) — and a waiting run does not survive a restart |
+
+### Email
+
+| | |
+|---|---|
+| Variables declared per template | 30 |
+| Length of one substituted value | 500 characters (trimmed with `…`, not refused) |
+| Variable name | Capitals, numbers and underscores — `{{company}}` and `{{COMPANY}}` are the same variable |
+| Recipients per email (To + Cc + Bcc) | 50 |
+| Subject | 998 characters |
+| Body | 200,000 characters |
+| Send attempts before giving up | 5, backing off 30s → 2m → 8m → 32m |
+| Emails from one integration batch | 50 by default, 500 maximum (over the limit **fails the step and sends nothing**) |
+| Webhook request body | 64 kB |
+| Webhook replay window | 5 minutes either side of your clock |
+| Minimum gap between webhook firings | 1 second floor; 60 seconds by default |
 
 ### Ask AI
 
@@ -2019,9 +2329,34 @@ projects tool sat beside it, enabled, reading the same table, and working.
 
 ---
 
-# 23. Troubleshooting: what a message means
+# 24. Troubleshooting: what a message means
+
+### Email
+
+| Message | What it means |
+|---|---|
+| *"{{CUSTOMER}} is required by this template but has no value."* | The template marks that variable required and nothing bound it. Bind it, or give it a default so it can fill itself in. |
+| *"{{X}} is bound to 'session', which is not available here."* | That source does not exist on this canvas — a graph has no conversation, a chat flow has no earlier query results. Pick a source the form offers. |
+| *"{{X}} is bound to a node that did not produce anything on this path."* | The step it points at was deleted, or a branch skipped it. Re-point the binding. |
+| *"This template uses {{GHOST}} but no matching variable is declared."* | Add it under Variables, or take it out of the template. |
+| *"The value for {{X}} contains a line break, which is not allowed in the subject."* | A subject is a single line. Something upstream put a newline in the value. |
+| *"'x' does not look like an email address."* | Checked deliberately strictly, so a bad address is refused while you are looking at the form rather than bouncing silently later. |
+| *"This application will not connect to smtp.internal."* | The server is on a private address, which needs allow-listing in the environment by your administrator. |
+| *"A password cannot be sent over an unencrypted connection."* | Choose STARTTLS or SSL/TLS, or clear the credentials if the relay authenticates by address. |
+| *"smtp.example.com rejected the username and password."* | Fix the credentials on the server's settings page, then press Retry on the email. |
+| *"smtp.example.com refused every recipient address."* | The addresses are wrong or the relay will not send to them. Not retried automatically — no later attempt would work either. |
+| *"…did not respond within 30 seconds. It will be tried again."* | A slow or greylisting relay. It retries on its own. |
+| *"The worker sending this email stopped responding, so whether it was delivered is unknown."* | The process died mid-handover. It may have arrived. Retrying may send it twice — which is why that choice is left to you. |
+| *"This step would send 4,000 emails and its limit is 50."* | An integration set to one-email-per-record over a large batch. Nothing was sent. Raise the limit deliberately, or filter the records first. |
+| *"This email would go to 60 addresses, and the limit is 50."* | A template is not a mailing list. Send to a distribution address instead. |
+| *"'Alerts' cannot be deleted because 2 triggers send through it."* | Delete or re-point those triggers first. Asked up front so the database does not refuse it less helpfully. |
+| *"This email is being sent right now and can no longer be stopped."* | Cancel only works while it is still queued. It may already have arrived. |
+| **HTTP 401 from a webhook** | The signature did not match, or the timestamp header was missing. |
+| **HTTP 429 from a webhook** | Called again inside the minimum gap. `Retry-After` says how long to wait. |
+| **HTTP 422 from a webhook** | The call was authentic, but its payload does not carry a field a binding needs. |
 
 ### Saving a Tool Config
+
 
 | Message | What to do |
 |---|---|
@@ -2088,7 +2423,7 @@ Open the agent's **test console** and ask the same question. Check the **tools c
 
 ---
 
-# 24. Glossary
+# 25. Glossary
 
 | Term | Meaning |
 |---|---|
@@ -2122,7 +2457,7 @@ Open the agent's **test console** and ask the same question. Check the **tools c
 
 ---
 
-# 25. Where to read more
+# 26. Where to read more
 
 **The engineering companion to this guide:**
 [ENGINEERING_TECHNOLOGY.md](ENGINEERING_TECHNOLOGY.md) — the same system explained for somebody
@@ -2153,10 +2488,20 @@ Each of the following goes deeper on one thing, with the reasoning and the measu
   queue, the scheduler, and why a batch is the unit of work
 - [SHOPIFY_CONNECTOR.md](SHOPIFY_CONNECTOR.md) — how the Shopify connection works, why it
   reads and never writes, and why the shop domain is checked so carefully
+- [BREVO_CONNECTOR.md](BREVO_CONNECTOR.md) — how the Brevo connection works, why writing a
+  contact is safe to repeat, and why sending email is deliberately not part of it
 - [INTEGRATIONS_AI.md](INTEGRATIONS_AI.md) — what the model is allowed to write when it drafts
   a workflow, and everything that checks it
 - [SECRETS_AND_KEY_ROTATION.md](SECRETS_AND_KEY_ROTATION.md) — how a stored credential is
   encrypted, and what rotating the key involves
+
+**Telling someone**
+- [EMAIL_DISPATCH.md](EMAIL_DISPATCH.md) — the engine behind chapter 16: why the text is
+  rendered and stored when the email is queued rather than when it is sent, why a worker that
+  dies mid-send leaves the email *failed* rather than retrying it, and how sending is
+  serialised per server so a burst does not get your domain blocked
+- [EVENT_BUS.md](EVENT_BUS.md) — how "when a sync fails" reaches an email trigger, and why
+  publishing can never break the thing that published
 
 **Conversations**
 - [CHATBOT_AI_SETTINGS.md](CHATBOT_AI_SETTINGS.md) — prompts, variables, model choice, actions

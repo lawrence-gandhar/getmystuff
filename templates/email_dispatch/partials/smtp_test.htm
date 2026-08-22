@@ -1,0 +1,14 @@
+{# The result of connecting to a server. Rendered whether the test passed or
+   failed — a refusal is the answer to the operator's question, not an error in
+   asking it, which is why the route returns 200 for both. #}
+{% if ok %}
+<div class="alert alert-success alert-dismissible mb-0">
+    <i class="las la-check-circle"></i> {{ message }}
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% else %}
+<div class="alert alert-danger alert-dismissible mb-0">
+    <i class="las la-exclamation-triangle"></i> {{ message }}
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}

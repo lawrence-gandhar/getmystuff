@@ -37,7 +37,13 @@ from litestar.response.sse import ServerSentEventMessage
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.auth import require_auth
-from app.models.graph_designer import BINDING_MODES, NODE_TYPES, VALUE_KINDS
+from app.models.graph_designer import (
+    BINDING_MODES,
+    MAX_NODE_VARIABLES,
+    NODE_TYPES,
+    TIMER_ACTIONS,
+    VALUE_KINDS,
+)
 from app.models.tool_configs import SQL_PARAM_TYPES
 from app.models.user import User
 from app.schemas.graph_designer import (
@@ -57,7 +63,12 @@ from app.schemas.graph_designer import (
     GraphUpdateRequest,
     GraphView,
 )
-from app.services.graph_designer import graph_run_service, graph_service
+from app.services.graph_designer import (
+    graph_run_service,
+    graph_service,
+    node_variables,
+    timers,
+)
 from app.services.graph_designer.graph_service import (
     CONDITION_OPERATORS,
     DEFAULT_MAX_ITERATIONS,
@@ -68,6 +79,7 @@ logger = logging.getLogger(__name__)
 _JSON = "application/json"
 _LIST_TEMPLATE = "graph_designer/list.htm"
 _CANVAS_TEMPLATE = "graph_designer/canvas.htm"
+_HELP_TEMPLATE = "graph_designer/help.htm"
 _ROWS_TEMPLATE = "graph_designer/partials/graph_rows.htm"
 _SAVE_TEMPLATE = "graph_designer/partials/save_result.htm"
 _EDIT_FORM_TEMPLATE = "graph_designer/partials/graph_form.htm"
@@ -98,6 +110,29 @@ class GraphDesignerController(Controller):
                 # once when somebody opens it rather than on every render of the table.
                 "active": "graph_designer",
             },
+        )
+
+    # --------------------------
+    # HELP
+    # --------------------------
+    @get("/help")
+    async def help_page(self, user: User) -> Template:
+        """
+        The Pipelines help page — the browsable form of
+        documentations/GRAPH_DESIGNER.md, opened in its own tab by the Help button on
+        the library page.
+
+        Static: it reads nothing and takes no query parameters, so there is no service
+        call and no schema to parse. It is a route rather than a link to the markdown
+        file because a help page has to arrive inside the application's own layout,
+        behind the same auth as the page it explains — the same call
+        ``tool_config_routes.help_page`` makes.
+
+        A literal path, so it cannot be confused with ``/{graph_id:uuid}/…``.
+        """
+        return Template(
+            template_name=_HELP_TEMPLATE,
+            context={"user": user, "active": "graph_designer"},
         )
 
     @post("/create")
@@ -381,17 +416,26 @@ class GraphDesignerController(Controller):
             context={"result": result.payload()},
         )
 
-    @get("/node-options")
-    async def node_options(self, db: AsyncSession, user: User) -> dict:
+    @get("/{graph_id:uuid}/node-options")
+    async def node_options(
+        self, graph_id: uuid_pkg.UUID, db: AsyncSession, user: User,
+    ) -> dict:
         """
-        What the properties panel's pickers offer.
+        What the properties panel's pickers offer, for one graph.
+
+        Scoped to a graph rather than to the user because the email template list is: a
+        graph shared into a workspace picks from that workspace's templates. There is
+        deliberately no unscoped version — it would be a documented way to fetch the
+        unfiltered list, which is the thing the scoping exists to prevent.
 
         Answered as a 200 with ``error`` set when it cannot be built, the contract
         ``GET /tool-configs/child-options`` established: a picker that cannot be filled
-        should put one sentence next to itself, not replace the canvas.
+        should put one sentence next to itself, not replace the canvas. That covers the
+        404 for somebody else's graph too, which reaches the browser as a sentence beside
+        an empty picker rather than as a broken page.
         """
         try:
-            options = await graph_service.node_options(db, user.id)
+            options = await graph_service.node_options(db, user.id, graph_id)
         except HTTPException as exc:
             return GraphNodeOptionsResponse.failure(str(exc.detail)).payload()
 
@@ -603,5 +647,22 @@ def _vocabulary() -> dict:
         "param_types": [
             {"value": value, "label": label} for value, label in SQL_PARAM_TYPES
         ],
+        # What a Timer node does. Four actions on one node type, so the picker and the
+        # validator read the same tuple.
+        "timer_actions": [
+            {"value": value, "label": label} for value, label in TIMER_ACTIONS
+        ],
+        # Which fields on each node type take a `{{VARIABLE}}`, as the labels the panel
+        # shows. Sent rather than mirrored in JavaScript for the reason this whole
+        # function exists: the server's table is what the validator enforces, and a panel
+        # offering a variable in a field the validator ignores would substitute nothing
+        # and say nothing about it.
+        "variable_fields": {
+            node_type: [spec.label for spec in specs]
+            for node_type, specs in node_variables.VARIABLE_FIELDS.items()
+        },
+        "max_node_variables": MAX_NODE_VARIABLES,
+        "max_wait_seconds": timers.MAX_WAIT_SECONDS,
+        "default_wait_seconds": timers.DEFAULT_WAIT_SECONDS,
         "default_max_iterations": DEFAULT_MAX_ITERATIONS,
     }

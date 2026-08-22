@@ -118,6 +118,7 @@ NODE_VALIDATE = "validate"
 NODE_FILTER = "filter"
 NODE_BRANCH = "branch"
 NODE_BATCH = "batch"
+NODE_EMAIL = "email"
 NODE_SUCCESS = "success"
 NODE_FAILURE = "failure"
 
@@ -144,6 +145,7 @@ NODE_TYPES = (
     (NODE_FILTER, "Filter"),
     (NODE_BRANCH, "Branch"),
     (NODE_BATCH, "Batch"),
+    (NODE_EMAIL, "Send an email"),
     (NODE_JOIN, "Join"),
     (NODE_AGGREGATE, "Aggregate"),
     (NODE_ERROR_HANDLER, "Error handler"),
@@ -206,6 +208,10 @@ NODE_PORTS = {
     NODE_VALIDATE: (PORT_VALID, PORT_INVALID, PORT_ERROR),
     NODE_FILTER: (PORT_KEPT, PORT_DROPPED, PORT_ERROR),
     NODE_BATCH: (PORT_BODY, PORT_DONE),
+    # `error` is for a refusal knowable now — no template, a batch over the send limit, a
+    # binding that cannot resolve. A relay refusing the mail tomorrow is not knowable now and
+    # routes nowhere; that is the delivery log's business.
+    NODE_EMAIL: (PORT_DEFAULT, PORT_ERROR),
     NODE_JOIN: (PORT_DEFAULT, PORT_ERROR),
     NODE_AGGREGATE: (PORT_DEFAULT, PORT_ERROR),
     NODE_ERROR_HANDLER: (PORT_DEFAULT,),
@@ -1500,7 +1506,7 @@ class IntegrationConnection(Base):
         index=True,
     )
 
-    # Which connector spec this is an instance of: "rest_generic", "shopify",
+    # Which connector spec this is an instance of: "rest_generic", "shopify", "brevo",
     # "gohighlevel", "sap_odata". A string rather than a foreign key because the specs
     # are code and data files, not rows — see connectors/registry.py.
     connector_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)

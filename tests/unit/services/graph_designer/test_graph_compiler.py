@@ -429,6 +429,75 @@ class TestFailurePaths:
         assert view["error_message"] == "Nothing matched."
         assert statuses(view)["bad"] == "succeeded"
 
+    async def test_a_failure_node_still_runs_what_the_author_drew_after_it(
+        self, make_graph, run_graph,
+    ) -> None:  # noqa: ANN001
+        """
+        The router's precedence, tested from the side that would break silently.
+
+        A Failure node sets ``failed_at`` to its *own* id, which is indistinguishable — to
+        the generic "did this node fail" check — from a node whose runner blew up. If that
+        check ran first, every Failure node would route to ``END`` and the announcement the
+        author drew after it would simply never happen: no error, no step row, nothing in
+        the log to look at. So this asserts the successor ran **and** that the verdict it
+        was told about is still failure.
+        """
+        graph = await make_graph(
+            [
+                node("s", "start"),
+                node("bad", "failure", message="Nothing matched."),
+                node("tell", "value", value_kind="list", value_json="[1]"),
+            ],
+            [edge("s", "bad"), edge("bad", "tell")],
+        )
+
+        view = await run_graph(graph)
+
+        assert statuses(view)["tell"] == "succeeded", "the successor must run"
+        assert view["status"] == RUN_FAILED, "and must not rescue the run"
+        assert view["error_message"] == "Nothing matched."
+
+    async def test_a_success_node_also_runs_what_follows_it(
+        self, make_graph, run_graph,
+    ) -> None:  # noqa: ANN001
+        """The same on the green side, where there is no ``failed_at`` to trip over."""
+        graph = await make_graph(
+            [
+                node("s", "start"),
+                node("ok", "success", message="Done."),
+                node("tell", "value", value_kind="list", value_json="[1]"),
+            ],
+            [edge("s", "ok"), edge("ok", "tell")],
+        )
+
+        view = await run_graph(graph)
+
+        assert statuses(view)["tell"] == "succeeded"
+        assert view["status"] == RUN_SUCCEEDED
+
+    async def test_a_terminal_node_with_nothing_after_it_still_ends_the_run(
+        self, datasource, make_graph, run_graph,
+    ) -> None:  # noqa: ANN001
+        """
+        The unchanged case, pinned because giving terminals an exit could have broken it.
+
+        A Success node that leads nowhere must not fall through to whatever else happens to
+        be on the canvas — an unconnected node is not a successor.
+        """
+        graph = await make_graph(
+            [
+                node("s", "start"),
+                node("ok", "success"),
+                sql("elsewhere", datasource, "SELECT id FROM departments"),
+            ],
+            [edge("s", "ok")],
+        )
+
+        view = await run_graph(graph)
+
+        assert view["status"] == RUN_SUCCEEDED
+        assert "elsewhere" not in statuses(view)
+
     async def test_a_switched_off_datasource_stops_the_node_with_a_readable_reason(
         self, db, datasource, make_graph, run_graph,
     ) -> None:  # noqa: ANN001
@@ -976,6 +1045,38 @@ class TestSelections:
         assert statuses(view)["a"] == "succeeded"
         assert statuses(view)["b"] == "succeeded"
         assert statuses(view)["mid"] == "skipped"
+
+    async def test_a_piece_ending_on_an_outcome_node_still_chains_to_the_next_piece(
+        self, datasource, make_graph, run_graph,
+    ) -> None:  # noqa: ANN001
+        """
+        A regression from the terminal special case, fixed by removing it.
+
+        Chaining works by sending each piece's *dead ends* into the next piece's entry, and
+        a Success node with nothing after it is a dead end. But ``_wire`` used to give
+        terminals a plain edge to ``END``, which ignores the chaining — so the second piece
+        never ran, and because it was chosen it was not marked skipped either. Its nodes
+        were simply absent from the log with nothing to explain them, which is the failure
+        mode this whole module argues hardest against.
+        """
+        graph = await make_graph(
+            [
+                node("s", "start"),
+                sql("a", datasource, "SELECT id FROM departments"),
+                node("ok", "success"),
+                node("mid", "value", value_kind="list", value_json="[1]"),
+                sql("b", datasource, "SELECT name FROM departments"),
+            ],
+            [edge("s", "a"), edge("a", "ok"), edge("ok", "mid"), edge("mid", "b")],
+        )
+
+        view = await run_graph(graph, scope="selection", node_ids=["a", "ok", "b"])
+
+        assert statuses(view)["ok"] == "succeeded"
+        assert statuses(view)["b"] == "succeeded", (
+            "the second piece must run, not be swallowed by the outcome node"
+        )
+        assert view["status"] == RUN_SUCCEEDED
 
     async def test_a_selection_naming_nothing_real_is_refused(
         self, db, user, make_graph,
@@ -1912,3 +2013,345 @@ class TestOwnership:
             )
 
         assert caught.value.status_code == 404
+
+
+class TestTimers:
+    """
+    The stopwatch, end to end through a real run.
+
+    ``timers.now`` is replaced with a list-driven fake returning successive fixed
+    instants, so the assertions are on exact numbers rather than on "roughly zero". A
+    test that measured the wall clock would be both slow and flaky, and would prove
+    nothing the pure tests in ``test_timers.py`` do not already prove.
+    """
+
+    @pytest.fixture
+    def clock(self, monkeypatch: pytest.MonkeyPatch):  # noqa: ANN201
+        """Successive instants, handed out one per call to ``timers.now``."""
+        from datetime import datetime, timedelta, timezone
+
+        from app.services.graph_designer import timers
+
+        epoch = datetime(2026, 8, 21, 9, 0, 0, tzinfo=timezone.utc)
+        ticks = iter([epoch + timedelta(seconds=n * 10) for n in range(200)])
+
+        # Patched as a module attribute, which only works because `node_runners` calls it
+        # as `timers.now()`. A `from ... import now` there would make this a no-op.
+        monkeypatch.setattr(timers, "now", lambda: next(ticks))
+
+        return epoch
+
+    async def test_a_start_and_a_stop_measure_the_stretch_between_them(
+        self, make_graph, run_graph, clock,
+    ) -> None:  # noqa: ANN001
+        graph = await make_graph(
+            [
+                node("s", "start"),
+                node("begin", "timer", label="Job timer", action="start"),
+                node("stop", "timer", label="Stop it", action="stop", timer_node="begin"),
+                node("ok", "success"),
+            ],
+            [edge("s", "begin"), edge("begin", "stop"), edge("stop", "ok")],
+        )
+
+        view = await run_graph(graph)
+
+        assert view["status"] == RUN_SUCCEEDED, view.get("error_message")
+        stopped = steps_by_node(view, "stop")[-1]
+        assert stopped["output_preview"]["entries"]["elapsed_seconds"] == 10.0
+
+    async def test_the_stop_reports_both_instants_for_an_email_to_quote(
+        self, make_graph, run_graph, clock,
+    ) -> None:  # noqa: ANN001
+        """
+        The question the feature exists to answer: when did it start, when did it end.
+        Both have to be readable off the Stop node's output by a downstream binding.
+        """
+        graph = await make_graph(
+            [
+                node("s", "start"),
+                node("begin", "timer", label="Job timer", action="start"),
+                node("stop", "timer", label="Stop it", action="stop", timer_node="begin"),
+            ],
+            [edge("s", "begin"), edge("begin", "stop")],
+        )
+
+        entries = steps_by_node(await run_graph(graph), "stop")[-1]["output_preview"]["entries"]
+
+        assert entries["started_at"].startswith("2026-08-21T09:00:00")
+        assert entries["ended_at"].startswith("2026-08-21T09:00:10")
+        assert entries["elapsed_human"] == "10s"
+
+    async def test_a_paused_stretch_is_not_counted(
+        self, make_graph, run_graph, clock,
+    ) -> None:  # noqa: ANN001
+        """Four boxes, four ticks: run 10s, paused 10s, run 10s. Twenty, not thirty."""
+        graph = await make_graph(
+            [
+                node("s", "start"),
+                node("begin", "timer", label="T", action="start"),
+                node("hold", "timer", label="Hold", action="pause", timer_node="begin"),
+                node("go", "timer", label="Go", action="resume", timer_node="begin"),
+                node("stop", "timer", label="Stop", action="stop", timer_node="begin"),
+            ],
+            [
+                edge("s", "begin"), edge("begin", "hold"),
+                edge("hold", "go"), edge("go", "stop"),
+            ],
+        )
+
+        entries = steps_by_node(await run_graph(graph), "stop")[-1]["output_preview"]["entries"]
+
+        assert entries["elapsed_seconds"] == 20.0
+        assert entries["paused_seconds"] == 10.0
+
+    async def test_stopping_a_timer_nobody_started_fails_the_run(
+        self, make_graph, run_graph, clock,
+    ) -> None:  # noqa: ANN001
+        """
+        The case the save cannot prove: the Start *can* reach the Stop, so the drawing is
+        allowed, but the path the run actually takes goes round it. Caught at run time,
+        with a sentence that names the likely reason.
+        """
+        graph = await make_graph(
+            [
+                node("s", "start"),
+                node("begin", "timer", label="Job timer", action="start"),
+                node("skip", "value", label="skip", value_kind="list", value_json="[1]"),
+                node("stop", "timer", label="Stop it", action="stop", timer_node="begin"),
+            ],
+            # `begin → stop` satisfies the reachability rule, but nothing leads *to*
+            # `begin`, so a run entering at `s` never passes through it.
+            [
+                edge("s", "skip"), edge("skip", "stop"),
+                edge("begin", "stop"),
+            ],
+        )
+
+        view = await run_graph(graph)
+
+        assert view["status"] == RUN_FAILED
+        assert "not been started" in (view.get("error_message") or "")
+
+    async def test_a_selection_missing_the_start_is_refused_before_it_runs(
+        self, make_graph, run_graph, clock,
+    ) -> None:
+        """
+        The better diagnosis, and the reason ``referenced_nodes`` had to learn about
+        ``timer_node``: "you left that box out of the test" rather than "the timer was
+        never started", which would send somebody looking at the wrong thing.
+        """
+        graph = await make_graph(
+            [
+                node("s", "start"),
+                node("begin", "timer", label="Job timer", action="start"),
+                node("stop", "timer", label="Stop it", action="stop", timer_node="begin"),
+            ],
+            [edge("s", "begin"), edge("begin", "stop")],
+        )
+
+        view = await run_graph(graph, scope="selection", node_ids=["s", "stop"])
+
+        assert view["status"] == RUN_FAILED
+        assert "not part of this test" in (view.get("error_message") or "")
+
+    async def test_a_timer_does_not_become_what_the_graph_returned(
+        self, datasource, make_graph, run_graph, clock,
+    ) -> None:  # noqa: ANN001
+        """
+        A timer's output is bookkeeping. A graph that read rows and then stopped a timer
+        must still report the rows — the same regression `_DATA_NODE_TYPES` was narrowed
+        for once already.
+        """
+        graph = await make_graph(
+            [
+                node("s", "start"),
+                sql("rows", datasource, "SELECT id FROM departments"),
+                node("begin", "timer", label="T", action="start"),
+                node("stop", "timer", label="Stop", action="stop", timer_node="begin"),
+                node("ok", "success"),
+            ],
+            [
+                edge("s", "begin"), edge("begin", "rows"),
+                edge("rows", "stop"), edge("stop", "ok"),
+            ],
+        )
+
+        view = await run_graph(graph)
+
+        assert view["status"] == RUN_SUCCEEDED, view.get("error_message")
+        assert view["result_preview"]["node_id"] == "rows"
+        assert view["result_preview"]["output"]["kind"] == "rows"
+
+
+class TestWaiting:
+    """
+    The one node that pauses a run.
+
+    ``timers.sleep`` is replaced with a recorder. **No test in this suite may await the
+    real one** — the point of the seam is that a fifteen-minute ceiling costs nothing to
+    exercise.
+    """
+
+    @pytest.fixture
+    def slept(self, monkeypatch: pytest.MonkeyPatch) -> list:
+        from app.services.graph_designer import timers
+
+        recorded: list = []
+
+        async def _record(seconds: float) -> None:
+            recorded.append(seconds)
+
+        monkeypatch.setattr(timers, "sleep", _record)
+
+        return recorded
+
+    async def test_it_waits_for_what_it_was_told_and_carries_on(
+        self, make_graph, run_graph, slept,
+    ) -> None:  # noqa: ANN001
+        graph = await make_graph(
+            [
+                node("s", "start"),
+                node("w", "wait", label="Wait", seconds=30),
+                node("ok", "success"),
+            ],
+            [edge("s", "w"), edge("w", "ok")],
+        )
+
+        view = await run_graph(graph)
+
+        assert view["status"] == RUN_SUCCEEDED, view.get("error_message")
+        assert slept == [30]
+
+    async def test_a_duration_edited_past_the_ceiling_by_hand_never_starts(
+        self, db, user, make_graph, slept,
+    ) -> None:  # noqa: ANN001
+        """
+        `graph_data` is JSONB and can be edited outside the form, so the ceiling has to
+        hold for whatever is in the column.
+
+        It is caught by `validate_graph`, which the run calls before it compiles — so the
+        run is refused rather than started and failed. That is the better outcome and it
+        is the reason the rule lives in the validator as well as the runner.
+        """
+        from litestar.exceptions import HTTPException
+
+        from app.services.graph_designer.timers import MAX_WAIT_SECONDS
+
+        graph = await make_graph(
+            [
+                node("s", "start"),
+                node("w", "wait", label="Wait", seconds=MAX_WAIT_SECONDS + 1),
+            ],
+            [edge("s", "w")],
+        )
+
+        with pytest.raises(HTTPException) as caught:
+            await graph_run_service.start_run(db, user.id, graph.uuid)
+
+        assert str(MAX_WAIT_SECONDS) in caught.value.detail
+        assert slept == [], "nothing should have slept"
+
+    async def test_the_runner_re_checks_the_ceiling_itself(self, slept) -> None:  # noqa: ANN001
+        """
+        The validator is the first line, not the only one: there is no `asyncio.wait_for`
+        around a runner in this package, so this number is the only thing bounding how
+        long a run can be parked. Called directly, past the validator, the way a
+        hand-edited row would reach it.
+        """
+        from app.services.graph_designer.node_runners import NodeFailure, RunContext
+        from app.services.graph_designer.node_runners import _run_wait
+        from app.services.graph_designer.timers import MAX_WAIT_SECONDS
+
+        with pytest.raises(NodeFailure, match=str(MAX_WAIT_SECONDS)):
+            await _run_wait(
+                node("w", "wait", label="Wait", seconds=MAX_WAIT_SECONDS + 1),
+                {"outputs": {}},
+                RunContext(1, 1),
+            )
+
+        assert slept == []
+
+
+class TestVariablesInARun:
+    """``{{VARIABLE}}`` substitution, driven through a real run."""
+
+    async def test_a_statement_takes_its_table_from_an_earlier_node(
+        self, datasource, make_graph, run_graph,
+    ) -> None:  # noqa: ANN001
+        graph = await make_graph(
+            [
+                node("s", "start"),
+                node(
+                    "which", "value", label="which",
+                    value_kind="dict", value_json='{"table": "departments"}',
+                ),
+                sql(
+                    "rows", datasource, "SELECT id FROM {{TABLE}}",
+                    variables={
+                        "TABLE": {"source": "node", "node_id": "which", "path": "table"},
+                    },
+                ),
+                node("ok", "success"),
+            ],
+            [edge("s", "which"), edge("which", "rows"), edge("rows", "ok")],
+        )
+
+        view = await run_graph(graph)
+
+        assert view["status"] == RUN_SUCCEEDED, view.get("error_message")
+        assert view["result_preview"]["node_id"] == "rows"
+        assert view["result_preview"]["output"]["count"] > 0
+
+    async def test_a_value_that_is_not_a_name_is_refused_before_it_reaches_the_database(
+        self, datasource, make_graph, run_graph,
+    ) -> None:  # noqa: ANN001
+        """The security boundary, exercised end to end rather than only as a unit."""
+        graph = await make_graph(
+            [
+                node("s", "start"),
+                node(
+                    "which", "value", label="which",
+                    value_kind="dict",
+                    value_json='{"table": "departments; DROP TABLE departments"}',
+                ),
+                sql(
+                    "rows", datasource, "SELECT id FROM {{TABLE}}",
+                    variables={
+                        "TABLE": {"source": "node", "node_id": "which", "path": "table"},
+                    },
+                ),
+            ],
+            [edge("s", "which"), edge("which", "rows")],
+        )
+
+        view = await run_graph(graph)
+
+        assert view["status"] == RUN_FAILED
+        assert "name or a whole number" in (view.get("error_message") or "")
+
+    async def test_a_success_message_can_quote_a_timer(
+        self, make_graph, run_graph,
+    ) -> None:  # noqa: ANN001
+        """The whole feature in one graph: measure it, then say how long it took."""
+        graph = await make_graph(
+            [
+                node("s", "start"),
+                node("begin", "timer", label="T", action="start"),
+                node("stop", "timer", label="Stop", action="stop", timer_node="begin"),
+                node(
+                    "ok", "success", label="Done", message="Finished in {{DURATION}}.",
+                    variables={
+                        "DURATION": {
+                            "source": "node", "node_id": "stop", "path": "elapsed_human",
+                        },
+                    },
+                ),
+            ],
+            [edge("s", "begin"), edge("begin", "stop"), edge("stop", "ok")],
+        )
+
+        view = await run_graph(graph)
+
+        assert view["status"] == RUN_SUCCEEDED, view.get("error_message")
+        assert "Finished in " in steps_by_node(view, "ok")[-1]["message"]

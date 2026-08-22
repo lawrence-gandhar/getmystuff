@@ -261,6 +261,80 @@ class TestRateLimitValidation:
         assert RateLimitSpec().daily_soft_limit < 1.0
 
 
+class TestPerOperationRateLimits:
+    """
+    An operation may declare its own allowance when the connector's single figure would
+    be wrong for it. Brevo is why: 10/second for contacts, 5 for order writes, 2 for
+    product writes and 100 **per hour** for the rest, all on one connection.
+    """
+
+    def test_an_operation_has_no_allowance_by_default(self) -> None:
+        """The overwhelmingly common case, and the one every connector written before
+        this field relies on."""
+        operation = OperationSpec(operation_id="read", path="/x")
+
+        assert operation.rate_limits is None
+        assert operation.rate_limit_group == ""
+
+    def test_a_declared_allowance_is_validated_like_any_other(self) -> None:
+        with pytest.raises(ValueError, match="sends nothing"):
+            OperationSpec(
+                operation_id="read",
+                path="/x",
+                rate_limits=RateLimitSpec(requests_per_second=0),
+            ).validated()
+
+    def test_a_group_naming_no_allowance_is_refused(self) -> None:
+        """
+        The failure worth catching. It reads exactly like an operation with its own
+        budget and silently has not got one — the call falls back to the connector's
+        figure, which is the number the field exists because it was wrong.
+        """
+        with pytest.raises(ValueError, match="declares no limits of its own"):
+            OperationSpec(
+                operation_id="read", path="/x", rate_limit_group="orders"
+            ).validated()
+
+    def test_an_allowance_without_a_group_is_fine(self) -> None:
+        """The group is an optional narrowing — ``sender._bucket_key`` falls back to the
+        operation id, which is the right bucket for a quota granted per endpoint."""
+        operation = OperationSpec(
+            operation_id="read", path="/x", rate_limits=RateLimitSpec()
+        ).validated()
+
+        assert operation.rate_limit_group == ""
+
+    def test_it_stays_out_of_the_fingerprint(self) -> None:
+        """
+        Same rule as ``has_more_path``: it decides *when* a request leaves, never what it
+        says. Retuning a limit after a vendor publishes new figures would otherwise move
+        every fingerprint at once and make every prior run look like it ran something
+        else.
+        """
+        plain = OperationSpec(operation_id="read", path="/x")
+        metered = OperationSpec(
+            operation_id="read",
+            path="/x",
+            rate_limits=RateLimitSpec(requests_per_second=1.0),
+            rate_limit_group="slow",
+        )
+
+        assert plain.fingerprint() == metered.fingerprint()
+
+    def test_a_database_row_cannot_grant_itself_an_allowance(self) -> None:
+        """
+        Vendor-declared only, and deliberately so rather than unfinished. A row is a form
+        somebody filled in; an operation that could set its own send rate would let that
+        form decide how fast we hammer a third party from our egress address.
+        """
+        operation = an_operation(
+            rate_limits={"requests_per_second": 1000.0}, rate_limit_group="fast"
+        )
+
+        assert operation.rate_limits is None
+        assert operation.rate_limit_group == ""
+
+
 # ---------------------------------------------------------------------------
 # The fingerprint
 # ---------------------------------------------------------------------------

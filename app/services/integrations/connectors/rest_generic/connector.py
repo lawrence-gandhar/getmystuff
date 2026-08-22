@@ -61,6 +61,8 @@ SPEC = ConnectorSpec(
         "Any HTTP API that returns JSON. You supply the address, the key and what the "
         "calls look like."
     ),
+    icon="las la-code",
+    accent="#495057",
     auth=AuthSpec(
         kind=AUTH_API_KEY,
         placement=PLACEMENT_HEADER,

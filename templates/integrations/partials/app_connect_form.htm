@@ -1,0 +1,186 @@
+{# The credential dialog for one app, rendered into `#appConnectModalContent`.
+
+   **The questions are decided here, not in the browser.** The app was already chosen by
+   clicking its tile, so the server knows whether this connector computes its own address
+   (Brevo, Shopify) or is told one (a REST API), and whether it needs an account id. That
+   is the difference between this and the Add connection dropdown, where the user picks a
+   system inside the form and a script has to rearrange it — nothing here to keep in step,
+   and nothing that breaks if a script fails to load.
+
+   A field that does not apply is **absent**, not hidden: there is nothing disabled to
+   re-enable and nothing empty to post. #}
+<div class="modal-header border-bottom">
+    <h5 class="modal-title d-flex align-items-center gap-2">
+        <span
+            class="d-inline-flex align-items-center justify-content-center rounded"
+            style="width: 32px; height: 32px; background-color: {{ app.accent }}; color: #fff;"
+            aria-hidden="true"
+        >
+            <i class="{{ app.icon }}"></i>
+        </span>
+        Connect {{ app.label }}
+    </h5>
+    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+</div>
+
+{# Closes itself only on success, by reading the `data-success` marker the response
+   carries — so a refused shop domain leaves the dialog open with what was typed still in
+   it. The same contract every other form in this feature uses. #}
+<form
+    hx-post="/integrations/apps/{{ app.connector_id }}/connect"
+    hx-target="#apps-response"
+    hx-swap="innerHTML"
+    hx-on::after-request="
+        const el = document.getElementById('apps-response');
+        if (el && el.querySelector('[data-success=true]')) {
+            this.reset();
+            bootstrap.Modal.getInstance(document.getElementById('appConnectModal')).hide();
+        }
+    "
+>
+    <div class="modal-body">
+
+        <p class="small text-muted">
+            {{ app.description }}
+        </p>
+
+        <div class="mb-3">
+            <label for="appConnectLabel" class="form-label fw-semibold">
+                Name <span class="text-danger">*</span>
+            </label>
+            <input
+                type="text"
+                id="appConnectLabel"
+                name="label"
+                class="form-control"
+                placeholder="e.g. {{ app.label }} production"
+                required
+                maxlength="255"
+                autocomplete="off"
+            >
+            <div class="form-text">
+                What you will recognise this account by on a workflow step. Connect the
+                same app again for a second account.
+            </div>
+        </div>
+
+        {% if app.asks_for_base_url %}
+            <div class="mb-3">
+                <label for="appConnectBaseUrl" class="form-label fw-semibold">
+                    API address <span class="text-danger">*</span>
+                </label>
+                <input
+                    type="url"
+                    id="appConnectBaseUrl"
+                    name="base_url"
+                    class="form-control"
+                    placeholder="https://api.example.com/v2"
+                    required
+                    maxlength="2048"
+                >
+                <div class="form-text">
+                    Must be <strong>https</strong>, and must not be an address inside your
+                    own network.
+                </div>
+            </div>
+        {% endif %}
+
+        {% if app.asks_for_account_id %}
+            {# The `pattern` comes from the connector's spec. It saves a round trip and is
+               not the control that matters: the service checks the same pattern on the way
+               in, and the connector checks it a third time immediately before the value
+               becomes a hostname. #}
+            <div class="mb-3">
+                <label for="appConnectAccountId" class="form-label fw-semibold">
+                    {{ app.account_id_label or "Account" }} <span class="text-danger">*</span>
+                </label>
+                <input
+                    type="text"
+                    id="appConnectAccountId"
+                    name="external_account_id"
+                    class="form-control"
+                    placeholder="{{ app.account_id_help }}"
+                    {% if app.account_id_pattern %}pattern="{{ app.account_id_pattern }}"{% endif %}
+                    required
+                    maxlength="255"
+                    autocomplete="off"
+                    spellcheck="false"
+                >
+                {% if app.account_id_help %}
+                    <div class="form-text">
+                        For example {{ app.account_id_help }}.
+                    </div>
+                {% endif %}
+            </div>
+        {% endif %}
+
+        {% if app.auth_kind == "api_key" %}
+            <div>
+                <label for="appConnectApiKey" class="form-label fw-semibold">
+                    API key <span class="text-danger">*</span>
+                </label>
+                {# type=password so it is not shoulder-read and not kept by a browser's
+                   form autofill alongside ordinary text fields. #}
+                <input
+                    type="password"
+                    id="appConnectApiKey"
+                    name="api_key"
+                    class="form-control"
+                    required
+                    autocomplete="new-password"
+                    maxlength="4096"
+                >
+                <div class="form-text">
+                    Encrypted before it is stored, and never shown again. A connection
+                    saved without one cannot call anything — press <strong>Test</strong> on
+                    the Connections tab to check this key really works.
+                </div>
+            </div>
+        {% elif app.auth_kind == "basic" %}
+            <div class="mb-3">
+                <label for="appConnectUsername" class="form-label fw-semibold">
+                    Username <span class="text-danger">*</span>
+                </label>
+                <input
+                    type="text"
+                    id="appConnectUsername"
+                    name="username"
+                    class="form-control"
+                    required
+                    maxlength="255"
+                    autocomplete="off"
+                >
+            </div>
+            <div>
+                <label for="appConnectPassword" class="form-label fw-semibold">
+                    Password <span class="text-danger">*</span>
+                </label>
+                <input
+                    type="password"
+                    id="appConnectPassword"
+                    name="password"
+                    class="form-control"
+                    required
+                    autocomplete="new-password"
+                    maxlength="4096"
+                >
+                <div class="form-text">
+                    Encrypted before it is stored, and never shown again.
+                </div>
+            </div>
+        {% else %}
+            <div class="alert alert-secondary small mb-0">
+                This app needs no credential.
+            </div>
+        {% endif %}
+
+    </div>
+    <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">
+            Cancel
+        </button>
+        <button type="submit" class="btn btn-primary">
+            <i class="las la-plug"></i> Connect
+        </button>
+    </div>
+</form>

@@ -214,14 +214,33 @@ class TestValidateGraphStructure:
 
         assert "connect into the Start node" in caught.value.detail
 
-    def test_refuses_an_edge_out_of_a_terminal_node(self) -> None:
+    def test_allows_an_edge_out_of_a_terminal_node(self) -> None:
+        """
+        This used to be refused, and the refusal was the bug.
+
+        Reaching an outcome is the moment there is finally something worth announcing, and
+        announcing it takes a node — so the author has to be able to put one after the box
+        that says what happened, not only before it.
+        """
+        svc.validate_graph(graph(
+            [node("s", "start"), node("ok", "success"), value_node("v")],
+            [edge("s", "ok"), edge("ok", "v")],
+        ))
+
+    def test_refuses_one_outcome_leading_to_another(self) -> None:
+        """
+        The one thing a successor may not do is change the verdict.
+
+        ``failed_at`` is set by the time the second one runs and nothing clears it, so this
+        drawing would show a run finishing on Success while the log reported it failed.
+        """
         with pytest.raises(HTTPException) as caught:
             svc.validate_graph(graph(
-                [node("s", "start"), node("ok", "success"), value_node("v")],
-                [edge("s", "ok"), edge("ok", "v")],
+                [node("s", "start"), node("bad", "failure"), node("ok", "success")],
+                [edge("s", "bad"), edge("bad", "ok")],
             ))
 
-        assert "ends the run" in caught.value.detail
+        assert "already decides how this run ends" in caught.value.detail
 
     def test_refuses_two_edges_leaving_one_port(self) -> None:
         """
@@ -1060,6 +1079,257 @@ class TestValidateLoopCollection:
             ))
 
         assert "cannot collect its passes" in caught.value.detail
+
+
+class TestValidateTimerNodes:
+    """
+    Which of the four things a Timer node does, and — for three of them — to which timer.
+
+    The identity is a node id rather than a typed-in name precisely so these checks can
+    exist: nothing offline can prove two boxes spell "Job timer" the same way, and a typo
+    would surface at run time as "that timer has not been started", which is
+    indistinguishable from a branch the run did not take.
+    """
+
+    def _timers(self, **stop_data) -> dict:
+        """``start → begin → stop`` — the smallest measured stretch."""
+        return graph(
+            [
+                node("s", "start"),
+                node("begin", "timer", label="Job timer", action="start"),
+                node("stop", "timer", label="Stop it", **stop_data),
+            ],
+            [edge("s", "begin"), edge("begin", "stop")],
+        )
+
+    def test_accepts_a_start_followed_by_a_stop(self) -> None:
+        svc.validate_graph(self._timers(action="stop", timer_node="begin"))
+
+    def test_accepts_a_start_with_no_stop_at_all(self) -> None:
+        """A graph that only wants to know when something began is a legitimate graph."""
+        svc.validate_graph(graph(
+            [node("s", "start"), node("begin", "timer", label="T", action="start")],
+            [edge("s", "begin")],
+        ))
+
+    def test_refuses_a_timer_with_no_action(self) -> None:
+        with pytest.raises(HTTPException) as caught:
+            svc.validate_graph(self._timers())
+
+        assert "Start, Pause, Resume or Stop" in caught.value.detail
+
+    def test_refuses_a_start_that_also_points_at_a_timer(self) -> None:
+        """A Start *is* the timer, so a reference on it would draw a link that does nothing."""
+        with pytest.raises(HTTPException) as caught:
+            svc.validate_graph(self._timers(action="start", timer_node="begin"))
+
+        assert "it *is* the timer" in caught.value.detail
+
+    def test_refuses_a_stop_that_names_no_timer(self) -> None:
+        with pytest.raises(HTTPException) as caught:
+            svc.validate_graph(self._timers(action="stop"))
+
+        assert "does not say which timer" in caught.value.detail
+
+    def test_refuses_a_stop_pointing_at_a_node_that_is_gone(self) -> None:
+        with pytest.raises(HTTPException) as caught:
+            svc.validate_graph(self._timers(action="stop", timer_node="vanished"))
+
+        assert "no longer in this graph" in caught.value.detail
+
+    def test_refuses_a_stop_pointing_at_something_that_is_not_a_timer(self) -> None:
+        with pytest.raises(HTTPException) as caught:
+            svc.validate_graph(self._timers(action="stop", timer_node="s"))
+
+        assert "not a Timer set to Start" in caught.value.detail
+
+    def test_refuses_a_stop_pointing_at_another_stop(self) -> None:
+        """Only the box that begins the timing can be the one others act on."""
+        with pytest.raises(HTTPException) as caught:
+            svc.validate_graph(graph(
+                [
+                    node("s", "start"),
+                    node("begin", "timer", label="T", action="start"),
+                    node("p", "timer", label="Pause", action="pause", timer_node="begin"),
+                    node("stop", "timer", label="Stop", action="stop", timer_node="p"),
+                ],
+                [edge("s", "begin"), edge("begin", "p"), edge("p", "stop")],
+            ))
+
+        assert "not a Timer set to Start" in caught.value.detail
+
+    def test_refuses_a_stop_its_start_cannot_reach(self) -> None:
+        """
+        Provably dead: no path means no run can have started the timer by the time it
+        arrives. Reachability proves *impossible*, never *certain* — a branch that can
+        skip the Start is left to run time, where the message names the branch.
+        """
+        with pytest.raises(HTTPException) as caught:
+            svc.validate_graph(graph(
+                [
+                    node("s", "start"),
+                    node("begin", "timer", label="Job timer", action="start"),
+                    node("stop", "timer", label="Stop it", action="stop", timer_node="begin"),
+                ],
+                [edge("s", "stop")],
+            ))
+
+        assert "no path from" in caught.value.detail
+
+    def test_refuses_a_stop_inside_a_loop_whose_start_is_outside(self) -> None:
+        """
+        The worst failure mode available: pass one is green and pass two finds the timer
+        already stopped. Refused rather than left to run time for that reason.
+        """
+        with pytest.raises(HTTPException) as caught:
+            svc.validate_graph(graph(
+                [
+                    node("s", "start"),
+                    sql_node("q"),
+                    node("begin", "timer", label="Job timer", action="start"),
+                    node("loop", "for_each", label="each", source_node="q", item_name="item"),
+                    node("stop", "timer", label="Stop it", action="stop", timer_node="begin"),
+                    node("ok", "success"),
+                ],
+                [
+                    edge("s", "q"), edge("q", "begin"), edge("begin", "loop"),
+                    edge("loop", "stop", "body"), edge("stop", "loop"),
+                    edge("loop", "ok", "done"),
+                ],
+            ))
+
+        assert "every pass after it" in caught.value.detail
+
+    def test_accepts_a_whole_timer_inside_one_loop_body(self) -> None:
+        """Measuring each pass is the point of allowing a restart at all."""
+        svc.validate_graph(graph(
+            [
+                node("s", "start"),
+                sql_node("q"),
+                node("loop", "for_each", label="each", source_node="q", item_name="item"),
+                node("begin", "timer", label="Pass timer", action="start"),
+                node("stop", "timer", label="Stop pass", action="stop", timer_node="begin"),
+                node("ok", "success"),
+            ],
+            [
+                edge("s", "q"), edge("q", "loop"),
+                edge("loop", "begin", "body"), edge("begin", "stop"), edge("stop", "loop"),
+                edge("loop", "ok", "done"),
+            ],
+        ))
+
+
+class TestValidateWaitNodes:
+    """
+    The ceiling on how long a run may be parked. It is enforced here *and* in the runner,
+    because there is no ``asyncio.wait_for`` around a runner in this package and
+    ``graph_data`` is JSONB that can be edited by hand.
+    """
+
+    def _wait(self, **data) -> dict:
+        return graph(
+            [node("s", "start"), node("w", "wait", label="Wait", **data)],
+            [edge("s", "w")],
+        )
+
+    def test_accepts_an_ordinary_wait(self) -> None:
+        svc.validate_graph(self._wait(seconds=30))
+
+    def test_refuses_a_wait_with_no_duration(self) -> None:
+        with pytest.raises(HTTPException) as caught:
+            svc.validate_graph(self._wait())
+
+        assert "how long to wait" in caught.value.detail
+
+    def test_refuses_longer_than_the_ceiling_and_names_it(self) -> None:
+        """
+        Refused rather than clamped — clamping would leave the drawing saying two hours
+        while the run waited fifteen minutes.
+        """
+        from app.services.graph_designer.timers import MAX_WAIT_SECONDS
+
+        with pytest.raises(HTTPException) as caught:
+            svc.validate_graph(self._wait(seconds=MAX_WAIT_SECONDS + 1))
+
+        assert str(MAX_WAIT_SECONDS) in caught.value.detail
+
+    def test_refuses_a_duration_that_is_not_a_number(self) -> None:
+        with pytest.raises(HTTPException):
+            svc.validate_graph(self._wait(seconds="soon"))
+
+
+class TestValidateNodeVariables:
+    """
+    ``{{VARIABLE}}`` declarations, checked for every node type. The full rule set lives in
+    ``test_node_variables.py``; these are the ones that have to survive the trip through
+    ``validate_graph``, which is what save, publish and run all call.
+    """
+
+    def test_accepts_a_declared_variable(self) -> None:
+        svc.validate_graph(graph(
+            [
+                node("s", "start"),
+                sql_node("q"),
+                node("ok", "success", label="Done", message="Took {{DURATION}}.",
+                     variables={"DURATION": {"source": "node", "node_id": "q"}}),
+            ],
+            [edge("s", "q"), edge("q", "ok")],
+        ))
+
+    def test_refuses_a_placeholder_nothing_declares(self) -> None:
+        with pytest.raises(HTTPException) as caught:
+            svc.validate_graph(graph(
+                [node("s", "start"), node("ok", "success", label="Done",
+                                          message="Took {{DURATION}}.")],
+                [edge("s", "ok")],
+            ))
+
+        assert "{{DURATION}}" in caught.value.detail
+        assert "Done" in caught.value.detail
+
+    def test_refuses_a_variable_inside_quotes_in_a_statement(self) -> None:
+        """
+        The save-time half of the SQL guard. A value belongs in a ``:parameter``, which
+        the driver binds and which therefore cannot change what the statement does.
+        """
+        with pytest.raises(HTTPException) as caught:
+            svc.validate_graph(graph(
+                [
+                    node("s", "start"),
+                    sql_node("q", label="Q",
+                             sql_query="SELECT * FROM t WHERE region = '{{REGION}}'",
+                             variables={"REGION": {"source": "literal", "value": "EMEA"}}),
+                ],
+                [edge("s", "q")],
+            ))
+
+        assert ":parameter" in caught.value.detail
+
+    def test_accepts_a_variable_where_a_table_name_goes(self) -> None:
+        svc.validate_graph(graph(
+            [
+                node("s", "start"),
+                sql_node("q", label="Q", sql_query="SELECT * FROM {{TABLE}}",
+                         variables={"TABLE": {"source": "literal", "value": "orders"}}),
+            ],
+            [edge("s", "q")],
+        ))
+
+    def test_refuses_variables_on_an_email_node(self) -> None:
+        """Its variables come from the template it sends, and the message says where to look."""
+        with pytest.raises(HTTPException) as caught:
+            svc.validate_graph(graph(
+                [
+                    node("s", "start"),
+                    node("mail", "email", label="Notify",
+                         template_id="t", smtp_config_id="c",
+                         recipients={"to": ["ops@example.com"]},
+                         variables={"X": {"source": "literal", "value": "1"}}),
+                ],
+                [edge("s", "mail")],
+            ))
+
+        assert "template" in caught.value.detail
 
 
 class TestOwnership:
