@@ -7,8 +7,11 @@
    what `update_connection` already does — so the commonest edit, fixing a typo in the
    name, cannot accidentally clear a working credential. #}
 <div class="modal-header border-bottom">
+    {# The connector's own glyph rather than a generic plug, from the connection view. A
+       hardcoded icon here would be a second list of every connector to keep in step. #}
     <h5 class="modal-title">
-        <i class="las la-plug text-primary"></i> {{ connection.label }}
+        <i class="{{ connection.icon }}" style="color: {{ connection.accent }};"></i>
+        {{ connection.label }}
     </h5>
     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
 </div>

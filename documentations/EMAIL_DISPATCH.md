@@ -121,7 +121,7 @@ closed list — there is no expression evaluator anywhere, the same discipline
 |---|---|---|
 | `literal` | a fixed value typed into the node | everywhere |
 | `agent` | the chatbot's prompt variables, via `chatbot_ai_settings_service.variables_map` | Flow Builder |
-| `session` | what the conversation collected (`ChatbotFlowSession.variables`) | Flow Builder |
+| `session` | what the conversation collected (`ChatbotFlowSession.variables`) — an Ask-for-Input answer, a Menu choice, a Run Graph row count, or an **AI Fallback answer** | Flow Builder |
 | `node` | an earlier node's output, `state["outputs"][node_id]`, by path | Graph Designer, Integrations |
 | `record` | a field on the record in hand | Integrations (per-record mode only) |
 | `event` | a field on the event or webhook payload, by path | event and webhook triggers |
@@ -136,6 +136,12 @@ rather than declared, so reading the column would miss it and the miss would be 
 no chat session; a flow has no upstream node outputs (its whole state is one flat string
 map). `VariableContext.available()` decides, and the refusal names both the variable and
 why — at save time by each canvas's validator, and again at run time.
+
+**A flow needs no `node` source, and that is the point of the flat map.** "Email me what the
+AI just worked out" is an AI Fallback node storing its answer under a variable name it was
+given — see [FLOW_BUILDER.md](FLOW_BUILDER.md) — after which the email binds `session` like
+any other collected value. One source serving both keeps the refusal above honest instead of
+growing a fourth one per node type that produces something.
 
 ## 5. The Email node, per canvas
 

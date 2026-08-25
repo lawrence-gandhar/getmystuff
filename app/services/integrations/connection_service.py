@@ -104,9 +104,36 @@ async def get_connection(
     return connection
 
 
-def connector_labels() -> Dict[str, str]:
-    """``{connector_id: label}`` for the list page."""
-    return {spec.connector_id: spec.label for spec in registry.all_connectors()}
+def connector_info() -> Dict[str, Dict[str, Any]]:
+    """
+    ``{connector_id: {label, icon, accent, can_read, can_write}}`` — how each connector is
+    drawn, and which directions it works in.
+
+    One map rather than a keyword argument per attribute, because the list did not stop at
+    the label and will not stop at the accent. Everything in it is safe to send: a name, a
+    CSS class, a hex colour and two booleans say nothing about where a request goes.
+
+    ``can_read`` / ``can_write`` are what stop the canvas offering a "Write to" step for a
+    read-only connector — Shopify declares no write operations, and a palette entry for one
+    would be a step that can never have an operation chosen. A connector whose operations
+    are user-defined answers True to both: what a REST connection can do is a question
+    about its rows, which only the per-connection operations endpoint can answer.
+
+    Read from the registry here so ``credential_service`` never has to import it — see
+    ``build_connection_views``.
+    """
+    info: Dict[str, Dict[str, Any]] = {}
+
+    for spec in registry.all_connectors():
+        info[spec.connector_id] = {
+            "label": spec.label,
+            "icon": spec.icon,
+            "accent": spec.accent,
+            "can_read": spec.operations_are_user_defined or bool(spec.readable_operations()),
+            "can_write": spec.operations_are_user_defined or bool(spec.writable_operations()),
+        }
+
+    return info
 
 
 def build_views(connections: Sequence[IntegrationConnection]) -> List[dict]:
@@ -118,7 +145,7 @@ def build_views(connections: Sequence[IntegrationConnection]) -> List[dict]:
     that would have to be audited separately.
     """
     return credential_service.build_connection_views(
-        list(connections), connector_labels=connector_labels()
+        list(connections), connector_info=connector_info()
     )
 
 

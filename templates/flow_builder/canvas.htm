@@ -85,6 +85,13 @@
     pointer-events: none;
 }
 .flow-node {
+    /* The header's height is pinned rather than left to its content, because the
+       outgoing port stack is positioned from it. A port row carries an opaque
+       label, so any overlap hides the Edit and Delete buttons underneath it — see
+       `.flow-node-ports-out`. Read back by `portMetrics()` in flow_builder.js, so
+       these two are the only place either number is stated. */
+    --fb-header-h: 30px;
+    --fb-port-gap: 6px;
     position: absolute;
     width: 190px;
     background: #fff;
@@ -100,11 +107,19 @@
     border-color: #0d6efd;
     box-shadow: 0 0 0 3px rgba(13,110,253,.25);
 }
+/* The header always wins. Its Edit and Delete buttons are the only way to open or
+   remove a block, so nothing may paint over them: a pinned height the port stack is
+   positioned from, plus a stacking context above the ports' own z-index so a stack
+   that outgrows its block still cannot cover the buttons. */
 .flow-node-header {
+    position: relative;
+    z-index: 3;
     display: flex;
     align-items: center;
     gap: 6px;
-    padding: 6px 8px;
+    height: var(--fb-header-h);
+    box-sizing: border-box;
+    padding: 0 8px;
     border-bottom: 1px solid #e9ecef;
     font-weight: 600;
     cursor: grab;
@@ -169,18 +184,26 @@
     cursor: crosshair;
     z-index: 2;
 }
+/* Centred on the body rather than on the whole block, so it lines up with the
+   out-ports opposite it now that those start below the header. */
 .flow-node-port-in {
     left: -7px;
-    top: 50%;
+    top: calc(50% + var(--fb-header-h) / 2);
     transform: translateY(-50%);
 }
+/* Below the header, never across it. The labels are opaque (they have to be, or a
+   connector passing behind one is unreadable), so a row that reached into the header
+   would simply cover the Edit and Delete buttons — which is what `top: 8px` did.
+   `renderNode` grows the block's min-height with the measured stack so it cannot
+   spill past the bottom either; between the two, the header stays clickable on every
+   block type. Same fix, same reasoning as `.gd-node-ports-out` in graph_designer.css. */
 .flow-node-ports-out {
     position: absolute;
     right: -7px;
-    top: 8px;
+    top: calc(var(--fb-header-h) + var(--fb-port-gap));
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: var(--fb-port-gap);
     align-items: flex-end;
 }
 .flow-node-port-out-row { display: flex; align-items: center; gap: 4px; }

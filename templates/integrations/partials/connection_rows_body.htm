@@ -13,8 +13,20 @@
             <div class="small text-muted">{{ connection.external_account_id }}</div>
         {% endif %}
     </td>
+    {# The connector's own glyph and colour, from `ConnectorSpec` by way of the connection
+       view — the same pair the Apps page draws its cards with. Not hardcoded per
+       connector here: that would be a second place to edit when one is added, and the one
+       that gets missed. An unregistered connector falls back to a grey plug. #}
     <td class="small">
-        {{ connection.connector_label or connection.connector_id }}
+        <span class="d-inline-flex align-items-center gap-2">
+            <span
+                class="d-inline-flex align-items-center justify-content-center rounded"
+                style="width: 24px; height: 24px; background-color: {{ connection.accent }}; color: #fff;"
+            >
+                <i class="{{ connection.icon }}"></i>
+            </span>
+            <span>{{ connection.connector_label or connection.connector_id }}</span>
+        </span>
         {% if connection.auth_kind and connection.auth_kind != "none" %}
             <div class="text-muted">{{ connection.auth_kind.replace("_", " ") }}</div>
         {% endif %}

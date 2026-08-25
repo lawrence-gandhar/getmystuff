@@ -561,17 +561,29 @@
                                 </tr>
                                 <tr><th scope="row" class="fw-normal">Language model</th><td><code>In-built LLM</code>, or <code>Attached LLM API</code></td></tr>
                                 <tr><th scope="row" class="fw-normal">Attached API key</th><td>Required when the mode is <code>Attached LLM API</code></td></tr>
+                                <tr><th scope="row" class="fw-normal">Store the answer in variable</th><td>Optional. Keeps the answer for later blocks to use</td></tr>
                             </tbody>
                         </table>
                     </div>
 
-                    <p class="mb-0">
+                    <p class="mb-3">
                         Choosing <strong>Knowledge base</strong> gives this block its own
                         document store: upload files or paste text on the block, then
                         <strong>Train</strong>. Until it is trained it has nothing to answer
                         from. The knowledge base belongs to the block, not the flow, so two AI
                         Fallback blocks can answer from two different sets of documents.
                     </p>
+
+                    <div class="alert alert-info small mb-0">
+                        <strong>Name a variable to email the answer.</strong> The visitor is
+                        shown the answer either way; naming a variable also keeps it — the
+                        whole answer, bullet points and table rows included — so a
+                        <strong>Send Email</strong> block further down can bind to it and mail
+                        the visitor what the AI found, and an <strong>If / Else</strong> can
+                        branch on whether it managed to answer at all. This block ends the
+                        turn, so an Email block after it sends on the visitor's
+                        <em>next</em> message; the variable is still there by then.
+                    </div>
                 </section>
 
                 <!-- ============ RUN GRAPH ============ -->
@@ -626,7 +638,7 @@
 
                     <p class="mb-2">Each template variable is bound to one of three sources:</p>
                     <ul class="small mb-3">
-                        <li><strong>A value the conversation collected</strong> — anything an Ask for Input or a Menu stored</li>
+                        <li><strong>A value the conversation collected</strong> — anything an Ask for Input, a Menu, an AI Fallback or a Run Graph block stored under a variable name</li>
                         <li><strong>An agent variable</strong> — the standing values on the agent, such as <code>{{COMPANY}}</code></li>
                         <li><strong>A fixed value</strong> — the same text every time</li>
                     </ul>

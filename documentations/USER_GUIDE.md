@@ -732,6 +732,34 @@ a pure loss of recall, not a trim of waste.
 The node's **model choice wins** over the chatbot-level one for the turns it handles. Your
 chatbot's persona is still the base it layers onto.
 
+### Keeping the AI's answer — "email me the data"
+
+The node has an optional **Store the answer in variable** field. The visitor is shown the
+answer either way; filling this in also **keeps** it, so later blocks can use it:
+
+- a **Send Email** block binds a template variable to it and mails the visitor what the AI
+  worked out — the *"email me the data"* path in a menu;
+- an **If/Else** branches on it, so `not_empty` means "the AI managed to answer".
+
+What gets stored is the **whole** answer, not just the opening sentence: the narrative, then
+any bullet-point insights, then the table as plain rows — in the order the chat window draws
+them. Somebody who asked to be emailed the data meant the figures.
+
+Three practical points:
+
+- **The AI Fallback block ends the turn.** A Send Email block wired after it therefore sends
+  on the visitor's *next* message, not the one that triggered the answer. The variable is
+  kept on the conversation, so it is still there by then — but if you want the mail to go
+  out immediately, the Email block belongs *before* the AI Fallback, mailing something the
+  conversation already collected.
+- **A long table is trimmed.** The stored answer keeps the first 20 rows and adds a
+  `(+N more rows)` line rather than dropping them silently. Email adds a limit of its own:
+  any single template variable is cut at 500 characters with an ellipsis.
+- **If the AI could not answer, nothing is stored.** The variable stays empty rather than
+  holding the error message, so a template's own default fills in instead — a customer never
+  receives an internal failure notice dressed up as an answer. If the variable is *required*
+  by the template, the email refuses and takes the Email block's `failed` port.
+
 ### What a button click asks the AI
 
 Wiring a Menu straight into an AI Fallback — "pick a department, then ask about it" — is

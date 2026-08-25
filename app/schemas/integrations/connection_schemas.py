@@ -302,12 +302,27 @@ class ConnectionView(ResponseSchema):
     label: str = Field(title="Name")
     connector_id: str = Field(title="Connector")
     connector_label: str = Field(default="", title="Connector name")
+    # Presentation, and safe to send for the reason ``ConnectorView`` says it below: a
+    # class name and a hex colour carry nothing about where a request goes. Declared
+    # here as well as there because `extra="ignore"` means an undeclared key is dropped
+    # silently — the canvas would draw its palette with brand icons while the
+    # connections table, which goes through this schema, kept rendering a grey plug.
+    icon: str = Field(default="las la-plug", title="Icon")
+    accent: str = Field(default="#6c757d", title="Brand colour")
+    # Which directions a workflow step may be built in. What stops the canvas offering a
+    # "Write to" step for a connector that declares no write operations.
+    can_read: bool = Field(default=True, title="Can be read from")
+    can_write: bool = Field(default=True, title="Can be written to")
     auth_kind: str = Field(default="", title="Authentication")
     base_url: str = Field(default="", title=_API_ADDRESS)
     external_account_id: str = Field(default="", title="Account")
     status: str = Field(title="Status")
     is_active: bool = Field(default=True, title="Switched on")
     needs_reauth: bool = Field(default=False, title="Needs reconnecting")
+    # Why this connection cannot be used, or "" when it can. A picker renders the entry
+    # disabled with this underneath rather than leaving it out: a connection missing
+    # from a dropdown sends somebody to look for the wrong problem.
+    disabled_reason: str = Field(default="", title="Why it cannot be used")
     allow_private_hosts: bool = Field(default=False, title="Reaches private addresses")
     created_at: Optional[Any] = Field(default=None, title="Added")
 

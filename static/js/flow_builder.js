@@ -120,6 +120,7 @@ window.FlowBuilder = (function () {
                 context_source: "datasource",
                 llm_mode: "in_built",
                 llm_api_key_id: "",
+                variable_name: "",
             };
             case "end": return { message_text: "" };
             default: return {};
@@ -167,7 +168,8 @@ window.FlowBuilder = (function () {
             case "run_graph": return d.graph_id ? "Runs a saved graph" : "(no graph chosen)";
             case "ai_fallback":
                 const ctxLabel = { datasource: "attached datasource", knowledge_base: "knowledge base", prompt: "prompt only" }[d.context_source] || "attached datasource";
-                return "AI answers using " + ctxLabel;
+                return "AI answers using " + ctxLabel +
+                    (d.variable_name ? " → " + d.variable_name : "");
             case "end": return d.message_text ? "Ends flow: " + d.message_text : "Ends the flow (no closing message)";
             default: return "";
         }
@@ -220,13 +222,10 @@ window.FlowBuilder = (function () {
         const isOptionsType = !!OPTION_NODE_TYPES[node.type];
         const data = node.data || {};
 
-        const bodyHtml = '<div class="flow-node-body" data-role="select-body">' +
-            '<div class="flow-node-preview">' + escapeHtml(isOptionsType ? (data.prompt_text || "(no prompt)") : nodePreviewText(node)) + "</div>" +
-            (isOptionsType ? '<div class="flow-node-options">' + optionRowsHtml(data.options) + "</div>" : "") +
-            "</div>";
-
-        // Options types render one connector div per option (above); every
-        // other multi/single-output type keeps the compact port sidebar.
+        // Options types render one connector div per option (inside the body); every
+        // other multi/single-output type keeps the compact port sidebar, which starts
+        // *below* the header — see `.flow-node-ports-out` in canvas.htm and the
+        // min-height measured after the append.
         let outPortsHtml = "";
         if (!isOptionsType) {
             outPortsHtml = meta.outputs(data).map(function (o) {
@@ -238,6 +237,11 @@ window.FlowBuilder = (function () {
                 );
             }).join("");
         }
+
+        const bodyHtml = '<div class="flow-node-body" data-role="select-body">' +
+            '<div class="flow-node-preview">' + escapeHtml(isOptionsType ? (data.prompt_text || "(no prompt)") : nodePreviewText(node)) + "</div>" +
+            (isOptionsType ? '<div class="flow-node-options">' + optionRowsHtml(data.options) + "</div>" : "") +
+            "</div>";
 
         el.innerHTML =
             '<div class="flow-node-header" data-role="drag-handle">' +
@@ -253,6 +257,23 @@ window.FlowBuilder = (function () {
             '<div class="flow-node-ports-out">' + outPortsHtml + "</div>";
 
         canvasEl.appendChild(el);
+
+        // The stack starts below the header (canvas.htm pins that height so a connector's
+        // opaque label cannot cover the Edit and Delete buttons), so the block has to be
+        // tall enough to hold it — otherwise the lower ports of a two-port block such as
+        // Send Email hang off the bottom edge instead.
+        //
+        // The stack's height is *measured* rather than worked out from the port count: a
+        // row is as tall as its label, not as its dot, so arithmetic over the port size
+        // comes out a few pixels short per row. Reading it back needs the element in the
+        // document, which is why this is after the append. Same treatment
+        // `graph_designer.js` gives the same problem.
+        const outWrap = el.querySelector(".flow-node-ports-out");
+        if (outWrap && outWrap.childElementCount) {
+            const m = portMetrics(el);
+            el.style.minHeight =
+                (m.header + m.gap + outWrap.getBoundingClientRect().height + m.gap) + "px";
+        }
 
         el.querySelector('[data-role="drag-handle"]').addEventListener("mousedown", function (e) {
             startDrag(node.id, e);
@@ -286,6 +307,34 @@ window.FlowBuilder = (function () {
         });
 
         updateNodeSelectionClass(node.id);
+    }
+
+    let portMetricsCache = null;
+
+    /**
+     * Where the out-port stack starts, in pixels, per the stylesheet.
+     *
+     * Read from CSS rather than restated here so the two cannot drift: the header's height
+     * and the gap between ports are the stylesheet's decisions (`--fb-header-h`,
+     * `--fb-port-gap`), and this only needs to know what they came out as. A hard-coded 30
+     * here would silently stop matching the first time the header's font changed, and the
+     * symptom would be an unclickable Delete button rather than anything that looks like a
+     * layout problem. Cached — every node in a render pass resolves to the same two values.
+     *
+     * @param {HTMLElement} nodeEl - a node already in the document
+     * @returns {{header: number, gap: number}}
+     */
+    function portMetrics(nodeEl) {
+        if (portMetricsCache) return portMetricsCache;
+
+        const style = window.getComputedStyle(nodeEl);
+        const read = function (name, fallback) {
+            const value = parseFloat(style.getPropertyValue(name));
+            return isFinite(value) && value > 0 ? value : fallback;
+        };
+
+        portMetricsCache = { header: read("--fb-header-h", 30), gap: read("--fb-port-gap", 6) };
+        return portMetricsCache;
     }
 
     /**
@@ -1096,6 +1145,18 @@ window.FlowBuilder = (function () {
      * @param {object} draft
      * @returns {string}
      */
+    /**
+     * An AI Fallback block's properties.
+     *
+     * The last field is the one that connects this block to the rest of the canvas:
+     * naming a variable keeps the answer, so an Email block further down can mail what
+     * the AI worked out and an If/Else can branch on whether it answered at all. The
+     * answer is stored whole — narrative, bullet points and table rows — because a
+     * visitor who asked to be emailed the data meant the figures.
+     *
+     * @param {object} draft
+     * @returns {string}
+     */
     function aiFallbackFieldsHtml(draft) {
         draft.context_source = draft.context_source || "datasource";
         draft.llm_mode = draft.llm_mode || "in_built";
@@ -1107,7 +1168,18 @@ window.FlowBuilder = (function () {
             fieldHtml("Language model", llmModeSelectHtml(draft.llm_mode)) +
             '<div id="fbLlmKeyField" style="' + (draft.llm_mode === "attached" ? "" : "display:none;") + '">' +
             fieldHtml("Attached API key", llmApiKeySelectHtml(draft.llm_api_key_id)) +
-            "</div>"
+            "</div>" +
+            fieldHtml(
+                "Store the answer in variable (optional)",
+                '<input class="form-control form-control-sm" data-field="variable_name" value="' +
+                escapeAttr(draft.variable_name || "") + '">'
+            ) +
+            '<p class="text-muted small mb-0">The answer is shown to the visitor either ' +
+            "way. Naming a variable <strong>also keeps it</strong> — the whole answer, " +
+            "including any bullet points and table rows — so a later Send Email block can " +
+            "mail it, or an If / Else can branch on whether the AI answered at all. This " +
+            "block ends the turn, so an Email block after it sends on the visitor's next " +
+            "message; the variable is still there by then.</p>"
         );
     }
 
@@ -1160,6 +1232,11 @@ window.FlowBuilder = (function () {
      * the agent's prompt variables from the Agents section, or a fixed value. There are no
      * upstream node outputs in this engine — its state is one flat string map — and
      * `_validate_send_email_data` refuses anything else on save.
+     *
+     * An AI Fallback block's answer arrives through the *first* of those rather than needing
+     * a fourth: that block stores its answer under a variable name of the operator's
+     * choosing, so "email me what the AI found" is one binding on a value the conversation
+     * collected, like any other.
      */
     function sendEmailFieldsHtml(draft) {
         const templates = opts.emailTemplates || [];
@@ -1210,6 +1287,10 @@ window.FlowBuilder = (function () {
             "address or a {{VARIABLE}}.</p>" +
             '<label class="form-label fw-semibold small mt-2">Variables</label>' +
             '<div id="fbEmailBindings"></div>' +
+            '<p class="text-muted small">“A value the conversation collected” covers ' +
+            "anything an Ask for Input, a Menu or an <strong>AI Fallback</strong> block " +
+            "stored — give that block a variable name and bind to it here to email what " +
+            "the AI answered.</p>" +
             fieldHtml(
                 "Store the email's id in (optional)",
                 '<input class="form-control form-control-sm" data-field="variable_name" value="' +

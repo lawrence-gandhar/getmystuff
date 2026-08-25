@@ -112,6 +112,70 @@ MAX_MAX_BATCHES = 100_000
 
 
 # ---------------------------------------------------------------------------
+# Palette presentation
+# ---------------------------------------------------------------------------
+# The one sentence under each palette entry, and the order the entries appear in.
+#
+# Here rather than in ``models.py`` because these two answer a different question than
+# ``NODE_TYPE_LABELS`` does. The labels are the vocabulary the validator refuses things
+# by name in; these are how the palette *reads*, and only the implemented types have one
+# — a Phase 3 type nobody can place needs no sales pitch. This module already serves the
+# palette, so it is also the module that owns how the palette looks.
+#
+# In JavaScript would be worse for the reason the module docstring gives: a description
+# there is a second place to edit when a node type changes, and the one that gets missed.
+NODE_DESCRIPTIONS: Dict[str, str] = {
+    NODE_TRIGGER: "Starts the workflow, on a schedule or when somebody presses Run.",
+    NODE_CONNECTOR_READ: "Fetches records from a connected app.",
+    NODE_CONNECTOR_WRITE: "Sends records to a connected app.",
+    NODE_TRANSFORM: "Renames and reshapes fields so they match the destination.",
+    NODE_VALIDATE: "Checks each record and routes the bad ones somewhere else.",
+    NODE_FILTER: "Keeps the records that match and drops the rest.",
+    NODE_BRANCH: "Sends records down different paths depending on what they hold.",
+    NODE_BATCH: "Works through records a few at a time instead of all at once.",
+    NODE_EMAIL: "Sends an email — a summary of the run, or one per record.",
+    NODE_SUCCESS: "Ends the workflow, reporting success.",
+    NODE_FAILURE: "Ends the workflow, reporting failure.",
+}
+
+# Read, write, shape, check, route, loop, tell somebody, finish. The order somebody
+# builds a workflow in, which is the order both other canvases use — `flow_builder.js`
+# by its object's key order and `graph_designer` by ``models.NODE_TYPES``' tuple order.
+# Alphabetical by slug, which this replaces, put `batch` and `branch` first and buried
+# the two entries every workflow starts with in the middle of the list.
+#
+# `trigger` is here for completeness even though the palette skips it: a workflow has
+# exactly one and it arrives with the drawing, so offering a second would be offering a
+# save that cannot succeed.
+PALETTE_ORDER: Tuple[str, ...] = (
+    NODE_TRIGGER,
+    NODE_CONNECTOR_READ,
+    NODE_CONNECTOR_WRITE,
+    NODE_TRANSFORM,
+    NODE_VALIDATE,
+    NODE_FILTER,
+    NODE_BRANCH,
+    NODE_BATCH,
+    NODE_EMAIL,
+    NODE_SUCCESS,
+    NODE_FAILURE,
+)
+
+# The same shape of guarantee ``node_runners`` gives at its own import: a node type added
+# to `IMPLEMENTED_NODE_TYPES` without a description or a place in the order is a palette
+# button with no subtitle, sorted last by accident. Caught here, at import, rather than
+# noticed by whoever opens the canvas next.
+assert set(PALETTE_ORDER) == set(IMPLEMENTED_NODE_TYPES), (
+    "flow_rules.PALETTE_ORDER and IMPLEMENTED_NODE_TYPES disagree: "
+    f"{set(PALETTE_ORDER) ^ set(IMPLEMENTED_NODE_TYPES)}"
+)
+assert set(NODE_DESCRIPTIONS) == set(IMPLEMENTED_NODE_TYPES), (
+    "flow_rules.NODE_DESCRIPTIONS and IMPLEMENTED_NODE_TYPES disagree: "
+    f"{set(NODE_DESCRIPTIONS) ^ set(IMPLEMENTED_NODE_TYPES)}"
+)
+
+
+# ---------------------------------------------------------------------------
 # Reading a drawing
 # ---------------------------------------------------------------------------
 
@@ -193,6 +257,10 @@ def node_specs() -> List[Dict[str, Any]]:
     Only the implemented ones. A type in the model's vocabulary with no runner is not
     offered, so the promise "the palette can never offer what the validator refuses"
     holds for ports as well as for types.
+
+    Ordered by :data:`PALETTE_ORDER` rather than by name, because the palette renders
+    this list in the order it arrives and the order somebody builds a workflow in is not
+    alphabetical.
     """
     specs: List[Dict[str, Any]] = []
 
@@ -203,6 +271,10 @@ def node_specs() -> List[Dict[str, Any]]:
             {
                 "type": node_type,
                 "label": label,
+                # The palette's subtitle, and what a step with no settings of its own
+                # falls back to on the canvas. "Write to" on its own tells nobody what
+                # the step does.
+                "description": NODE_DESCRIPTIONS.get(node_type, ""),
                 # `branch` reports its fixed exits; the canvas adds one per condition as
                 # the user writes them, using the same `else`/`error` tail.
                 "ports": list(NODE_PORTS.get(node_type, (PORT_ELSE, PORT_ERROR))),
@@ -213,7 +285,11 @@ def node_specs() -> List[Dict[str, Any]]:
             }
         )
 
-    return sorted(specs, key=lambda spec: spec["type"])
+    # A type absent from the order sorts last rather than raising: the import-time
+    # assertion above is where that is caught, and a palette missing its curation is
+    # still a usable palette.
+    order = {node_type: index for index, node_type in enumerate(PALETTE_ORDER)}
+    return sorted(specs, key=lambda spec: (order.get(spec["type"], len(order)), spec["type"]))
 
 
 def vocabulary() -> Dict[str, Any]:

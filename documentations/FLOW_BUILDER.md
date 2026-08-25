@@ -191,6 +191,92 @@ variable it did not ask for has nowhere to land.
 
 ---
 
+# What an AI Fallback node leaves behind
+
+The node has always **said** its answer and then forgotten it, which made one ordinary flow
+undrawable: a Menu offering *"email me the data"* → AI Fallback → Send Email had nothing for
+the email's bindings to read. `_step_ai_fallback` now stores the answer under the node's
+optional `variable_name`, which is the same field Ask Input, Menu, Run Graph and Send Email
+already have and goes through the same `_store_answer`.
+
+| | |
+|---|---|
+| Node type | `ai_fallback`, one output port: `default` |
+| Configuration | guardrails, prompt, context source, LLM choice, and optionally a variable to keep the answer in |
+| Runner | `engine_service._step_ai_fallback` |
+| Stored value | `engine_service._ai_answer_text(result)` |
+
+**The answer is both sent and kept.** This node is the one place those are the same thing —
+the visitor sees it, and the variable holds a copy for an Email node to bind to or an
+If/Else to branch on. Keeping a copy is not a mode: the chat bubble is identical whether a
+variable is named or not.
+
+**The whole answer, not just `summary`.** An `AnalyticsResult` is a narrative, up to five
+insights and possibly a table, and the visitor who picked "email me the data" meant the
+figures — a variable holding only the narrative mails them a sentence about a table they
+never received. So `_ai_answer_text` renders summary, then insights as `- ` bullets, then
+the table as pipe-separated rows, in the order the widget draws them, so the email and the
+chat bubble do not disagree about the same answer.
+
+Plain text with newlines, never markup, for the reason `rendering.py` states: an email's
+HTML body escapes every value it substitutes, so markup smuggled through a variable arrives
+as visible tag soup. Formatting belongs in the template, where whoever reviews the template
+can see it.
+
+**A long table is capped at `_MAX_STORED_TABLE_ROWS` (20) and says so** with a
+`(+N more rows)` line — the same honesty rule `_store_graph_result` applies to a preview
+versus a real total. Email applies a second limit of its own: `MAX_VARIABLE_VALUE_LENGTH`
+trims any single substituted value at 500 characters with an ellipsis.
+
+**A failure stores nothing at all.** The variable stays *absent* rather than being set to the
+error sentence, so `resolve_bindings` reports it MISSING and `render_message` fills it from
+the template's declared default — or refuses the send if it was declared required, which
+takes the Email node's `error` port. Storing the failure would mail a customer an internal
+error dressed as an answer. An If/Else reads absent as `""`, so `not_empty` still means
+"the AI managed to answer".
+
+**The turn ends here**, so a Send Email node wired after this one runs on the visitor's
+*next* message. That needs no special case — the variable lives on the session row, so it is
+still there a turn later. A flow that wants the mail sent within the same turn puts the Email
+node *before* the fallback, mailing something the conversation already collected.
+
+---
+
+# The block box, and the three rules holding it together
+
+The same three rules the [Graph Designer](GRAPH_DESIGNER.md#why-the-header-height-is-pinned)
+canvas needs, for the same reason and after the same bug. A block's outgoing ports are
+absolutely positioned down its right edge and each can carry a label — `queued` / `failed` on
+Send Email, `done` / `failed` on Run Graph, `True` / `False` on If/Else — and those labels are
+**opaque**, or a connector passing behind one is unreadable. That makes their position
+load-bearing:
+
+1. `.flow-node` declares `--fb-header-h` and `.flow-node-header` is given exactly that
+   height rather than sizing to its content, because the port stack is offset from it and a
+   header height has to be a number something else can read. `portMetrics()` reads it (and
+   `--fb-port-gap`) back out of the computed style, so neither number is stated twice.
+2. The stack starts at `calc(var(--fb-header-h) + var(--fb-port-gap))` — **below** the
+   header, never across it. It used to start at `top: 8px`, which put the first port's label
+   on top of the Edit and Delete buttons and swallowed the clicks meant for them: the buttons
+   were painted and simply unreachable, which is the worst version of that bug. The header
+   also carries a stacking context above the ports' `z-index`, so nothing can cover it even
+   if a future block type outgrows its box.
+3. `renderNode` grows the block's `min-height` so the stack fits, and the height is
+   **measured** from the rendered stack rather than computed from the port count: a row is as
+   tall as its label, not as tall as its 12px dot, so arithmetic over the port size comes out
+   a few pixels short per row — which is exactly how far a two-port Send Email block hung its
+   `failed` port below its own edge.
+
+The incoming port is centred on the body for the same reason, at
+`calc(50% + var(--fb-header-h) / 2)`.
+
+The invariant: **every block's header is fully visible and clickable, whatever its type and
+however many ports it has.** Menu and Dropdown are the exception that proves it — they draw a
+connector per option *inside* the body, which grows the box on its own and never approaches
+the header.
+
+---
+
 # Models — `app/models/flow_builder/models.py`
 
 * **ChatbotFlowSession.awaiting_graph_run** — the uuid of a Graph Designer run this

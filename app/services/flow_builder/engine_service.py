@@ -9,6 +9,7 @@ session row, not authoring/ownership — the same relationship
 ai_analytics_service.py has to chatbot_service.py.
 """
 
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, List, Optional
@@ -20,6 +21,8 @@ from app.db.db_utils import CRUDQueryBuilder
 from app.models.chatbot import ChatbotApiKey
 from app.models.flow_builder import ChatbotFlow, ChatbotFlowSession
 from app.services.flow_builder import ai_fallback_service
+
+logger = logging.getLogger(__name__)
 
 flow_session_crud = CRUDQueryBuilder(ChatbotFlowSession)
 
@@ -382,8 +385,12 @@ def _deliver_reply_to_waiting_node(
 
 def _store_answer(session: ChatbotFlowSession, node: dict, value: str) -> None:
     """
-    Record what the visitor just supplied under the node's configured variable
-    name, if it has one. A node with no variable name stores nothing.
+    Record what a node produced under its configured variable name, if it has
+    one. A node with no variable name stores nothing.
+
+    Shared by every storing node rather than repeated per type: what the visitor
+    typed or clicked (Ask Input, Menu, Dropdown), what an AI Fallback answered,
+    and the uuid of an email an Email node queued.
 
     Reassigns to a new dict rather than mutating in place — `variables` is a
     plain (non-Mutable) JSONB column, so an in-place `[key] = ...` on the
@@ -518,20 +525,113 @@ async def _step_ai_fallback(
     node: dict,
     incoming_message: Optional[str],
 ) -> FlowEngineResult:
+    """
+    Hand this turn to the AI, say what it answered, and keep that answer.
+
+    The answer is **both** sent to the visitor and stored under the node's variable name
+    if it has one — this node is the one place those two are the same thing. That is what
+    lets a later Email node mail what the AI worked out ("email me the data"): the email's
+    binding reads the conversation's variables, and the answer is now one of them. It is
+    also what lets an If/Else branch on whether the AI managed to answer at all.
+
+    The turn **ends here**, so a Send Email node wired after this one runs on the
+    visitor's *next* message, not this one. That is not a special case to work around: the
+    variable lives on the session row, so it is still there a turn later. A flow wanting
+    the email sent without another visitor message puts the Email node before this one and
+    mails something the conversation already collected.
+
+    What gets stored is the whole answer as text — see :func:`_ai_answer_text` — not the
+    ``AnalyticsResult``: a flow variable is a string, and the insights and table are the
+    part somebody asking to be emailed the data actually wanted.
+    """
     edge = _find_edge(graph_data, node["id"], "default")
     _advance_or_complete(session, edge, node["id"])
     try:
         ai_result = await ai_fallback_service.run_ai_fallback(
             db, chatbot_key, flow_id, node["id"], node.get("data") or {}, incoming_message or "",
         )
-        return FlowEngineResult(
-            type="text",
-            text=ai_result.summary,
-            insights=ai_result.insights or [],
-            table=ai_result.table.model_dump() if ai_result.table else None,
-        )
     except HTTPException as exc:
+        # Nothing is stored. The variable stays *absent* rather than being set to the
+        # error sentence, so a later Email node falls back to the template's declared
+        # default (or refuses the send if the variable was required) instead of mailing
+        # a customer an internal failure message as though it were the answer. An
+        # If/Else on the variable reads absent as empty, so "did the AI answer?" still
+        # branches correctly.
+        logger.warning(
+            "AI Fallback node %s in flow session %s could not answer: %s",
+            node.get("id"),
+            session.id,
+            exc.detail,
+        )
         return FlowEngineResult(type="text", text=str(exc.detail))
+
+    _store_answer(session, node, _ai_answer_text(ai_result))
+
+    return FlowEngineResult(
+        type="text",
+        text=ai_result.summary,
+        insights=ai_result.insights or [],
+        table=ai_result.table.model_dump() if ai_result.table else None,
+    )
+
+
+#: How many table rows the stored answer keeps. A variable is text that gets mailed or
+#: put in a chat bubble, not a result set, and the rows beyond this are summarised by a
+#: count rather than dropped silently — the same honesty rule ``_store_graph_result``
+#: applies to a preview versus a real total.
+_MAX_STORED_TABLE_ROWS = 20
+
+
+def _table_as_text(table) -> str:  # noqa: ANN001 — AnalyticsTable, imported lazily by caller
+    """One ``AnalyticsTable`` as pipe-separated plain text, capped and honest about it."""
+    rows = list(table.rows or [])
+    lines = [" | ".join(str(column) for column in table.columns or [])]
+    lines += [
+        " | ".join("" if cell is None else str(cell) for cell in row)
+        for row in rows[:_MAX_STORED_TABLE_ROWS]
+    ]
+
+    dropped = len(rows) - _MAX_STORED_TABLE_ROWS
+    if dropped > 0:
+        lines.append(f"(+{dropped} more rows)")
+
+    return "\n".join(lines)
+
+
+def _ai_answer_text(result) -> str:  # noqa: ANN001 — AnalyticsResult
+    """
+    One AI Fallback answer as the single block of text a variable can hold.
+
+    The whole answer, not just the narrative: the visitor who picked "email me the data"
+    means the figures, and a variable holding only the summary would mail them a sentence
+    about a table they never received. So the summary, then the insights as a bullet list,
+    then the table as pipe-separated rows — in the order the widget draws them, so the
+    email and the chat bubble say the same thing in the same sequence.
+
+    Plain text with newlines rather than markup, for the reason ``rendering.py`` gives: an
+    email's HTML body escapes every value it substitutes, so markup smuggled in through a
+    variable would arrive as visible tag soup. Formatting belongs in the template, where
+    whoever reviews the template can see it.
+
+    Empty for an answer with nothing in it, which ``_store_answer`` stores as an empty
+    string — an If/Else ``not_empty`` on the variable is then false, which is true.
+    """
+    parts: List[str] = []
+
+    summary = (result.summary or "").strip()
+    if summary:
+        parts.append(summary)
+
+    parts += [
+        f"- {text}"
+        for text in ((str(insight) or "").strip() for insight in result.insights or [])
+        if text
+    ]
+
+    if result.table and (result.table.columns or result.table.rows):
+        parts.append(_table_as_text(result.table))
+
+    return "\n".join(parts).strip()
 
 
 async def _step_run_graph(

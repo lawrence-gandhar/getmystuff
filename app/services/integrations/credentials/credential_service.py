@@ -34,7 +34,9 @@ from app.models.integrations import (
     AUTH_NONE,
     AUTH_OAUTH2,
     CONNECTION_ACTIVE,
+    CONNECTION_DISABLED,
     CONNECTION_NEEDS_REAUTH,
+    CONNECTION_REVOKED,
     CREDENTIAL_CONNECTED,
     CREDENTIAL_REVOKED,
     IntegrationConnection,
@@ -410,10 +412,52 @@ async def _credential_for(
 # ---------------------------------------------------------------------------
 
 
+#: What a connector's presentation degrades to when nothing is passed for it — an
+#: unregistered ``connector_id``, or a caller that has no reason to care how the row
+#: looks. The same pair ``ConnectorSpec`` itself defaults to, so a connection whose
+#: connector was removed in a later version renders as a grey plug rather than as a
+#: blank square or a raised exception.
+DEFAULT_CONNECTOR_ICON = "las la-plug"
+DEFAULT_CONNECTOR_ACCENT = "#6c757d"
+
+#: Why a connection cannot be used right now, phrased for whoever is reading it in a
+#: picker. Keyed by status, and empty for the one status that is fine.
+#:
+#: Written here rather than in the canvas because the canvas is not the only reader: the
+#: connections table and the AI catalogue ask the same question, and three copies of
+#: "revoked means the secret was deleted" would disagree the first time one is edited.
+_UNUSABLE_BECAUSE: Dict[str, str] = {
+    CONNECTION_NEEDS_REAUTH: (
+        "This connection needs signing in again before it can be used."
+    ),
+    CONNECTION_REVOKED: "This connection's credential was deleted. Reconnect it to use it.",
+    CONNECTION_DISABLED: "This connection is switched off.",
+}
+
+
+def disabled_reason_for(connection: IntegrationConnection) -> str:
+    """
+    One sentence saying why this connection cannot be used, or ``""`` when it can.
+
+    **The reason a picker flags rather than hides.** A connection whose token was revoked
+    silently missing from a dropdown sends somebody to check the wrong thing — they go
+    looking for why the step will not save, when the answer is on the connections page.
+    Same call ``graph_service.node_options`` makes for datasources, and for the same
+    reason.
+
+    ``is_active`` is checked before ``status`` because it is the switch the user threw
+    themselves, and "you switched this off" is a more useful sentence than whatever the
+    status happened to be when they did.
+    """
+    if not connection.is_active:
+        return "This connection is paused. Resume it to use it in a workflow."
+    return _UNUSABLE_BECAUSE.get(connection.status, "")
+
+
 def build_connection_views(
     connections: List[IntegrationConnection],
     *,
-    connector_labels: Optional[Dict[str, str]] = None,
+    connector_info: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> List[dict]:
     """
     Connections shaped for a template or a JSON response.
@@ -423,24 +467,47 @@ def build_connection_views(
     secret to this payload would require joining a table that is deliberately not
     joined.
 
+    What a connector looks like and which directions it works in arrives as an argument
+    rather than being read from ``connectors.registry`` here. That keeps this module free
+    of the connector layer, which is what makes the paragraph above provable rather than
+    merely true today. ``connection_service.build_views`` is the caller that has the
+    registry in scope.
+
     Public ``uuid`` only, never the bigint ``id``.
     """
-    labels = connector_labels or {}
+    info = connector_info or {}
 
-    return [
-        {
-            "uuid": str(connection.uuid),
-            "label": connection.label,
-            "connector_id": connection.connector_id,
-            "connector_label": labels.get(connection.connector_id, connection.connector_id),
-            "auth_kind": connection.auth_kind,
-            "base_url": connection.base_url or "",
-            "external_account_id": connection.external_account_id or "",
-            "status": connection.status,
-            "is_active": connection.is_active,
-            "needs_reauth": connection.status == CONNECTION_NEEDS_REAUTH,
-            "allow_private_hosts": connection.allow_private_hosts,
-            "created_at": connection.created_at,
-        }
-        for connection in connections
-    ]
+    views: List[dict] = []
+
+    for connection in connections:
+        known = info.get(connection.connector_id) or {}
+        views.append(
+            {
+                "uuid": str(connection.uuid),
+                "label": connection.label,
+                "connector_id": connection.connector_id,
+                "connector_label": known.get("label") or connection.connector_id,
+                # Presentation, and safe to send: a class name and a hex colour say
+                # nothing about where a request goes. See ``ConnectorSpec.icon``.
+                "icon": known.get("icon") or DEFAULT_CONNECTOR_ICON,
+                "accent": known.get("accent") or DEFAULT_CONNECTOR_ACCENT,
+                # Which directions a step may be built in. Both default True so a caller
+                # that passed no info gets a palette offering everything rather than one
+                # silently offering nothing.
+                "can_read": bool(known.get("can_read", True)),
+                "can_write": bool(known.get("can_write", True)),
+                "auth_kind": connection.auth_kind,
+                "base_url": connection.base_url or "",
+                "external_account_id": connection.external_account_id or "",
+                "status": connection.status,
+                "is_active": connection.is_active,
+                "needs_reauth": connection.status == CONNECTION_NEEDS_REAUTH,
+                # Empty when the connection is usable. A picker renders the entry
+                # disabled with this underneath rather than omitting it.
+                "disabled_reason": disabled_reason_for(connection),
+                "allow_private_hosts": connection.allow_private_hosts,
+                "created_at": connection.created_at,
+            }
+        )
+
+    return views

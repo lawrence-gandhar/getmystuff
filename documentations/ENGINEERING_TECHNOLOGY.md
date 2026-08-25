@@ -2821,6 +2821,13 @@ header buttons, on one node of all ten types, with the branch node pushed to fou
 than by looking at the page, since the failure mode here is a control that *looks* present and is
 not.
 
+**The Flow Builder canvas now carries the same three rules**, having had the same bug: its port
+stack started at `top: 8px`, so a Send Email block's `queued` label sat over its Edit and Delete
+buttons. `--fb-header-h` / `--fb-port-gap`, a stack offset below the header, and a `min-height`
+measured from the rendered stack — plus a stacking context on the header, so it wins outright
+rather than only by arithmetic. Two canvases, one rule; a third would copy it rather than
+rediscover it.
+
 ### Two gestures for one connector
 
 **Drag** from an output port and release on the target (a dashed rubber band follows the cursor, the
@@ -3236,6 +3243,37 @@ in-place `variables[key] = ...` would never persist.
 
 The label is resolved **before** the selection is consumed, since consuming it moves the session off
 the node that owns the options.
+
+### An AI Fallback answer is a value, not only a message
+
+The same class of bug one node further on. An AI Fallback node **said** its answer and then dropped
+it, so a Menu offering *"email me the data"* → AI Fallback → Send Email had nothing for the email's
+bindings to read. `_step_ai_fallback` now writes the answer to the node's optional `variable_name`
+through the same `_store_answer` every other storing node uses, which is why this needed no fourth
+binding source in `variable_sources`: an AI answer arrives as a `session` variable like any other.
+
+Four decisions worth stating:
+
+- **The whole answer, not `summary` alone.** `_ai_answer_text` renders the narrative, then the
+  insights as `- ` bullets, then the table as pipe-separated rows — the order the widget draws them,
+  so the email and the chat bubble cannot disagree about the same answer. A variable holding only the
+  narrative mails somebody a sentence about a table they never received.
+- **Plain text, never markup**, for the reason `rendering.py` gives: the HTML body escapes every
+  substituted value, so markup carried in by a variable arrives as visible tag soup.
+- **A table is capped at 20 rows with a `(+N more rows)` line** — the `_store_graph_result` honesty
+  rule, applied to rows rather than to a count. `MAX_VARIABLE_VALUE_LENGTH` (500) then trims on the
+  email side.
+- **A failed answer stores nothing**, leaving the variable absent so `render_message` uses the
+  template's declared default, or refuses a required variable and takes the Email node's `error`
+  port. Storing the error sentence would mail a customer an internal failure as though it were the
+  answer.
+
+The turn ends at this node, so an Email node after it sends on the visitor's *next* message — which
+needs no special case, the variable being on the session row rather than in memory.
+
+Fixed alongside it: `engine_service` used a module-level `logger` it never defined, so the
+`except` branch in `_step_send_email` raised `NameError` instead of routing an email failure to the
+`error` port — a handler that failed only when it was needed.
 
 ### The knowledge-base pipeline
 
