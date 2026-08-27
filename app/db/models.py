@@ -43,6 +43,7 @@ from app.models.graph_designer import (  # noqa: F401
     ToolGraphRun,
     ToolGraphRunStep,
 )
+from app.models.file_delivery import GeneratedFile  # noqa: F401
 from app.models.email_dispatch import (  # noqa: F401
     EmailMessage,
     EmailMessageAttempt,

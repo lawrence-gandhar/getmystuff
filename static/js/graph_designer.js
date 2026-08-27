@@ -50,11 +50,17 @@ window.GraphDesigner = (function () {
     // Which ports each node type exposes, and what to call them. Derived per type
     // exactly as flow_builder derives `if_else`'s and `menu`'s, so a branch's ports
     // follow its conditions and a loop always has its two.
+    //
+    // `kind` colours the pill: `error` red, `ok` green. Only a node with exactly two ways
+    // out, one of which is a failure, has an `ok` — that is what makes the other one a
+    // *success* rather than merely the next step. A branch's conditions, a loop's `each`
+    // and `done`, and a union's `next` / `execute` stay grey deliberately: none of them is
+    // a claim that the node did or did not do its work.
     const PORTS = {
         start: function () { return [{ port: "default", label: "" }]; },
         sql: function () {
             return [
-                { port: "default", label: "" },
+                { port: "default", label: "", kind: "ok" },
                 { port: "error", label: "on error", kind: "error" },
             ];
         },
@@ -71,7 +77,7 @@ window.GraphDesigner = (function () {
         value: function () { return [{ port: "default", label: "" }]; },
         tool_config: function () {
             return [
-                { port: "default", label: "" },
+                { port: "default", label: "", kind: "ok" },
                 { port: "error", label: "on error", kind: "error" },
             ];
         },
@@ -102,8 +108,25 @@ window.GraphDesigner = (function () {
             // switched-off template. A relay refusing the message tomorrow is not knowable
             // now and cannot route anywhere; that lives in the delivery log.
             return [
-                { port: "default", label: "queued" },
+                { port: "default", label: "queued", kind: "ok" },
                 { port: "error", label: "not sent", kind: "error" },
+            ];
+        },
+        // Two exits each, for the reason the Email node above has two: a file that could
+        // not be written must not leave by the same edge as one that was, or the run carries
+        // on as though there were something to hand over. Both refusals are knowable at the
+        // moment the node runs — no rows, a path that finds nothing, a file whose window has
+        // closed — which is what makes them routable at all.
+        create_file: function () {
+            return [
+                { port: "default", label: "written", kind: "ok" },
+                { port: "error", label: "failed", kind: "error" },
+            ];
+        },
+        download_file: function () {
+            return [
+                { port: "default", label: "ready", kind: "ok" },
+                { port: "error", label: "failed", kind: "error" },
             ];
         },
         // Both outcome nodes offer one exit. They decide what the run is *reported* as,
@@ -134,10 +157,50 @@ window.GraphDesigner = (function () {
         for_each: "la-redo",
         do_until: "la-sync",
         email: "la-envelope",
+        create_file: "la-file-export",
+        download_file: "la-download",
         timer: "la-stopwatch",
         wait: "la-hourglass-half",
         success: "la-check-circle",
         failure: "la-times-circle",
+    };
+
+    // The colour of a node's icon disc, keyed by **what the node does** rather than one
+    // entry per type — the same scheme `flow_builder.js` uses and for the same reason: a
+    // reader scanning a pipeline is reading its shape, and four kinds of data node that all
+    // produce rows should look like four of the same thing.
+    //
+    // Every one carries a white glyph at 3:1 contrast or better.
+    const STEP_COLOURS = {
+        entry: "#198754",     // green — the one node a run starts at
+        data: "#0b7285",      // deep teal — produces rows
+        ask: "#0d6efd",       // blue — stops and waits for a person
+        branch: "#6610f2",    // indigo — the run forks here
+        loop: "#d97706",      // amber — the run goes round
+        send: "#c2410c",      // burnt orange — leaves the pipeline entirely
+        file: "#0f766e",      // teal — makes or hands over a file
+        clock: "#6c757d",     // grey — measures or spends time, produces nothing
+        verdict_ok: "#198754",   // green — says the run succeeded
+        verdict_bad: "#b02a37",  // deep red — says it failed
+    };
+
+    const COLOURS = {
+        start: STEP_COLOURS.entry,
+        sql: STEP_COLOURS.data,
+        sql_union: STEP_COLOURS.data,
+        value: STEP_COLOURS.data,
+        tool_config: STEP_COLOURS.data,
+        human: STEP_COLOURS.ask,
+        branch: STEP_COLOURS.branch,
+        for_each: STEP_COLOURS.loop,
+        do_until: STEP_COLOURS.loop,
+        email: STEP_COLOURS.send,
+        create_file: STEP_COLOURS.file,
+        download_file: STEP_COLOURS.file,
+        timer: STEP_COLOURS.clock,
+        wait: STEP_COLOURS.clock,
+        success: STEP_COLOURS.verdict_ok,
+        failure: STEP_COLOURS.verdict_bad,
     };
 
     const STATUS_COLOURS = {
@@ -155,11 +218,31 @@ window.GraphDesigner = (function () {
         selectedNodeId: null,
         selectedEdgeId: null,
         picked: {},          // node ids chosen for a test run
+        // The move selection: which nodes and connectors the next drag carries, and what a
+        // box, Ctrl-click, Ctrl+A and Select all add to. Objects used as sets, like
+        // `picked`.
+        //
+        // Three sets on the same nodes, and all three answer different questions.
+        // `selectedNodeId` is the one whose settings are open — at most one, ever.
+        // `picked` is the set a **test run** will execute, which is why shift-click still
+        // means that and Ctrl-click means this. `selection` is the set that **moves
+        // together**. Any two of them can be non-empty at once and the stylesheet draws
+        // each differently on purpose. Never saved: `serialize()` does not read it.
+        selection: { nodes: {}, edges: {} },
         pending: null,       // {nodeId, port} — a connection armed by clicking a port
         connecting: null,    // {nodeId, port, startX, startY, moved} — one being dragged out
         dragging: null,
         reattaching: null,
         dirty: false,
+        // "auto" or "manual" — who decides where the nodes sit. Auto arranges the canvas on
+        // open and after anything that changes the wiring; dragging a node switches to
+        // manual, and Tidy up switches back. Recorded on the saved graph, and a graph with
+        // no `layout` key is auto — see `flow_builder.js`, which states the reasoning for
+        // both canvases.
+        layout: "auto",
+        // Connector ids the server reported as running back up the canvas, so a loop is
+        // drawn as a return rather than as a step.
+        backEdges: {},
         vocabulary: { node_types: [], value_kinds: [], operators: [], default_max_iterations: 200 },
         options: null,       // datasources / tool configs, fetched once
         run: null,           // the latest run frame
@@ -170,10 +253,14 @@ window.GraphDesigner = (function () {
     };
 
     let opts = {};
-    let canvasEl, edgesGroupEl, wrapperEl, paletteBodyEl, propertiesBodyEl;
+    let canvasEl, edgesSvgEl, edgesGroupEl, wrapperEl, paletteBodyEl, propertiesBodyEl;
 
-    // Resolved once from the stylesheet on the first node rendered — see `portMetrics`.
-    let portMetricsCache = null;
+    // The shared selection controller — the box, the multi-selection and the group move.
+    // Built in `init`, because it needs the canvas elements.
+    let selection = null;
+
+    // Resolved once from the stylesheet — see `canvasMetrics`.
+    let canvasMetricsCache = null;
 
     // True for one tick after a drag that actually moved a node, so the click that trails
     // the mouseup is not mistaken for a deliberate click on that node. See `onDragEnd`.
@@ -183,6 +270,29 @@ window.GraphDesigner = (function () {
     // port, so a plain click still arms the click-then-click gesture; on a node, so a click
     // that merely jitters is not treated as a move.
     const DRAG_THRESHOLD_PX = 4;
+
+    // Hand-routing a connector — see "Bending a connector" below.
+    //
+    // Four bends, and the number is not taste: with a fixed exit stub and a fixed entry
+    // stub, four free points already express more distinct orthogonal routes than anybody
+    // draws, and it bounds the saved document. The server enforces the same number, because
+    // a cap only the browser knows is not a cap.
+    const MAX_EDGE_WAYPOINTS = 4;
+
+    // How near a bend a press has to land to move it rather than make a new one.
+    const WAYPOINT_GRAB_PX = 8;
+
+    // How near a line-up a dragged bend has to get before it snaps onto it.
+    const WAYPOINT_SNAP_PX = 6;
+
+    // Drop a bend this close to where the wire would run without it and it is removed.
+    const WAYPOINT_DISCARD_PX = 6;
+
+    // The pending repaint of a drag, and the return lane it was computed against. Both are
+    // per-frame: a mousemove only records where the cursor is, and one animation frame does
+    // the drawing, however many mousemoves arrived in between. See `scheduleDragFrame`.
+    let dragFrame = null;
+    let laneXCache = null;
 
     // -----------------------------------------------------------------
     // Dirty tracking
@@ -289,6 +399,16 @@ window.GraphDesigner = (function () {
                     recipients: { to: [], cc: [], bcc: [] },
                     variable_bindings: {},
                 });
+            // `data` is where the rows come from: one source on this canvas, an earlier
+            // node's output, optionally through a path into it.
+            case "create_file":
+                return Object.assign(base, {
+                    file_format: "csv",
+                    file_name: "",
+                    data: { source: "node", source_node: "", path: "" },
+                });
+            case "download_file":
+                return Object.assign(base, { create_file_node: "" });
             // A timer instance is a Start until told otherwise, because a Start is the
             // only one that is valid on its own — the other three need a timer to name,
             // and defaulting to one of those would create a node that cannot be saved.
@@ -348,6 +468,16 @@ window.GraphDesigner = (function () {
                 return (template ? "sends " + template : "(no template selected)")
                     + (to ? "\nto " + to : "");
             }
+            case "create_file": {
+                const src = d.data || {};
+                const from = src.source_node ? nodeLabelById(src.source_node) : "?";
+                return String(d.file_format || "csv").toUpperCase() + " of " + from +
+                    (src.path ? "." + src.path : "");
+            }
+            case "download_file":
+                return d.create_file_node
+                    ? "link to " + nodeLabelById(d.create_file_node)
+                    : "(no file chosen)";
             case "timer": {
                 const action = d.action || "start";
                 if (action === "start") return "starts timing";
@@ -391,9 +521,17 @@ window.GraphDesigner = (function () {
         wrapperEl.classList.toggle("gd-connecting", !!state.pending);
     }
 
+    /**
+     * Draw one node as a step: a round icon, its name, one line of its settings, and a
+     * labelled pill per way out.
+     *
+     * Built with `createElement` and `textContent` throughout, which is not incidental —
+     * every string here is a node name, a table name or a SQL fragment out of the user's
+     * own database, and the file's own rule at the top says so.
+     */
     function renderNode(node) {
         const el = document.createElement("div");
-        el.className = "gd-node";
+        el.className = "gd-node gd-step";
         el.id = "node-" + node.id;
         el.dataset.nodeId = node.id;
         el.style.left = ((node.position || {}).x || 0) + "px";
@@ -401,93 +539,14 @@ window.GraphDesigner = (function () {
 
         if (node.id === state.selectedNodeId) el.classList.add("gd-node-selected");
         if (state.picked[node.id]) el.classList.add("gd-node-picked");
+        // Read from state, never only set on the element at gesture time: `renderAllNodes`
+        // rebuilds this layer from scratch, so a class applied by a click would vanish the
+        // next time anything re-rendered.
+        if (selection && selection.marksNode(node.id)) el.classList.add("gd-node-multi");
 
-        // --- header ---
-        const header = document.createElement("div");
-        header.className = "gd-node-header";
-        header.dataset.role = "drag-handle";
-
-        const icon = document.createElement("i");
-        icon.className = "las " + (ICONS[node.type] || "la-question-circle");
-        header.appendChild(icon);
-
-        const title = document.createElement("span");
-        title.className = "gd-node-title";
-        title.textContent = labelOf(node);
-        header.appendChild(title);
-
-        const badge = document.createElement("span");
-        badge.className = "badge gd-node-status-badge";
-        badge.dataset.role = "status-badge";
-        badge.hidden = true;
-        header.appendChild(badge);
-
-        const icons = document.createElement("div");
-        icons.className = "gd-node-header-icons";
-
-        const editBtn = document.createElement("button");
-        editBtn.type = "button";
-        editBtn.className = "gd-node-icon-btn";
-        editBtn.title = "Settings";
-        editBtn.innerHTML = '<i class="las la-cog"></i>';
-        editBtn.addEventListener("click", function (e) {
-            e.stopPropagation();
-            openProperties(node.id);
-        });
-        icons.appendChild(editBtn);
-
-        // Start is not deletable: `validate_graph` requires exactly one, so offering the
-        // button would offer a state the save refuses.
-        if (node.type !== "start") {
-            const delBtn = document.createElement("button");
-            delBtn.type = "button";
-            delBtn.className = "gd-node-icon-btn gd-node-icon-btn-danger";
-            delBtn.title = "Delete node";
-            delBtn.innerHTML = '<i class="las la-trash"></i>';
-            delBtn.addEventListener("click", function (e) {
-                e.stopPropagation();
-                deleteNode(node.id);
-            });
-            icons.appendChild(delBtn);
-        }
-
-        header.appendChild(icons);
-        header.addEventListener("mousedown", function (e) {
-            if (e.button === 0) startDrag(node.id, e);
-        });
-        el.appendChild(header);
-
-        // --- body ---
-        const body = document.createElement("div");
-        body.className = "gd-node-body";
-
-        const kind = document.createElement("div");
-        kind.className = "gd-node-kind";
-        kind.textContent = (state.vocabulary.node_types.find(function (t) {
-            return t.type === node.type;
-        }) || {}).label || node.type;
-        body.appendChild(kind);
-
-        const preview = document.createElement("div");
-        preview.className = "gd-node-preview";
-        preview.textContent = previewOf(node);
-        body.appendChild(preview);
-
-        body.addEventListener("click", function (e) {
-            // Shift-click picks a node for a test run; a plain click selects it for
-            // editing. Two different questions, so two different gestures.
-            if (e.shiftKey) {
-                e.stopPropagation();
-                togglePicked(node.id);
-                return;
-            }
-            onTargetPortClick(node.id, e);
-        });
-        el.appendChild(body);
-
-        // --- ports ---
-        const inPort = document.createElement("div");
-        inPort.className = "gd-node-port gd-node-port-in";
+        // --- the entry, on the top edge ---
+        const inPort = document.createElement("span");
+        inPort.className = "gd-step-entry";
         inPort.dataset.portRole = "in";
         inPort.title = "Drop a connector here, or click to finish one";
         if (node.type === "start") inPort.style.display = "none";
@@ -500,116 +559,368 @@ window.GraphDesigner = (function () {
         });
         el.appendChild(inPort);
 
-        const outWrap = document.createElement("div");
-        outWrap.className = "gd-node-ports-out";
+        // --- the disc ---
+        const disc = document.createElement("div");
+        disc.className = "gd-step-disc";
+        disc.style.background = COLOURS[node.type] || STEP_COLOURS.clock;
 
-        portsOf(node).forEach(function (spec) {
-            const row = document.createElement("div");
-            row.className = "gd-node-port-out-row";
-            if (spec.kind) row.dataset.portKind = spec.kind;
+        const icon = document.createElement("i");
+        icon.className = "las " + (ICONS[node.type] || "la-question-circle");
+        disc.appendChild(icon);
 
-            if (spec.label) {
-                const lbl = document.createElement("span");
-                lbl.className = "gd-node-port-out-label";
-                lbl.textContent = spec.label;
-                row.appendChild(lbl);
-            }
+        // The live run's verdict for this node, on the corner of its disc. It was in the
+        // header; a step has no header, and the corner of the disc is where a reader
+        // watching a run is already looking.
+        const badge = document.createElement("span");
+        badge.className = "badge gd-node-status-badge";
+        badge.dataset.role = "status-badge";
+        badge.hidden = true;
+        disc.appendChild(badge);
 
-            const dot = document.createElement("div");
-            dot.className = "gd-node-port gd-node-port-out";
-            dot.dataset.port = spec.port;
-            dot.title = "Drag to a node to connect, or click here and then click the target";
-            dot.style.position = "static";
-            dot.style.transform = "none";
-            if (state.pending && state.pending.nodeId === node.id && state.pending.port === spec.port) {
-                dot.classList.add("gd-port-pending");
-            }
-            dot.addEventListener("click", function (e) {
+        // The tick that says this node is one of the ones Test selection will run. On a
+        // node card that was a border; a ring alone reads as "selected for editing", which
+        // is a different question, so this state gets a mark of its own.
+        const pick = document.createElement("span");
+        pick.className = "gd-step-pick";
+        pick.innerHTML = '<i class="las la-check"></i>';
+        disc.appendChild(pick);
+
+        el.appendChild(disc);
+
+        // --- Settings and Delete, revealed on hover ---
+        const actions = document.createElement("div");
+        actions.className = "gd-step-actions";
+
+        const editBtn = document.createElement("button");
+        editBtn.type = "button";
+        editBtn.className = "gd-step-action";
+        editBtn.title = "Settings";
+        editBtn.innerHTML = '<i class="las la-cog"></i>';
+        editBtn.addEventListener("click", function (e) {
+            e.stopPropagation();
+            openProperties(node.id);
+        });
+        actions.appendChild(editBtn);
+
+        // Start is not deletable: `validate_graph` requires exactly one, so offering the
+        // button would offer a state the save refuses.
+        if (node.type !== "start") {
+            const delBtn = document.createElement("button");
+            delBtn.type = "button";
+            delBtn.className = "gd-step-action gd-step-action-danger";
+            delBtn.title = "Delete node";
+            delBtn.innerHTML = '<i class="las la-trash"></i>';
+            delBtn.addEventListener("click", function (e) {
                 e.stopPropagation();
-                onSourcePortClick(node.id, spec.port);
+                deleteNode(node.id);
             });
-            // Both gestures from one dot. `mousedown` opens a drag; a drag that never moves
-            // does nothing on release, leaving the `click` that follows to arm the
-            // click-then-click gesture instead. The two cannot both fire for one press,
-            // because a real drag releases over another element and so produces no `click`
-            // on this dot at all.
-            dot.addEventListener("mousedown", function (e) {
-                if (e.button !== 0) return;
-                e.stopPropagation();
-                startConnectDrag(node.id, spec.port, e);
+            actions.appendChild(delBtn);
+        }
+        el.appendChild(actions);
+
+        // --- name and settings ---
+        const title = document.createElement("div");
+        title.className = "gd-step-title";
+        title.textContent = labelOf(node);
+        el.appendChild(title);
+
+        const kind = document.createElement("div");
+        kind.className = "gd-step-kind";
+        kind.textContent = (state.vocabulary.node_types.find(function (t) {
+            return t.type === node.type;
+        }) || {}).label || node.type;
+        el.appendChild(kind);
+
+        const preview = document.createElement("div");
+        preview.className = "gd-step-sub";
+        preview.textContent = previewOf(node);
+        el.appendChild(preview);
+
+        // --- the ways out ---
+        const specs = portsOf(node);
+
+        if (specs.length === 1 && !specs[0].label) {
+            el.appendChild(buildExitDot(node, specs[0]));
+        } else if (specs.length) {
+            const branches = document.createElement("div");
+            branches.className = "gd-step-branches";
+            specs.forEach(function (spec) {
+                branches.appendChild(buildBranchPill(node, spec));
             });
-            row.appendChild(dot);
-            outWrap.appendChild(row);
+            el.appendChild(branches);
+        }
+
+        // The whole step drags, and a press that never moved is the click that opens the
+        // node's settings or finishes a connector — see `onDragEnd`. Not from a pill, a dot
+        // or an action button: each of those is a control with its own handler.
+        el.addEventListener("mousedown", function (e) {
+            if (e.button !== 0) return;
+            if (e.target.closest(".gd-step-pill, .gd-step-exit, .gd-step-entry, .gd-step-action")) return;
+            // Offered to the selection first. It takes the press only for a Ctrl-click or a
+            // real group move; anything else falls through to the drag this canvas has
+            // always done, shift-click picking and all.
+            if (selection && selection.beginNodePress(node.id, e)) return;
+            startDrag(node.id, e);
         });
 
-        // Any part of the box finishes a connection that is already armed — the header
-        // included, which is otherwise the one place on a node where a click does nothing and
-        // the gesture appears to have failed. Only when armed: an ordinary click on the
-        // header still just drags.
+        // Any part of the step finishes a connector that is already armed. Only when armed:
+        // an ordinary click is handled by `onDragEnd`.
         el.addEventListener("click", function (e) {
             if (!state.pending || suppressNodeClick) return;
             e.stopPropagation();
             onTargetPortClick(node.id, e);
         });
 
-        el.appendChild(outWrap);
         canvasEl.appendChild(el);
+    }
 
-        // The stack starts below the header (graph_designer.css pins that so a port's opaque
-        // label cannot cover the Settings and Delete buttons), so the node has to be tall
-        // enough to hold it — otherwise a branch with several conditions hangs its lower
-        // ports off the bottom edge.
-        //
-        // The stack's height is *measured*, not predicted from the port count: a row is as
-        // tall as its label, not as its dot, so arithmetic over `--gd-port-size` comes out
-        // short by a few pixels per row — which is exactly how far the last port hung out of
-        // the box. Reading it back needs the element in the document, hence after the append.
-        if (outWrap.childElementCount) {
-            const m = portMetrics(el);
-            el.style.minHeight =
-                (m.header + m.gap + outWrap.getBoundingClientRect().height + m.gap) + "px";
-        }
+    /** The single unlabelled way out of a node: a dot on its bottom edge. */
+    function buildExitDot(node, spec) {
+        const dot = document.createElement("span");
+        dot.className = "gd-step-exit gd-node-port-out";
+        dot.dataset.port = spec.port;
+        dot.title = "Drag to a node to connect, or click here and then click the target";
+        wireOutPort(dot, node, spec);
+        return dot;
     }
 
     /**
-     * Where the port stack starts, in pixels, per the stylesheet.
+     * One labelled way out of a node, as a pill under it.
      *
-     * Read from CSS rather than restated here so the two cannot drift: the header's height
-     * and the gap are the stylesheet's decisions (`--gd-header-h`, `--gd-port-gap`), and
-     * this only needs to know what they came out as. Cached — every node in a render pass
-     * resolves to the same two values.
-     *
-     * @param {HTMLElement} nodeEl - a node already in the document
-     * @returns {{header: number, gap: number}}
+     * A branch's conditions, a loop's `each` / `done`, an `on error` — all of them are the
+     * same thing and now look it, which is what the reference canvas does. The pill *is* the
+     * output port: it keeps the `gd-node-port-out` class and the `data-port` attribute that
+     * the connect, reattach and delete paths all key off, so none of those changed. It also
+     * replaces the label drawn on the connector itself, which said the same word twice.
      */
-    function portMetrics(nodeEl) {
-        if (portMetricsCache) return portMetricsCache;
+    function buildBranchPill(node, spec) {
+        const pill = document.createElement("span");
+        pill.className = "gd-step-pill gd-node-port-out";
+        pill.dataset.port = spec.port;
+        if (spec.kind) pill.dataset.portKind = spec.kind;
+        pill.textContent = spec.label || spec.port;
+        pill.title = (spec.label || spec.port) +
+            " — drag to a node to connect, or click here and then click the target";
+        wireOutPort(pill, node, spec);
+        return pill;
+    }
 
-        const style = window.getComputedStyle(nodeEl);
-        const read = function (name, fallback) {
-            const value = parseFloat(style.getPropertyValue(name));
-            return isFinite(value) && value > 0 ? value : fallback;
-        };
-
-        portMetricsCache = { header: read("--gd-header-h", 30), gap: read("--gd-port-gap", 6) };
-        return portMetricsCache;
+    /** The two gestures every way out offers, wired the same for a dot and for a pill. */
+    function wireOutPort(el, node, spec) {
+        if (state.pending && state.pending.nodeId === node.id && state.pending.port === spec.port) {
+            el.classList.add("gd-port-pending");
+        }
+        el.addEventListener("click", function (e) {
+            e.stopPropagation();
+            onSourcePortClick(node.id, spec.port);
+        });
+        // Both gestures from one control. `mousedown` opens a drag; a drag that never moves
+        // does nothing on release, leaving the `click` that follows to arm the
+        // click-then-click gesture instead. The two cannot both fire for one press, because
+        // a real drag releases over another element and so produces no `click` here at all.
+        el.addEventListener("mousedown", function (e) {
+            if (e.button !== 0) return;
+            e.stopPropagation();
+            startConnectDrag(node.id, spec.port, e);
+        });
     }
 
     // -----------------------------------------------------------------
     // Rendering — connectors
     // -----------------------------------------------------------------
 
-    function portAnchor(nodeId, portSelector) {
+    // -----------------------------------------------------------------
+    // Anchors, and why a drag does not measure them
+    //
+    // `edgeRoute` finds a port by measuring it — `getBoundingClientRect`, through
+    // `GC.anchor`. That is right when the canvas is still and wrong inside a drag loop.
+    // The frame has just written `style.left`, so every rect read after it forces the
+    // browser to lay the whole canvas out again: once per port, per connector, per
+    // mousemove. Dragging one node with six connectors did that a dozen times a frame,
+    // and mousemove fires faster than the screen repaints. That is the stutter.
+    //
+    // So a drag measures each port it needs exactly once and keeps the result as an
+    // **offset from its node's stored position**. After that an anchor is two additions
+    // and the loop reads nothing.
+    //
+    // Taking the offset as `anchor - node.position`, both sides sampled at the same
+    // instant, is what makes it exact rather than approximately right. Two constant
+    // discrepancies live between those spaces: the wrapper's 1px border (anchors are
+    // measured from its border box, `node.position` from the layer's content box), and
+    // the ports' half-pixel placement (`left: 50%; margin-left: -5.5px`). Both land
+    // inside the offset. Neither has to be named here, and neither breaks if the
+    // stylesheet changes the border or moves a dot.
+    // -----------------------------------------------------------------
+
+    let dragAnchors = null;
+
+    function measuredAnchor(nodeId, portSelector) {
         return GC.portAnchor(wrapperEl, document.getElementById("node-" + nodeId), portSelector);
     }
 
-    function edgeGeometry(edge) {
-        const from = portAnchor(
-            edge.source,
-            '.gd-node-port-out[data-port="' + GC.cssEscape(edge.source_port || "default") + '"]',
-        );
+    function portAnchor(nodeId, portSelector) {
+        if (!dragAnchors) return measuredAnchor(nodeId, portSelector);
+
+        const key = nodeId + "|" + (portSelector || "");
+
+        // A stationary end. Nothing about it can change while the drag runs, so it is
+        // measured once and then remembered outright.
+        if (!dragAnchors.moving[nodeId]) {
+            if (!(key in dragAnchors.frozen)) {
+                dragAnchors.frozen[key] = measuredAnchor(nodeId, portSelector);
+            }
+            return dragAnchors.frozen[key];
+        }
+
+        const node = findNode(nodeId);
+        if (!node) return null;
+        const x = (node.position || {}).x || 0;
+        const y = (node.position || {}).y || 0;
+
+        if (!(key in dragAnchors.offsets)) {
+            const measured = measuredAnchor(nodeId, portSelector);
+            dragAnchors.offsets[key] = measured
+                ? { dx: measured.x - x, dy: measured.y - y }
+                : null;
+        }
+
+        const offset = dragAnchors.offsets[key];
+        return offset ? { x: x + offset.dx, y: y + offset.dy } : null;
+    }
+
+    /**
+     * Open the anchor cache for a drag, and warm it while the canvas is still settled.
+     *
+     * Warming matters: measuring lazily on the first moved frame would take one forced
+     * layout, which is harmless, but it would also measure a node the frame had already
+     * moved. Doing it here, before anything has been written, keeps the whole gesture
+     * free of layout reads.
+     *
+     * @param {Array<string>} movingIds - the nodes this drag will move
+     * @param {Array<object>} chrome - the resolved connectors it will repaint
+     */
+    function beginDragAnchors(movingIds, chrome) {
+        dragAnchors = { moving: {}, offsets: {}, frozen: {} };
+        movingIds.forEach(function (id) { dragAnchors.moving[id] = true; });
+        chrome.forEach(function (record) { edgeRoute(record.edge); });
+    }
+
+    function endDragAnchors() {
+        dragAnchors = null;
+    }
+
+    /**
+     * Where the cursor is, in canvas coordinates.
+     *
+     * The same three lines were written inline at four sites. Named, because the bend
+     * gesture needs to agree with the drag gesture about them exactly.
+     *
+     * @param {{clientX: number, clientY: number}} e
+     * @returns {{x: number, y: number}}
+     */
+    function cursorPoint(e) {
+        const rect = wrapperEl.getBoundingClientRect();
+        return {
+            x: e.clientX + wrapperEl.scrollLeft - rect.left,
+            y: e.clientY + wrapperEl.scrollTop - rect.top,
+        };
+    }
+
+    /**
+     * A connector's hand-placed bends, as a list that is always safe to route through.
+     *
+     * @param {object} edge
+     * @returns {Array<{x: number, y: number}>}
+     */
+    function waypointsOf(edge) {
+        if (!edge) return [];
+        return Array.isArray(edge.waypoints) ? edge.waypoints : [];
+    }
+
+    /**
+     * Bends read off a stored document, keeping only the ones that are usable.
+     *
+     * The save schema lets the canvas add keys to its own drawing, which is what makes
+     * `waypoints` possible without a migration — and means this is where a hand-edited or
+     * older document is made safe. A bend that is not two finite numbers is dropped rather
+     * than drawn: `NaN` in a coordinate does not fail here, it fails silently in the SVG and
+     * then again at the database, which refuses it as JSON.
+     *
+     * @param {*} raw
+     * @returns {Array<{x: number, y: number}>}
+     */
+    function readWaypoints(raw) {
+        if (!Array.isArray(raw)) return [];
+
+        return raw
+            .filter(function (point) {
+                return point && isFinite(point.x) && isFinite(point.y);
+            })
+            .slice(0, MAX_EDGE_WAYPOINTS)
+            .map(function (point) {
+                return { x: Math.max(0, Number(point.x)), y: Math.max(0, Number(point.y)) };
+            });
+    }
+
+    /**
+     * The selector for the port a connector leaves by.
+     *
+     * One place, because `edgeRoute` and the bend gesture have to agree on it exactly or a
+     * bend is computed against a different line from the one on screen.
+     *
+     * @param {object} edge
+     * @returns {string}
+     */
+    function sourceSelectorFor(edge) {
+        return '.gd-node-port-out[data-port="' +
+            GC.cssEscape(edge.source_port || "default") + '"]';
+    }
+
+    /**
+     * How far right the lane sits that a connector running back up the canvas uses.
+     * Measured off the nodes, because the canvas is as wide as the pipeline drawn on it.
+     */
+    function returnLaneX() {
+        // Memoised for the duration of one drag frame only. It reduces over every node,
+        // and `edgeRoute` asks for it once per back edge, so on a canvas with a loop this
+        // was O(nodes x edges) per frame. Guarded on the anchor cache, which exists for
+        // exactly as long as a drag — single or group — is running, so the memo cannot
+        // outlive the gesture that justified it. Outside one this is the plain reduce it
+        // always was.
+        if (dragAnchors && laneXCache !== null) return laneXCache;
+
+        const rightmost = state.nodes.reduce(function (widest, node) {
+            return Math.max(widest, (node.position || {}).x || 0);
+        }, 0);
+
+        const lane = rightmost + canvasMetrics().stepWidth + GC.ELBOW_LANE;
+        if (dragAnchors) laneXCache = lane;
+        return lane;
+    }
+
+    /**
+     * The corner points one connector runs through.
+     *
+     * A connector the server reported as a back edge — a `for each` or `do until` sending
+     * the run round again — takes the return lane rather than a downward step. There is no
+     * downward step available: its target is above it, which is what makes it a loop.
+     */
+    function edgeRoute(edge) {
+        const from = portAnchor(edge.source, sourceSelectorFor(edge));
         const to = portAnchor(edge.target, '[data-port-role="in"]') || portAnchor(edge.target, null);
-        return GC.geometry(from, to);
+
+        if (!from || !to) return null;
+
+        const bends = waypointsOf(edge);
+
+        // A hand-placed bend beats the return lane. The lane is a fallback — `elbowPoints`
+        // says why it exists: there is no way down to a target that is up. A waypoint is a
+        // person saying where the wire goes, and a person's decision beats a fallback. The
+        // failure mode of the other order is worse: you bend a wire, nothing visible
+        // happens, and you bend it again.
+        return (state.backEdges[edge.id] && !bends.length)
+            ? GC.backEdgePoints(from, to, returnLaneX())
+            : GC.waypointPoints(from, to, bends);
     }
 
     function renderAllEdges() {
@@ -618,44 +929,78 @@ window.GraphDesigner = (function () {
     }
 
     function renderEdge(edge) {
-        const g = edgeGeometry(edge);
-        if (!g) return;
+        const route = edgeRoute(edge);
+        if (!route) return;
 
+        const d = GC.elbowPathD(route);
         const group = GC.svg("g");
         group.id = "edge-group-" + edge.id;
+        // The selected class goes on the group as well as the path, so the stylesheet can
+        // reveal this connector's ✕ and handles — they are siblings of the path.
+        group.setAttribute(
+            "class",
+            "gd-edge-group" +
+            (edge.id === state.selectedEdgeId ? " gd-edge-group-selected" : "") +
+            (selection && selection.marksEdge(edge.id) ? " gd-edge-multi" : ""),
+        );
+
+        const select = function (e) {
+            e.stopPropagation();
+            state.selectedEdgeId = edge.id;
+            renderAllEdges();
+        };
+
+        // An invisible fat path under the visible one, purely to be hovered and clicked. The
+        // line is 2px and its controls now only appear on hover, so without this they would
+        // mean landing the cursor inside two pixels.
+        const hit = GC.svg("path");
+        hit.setAttribute("class", "gd-edge-hit");
+        hit.setAttribute("d", d);
+        hit.addEventListener("click", function (e) {
+            // Not the click that trailed a bend: a wire that was just routed must not also
+            // become the selected one.
+            if (suppressEdgeClick) return;
+            select(e);
+        });
+        // Press and move to bend it; press and release to select it. The same split
+        // `wireOutPort` documents for a port, which is why the click listener stays: under
+        // the threshold nothing happens here and the click does its job.
+        hit.addEventListener("mousedown", function (e) { startBend(edge.id, e); });
+        // Straightening it. This canvas has no connector properties panel, so this is the
+        // only affordance there is — which is why it is the one both canvases share.
+        hit.addEventListener("dblclick", function (e) {
+            e.stopPropagation();
+            straightenEdge(edge.id);
+        });
+        group.appendChild(hit);
 
         const path = GC.svg("path");
         path.id = "edge-" + edge.id;
-        path.setAttribute("d", GC.pathD(g));
+        path.setAttribute("d", d);
 
         const port = edge.source_port || "default";
         if (port === "error") path.classList.add("gd-edge-error");
         if (port === "body") path.classList.add("gd-edge-loop");
         if (edge.id === state.selectedEdgeId) path.classList.add("gd-edge-selected");
 
-        path.addEventListener("click", function (e) {
-            e.stopPropagation();
-            state.selectedEdgeId = edge.id;
-            renderAllEdges();
-        });
+        path.addEventListener("click", select);
         group.appendChild(path);
 
-        // The port's name on the curve, so a graph with several outcomes leaving one node
-        // is readable without clicking anything.
-        if (port !== "default") {
-            const mid = GC.pointAt(g, 0.5);
-            const text = GC.svg("text");
-            text.setAttribute("x", mid.x);
-            text.setAttribute("y", mid.y - 6);
-            text.setAttribute("text-anchor", "middle");
-            text.setAttribute("class", "gd-edge-label");
-            text.textContent = port;
-            group.appendChild(text);
-        }
+        // The port's name used to be drawn on the connector here. It is now on the pill the
+        // connector leaves from, which is the same word in a place that does not move when
+        // the line does — and one label per way out rather than one per connector.
 
-        group.appendChild(deleteButton(edge.id, GC.pointAt(g, 0.5)));
-        group.appendChild(endHandle(edge.id, "source", GC.pointAt(g, 0.15)));
-        group.appendChild(endHandle(edge.id, "target", GC.pointAt(g, 0.85)));
+        // The bend handles, before the ✕ and the reattach handles rather than after, so
+        // that where two of them land close together on a heavily routed wire the reattach
+        // handle paints on top and wins the press. Reattaching is the more destructive
+        // gesture and should not be taken by accident.
+        waypointsOf(edge).forEach(function (bend, index) {
+            group.appendChild(waypointHandle(index, bend));
+        });
+
+        group.appendChild(deleteButton(edge.id, GC.pointAlongPolyline(route, 0.5)));
+        group.appendChild(endHandle(edge.id, "source", GC.pointAlongPolyline(route, 0.15)));
+        group.appendChild(endHandle(edge.id, "target", GC.pointAlongPolyline(route, 0.85)));
 
         edgesGroupEl.appendChild(group);
     }
@@ -682,6 +1027,27 @@ window.GraphDesigner = (function () {
         return g;
     }
 
+    /**
+     * The small circle that marks one hand-placed bend.
+     *
+     * Drawn at the **stored** point rather than on the line: `elbowPathD` pulls the stroke
+     * up to the corner radius inside every corner, so a handle drawn on the stroke would sit
+     * visibly off the pixel the user put it at.
+     *
+     * @param {number} index
+     * @param {{x: number, y: number}} pt
+     * @returns {SVGElement}
+     */
+    function waypointHandle(index, pt) {
+        const circle = GC.svg("circle");
+        circle.setAttribute("class", "gd-edge-waypoint");
+        circle.setAttribute("data-waypoint", String(index));
+        circle.setAttribute("r", "4");
+        circle.setAttribute("cx", pt.x);
+        circle.setAttribute("cy", pt.y);
+        return circle;
+    }
+
     function endHandle(edgeId, end, pt) {
         const circle = GC.svg("circle");
         circle.setAttribute("class", "gd-edge-handle gd-edge-handle-" + end);
@@ -695,14 +1061,428 @@ window.GraphDesigner = (function () {
         return circle;
     }
 
-    function redrawEdgesForNode(nodeId) {
-        state.edges.forEach(function (edge) {
-            if (edge.source === nodeId || edge.target === nodeId) {
-                const group = document.getElementById("edge-group-" + edge.id);
-                if (group) group.remove();
-                renderEdge(edge);
-            }
+    /**
+     * The elements one connector's geometry is written to.
+     *
+     * Resolved once and carried through a drag rather than looked up per frame: the six
+     * queries below were being re-run for every connector on every mousemove to find the
+     * same elements again.
+     *
+     * @param {object} record - `{edge}` at minimum; filled in place and returned
+     * @returns {object}
+     */
+    function resolveEdgeChrome(record) {
+        const group = document.getElementById("edge-group-" + record.edge.id);
+        record.group = group;
+        record.path = document.getElementById("edge-" + record.edge.id);
+        record.hit = group ? group.querySelector(".gd-edge-hit") : null;
+        record.deleteBtn = group ? group.querySelector(".gd-edge-delete-btn") : null;
+        record.sourceHandle = group ? group.querySelector(".gd-edge-handle-source") : null;
+        record.targetHandle = group ? group.querySelector(".gd-edge-handle-target") : null;
+        record.waypointHandles = group
+            ? Array.prototype.slice.call(group.querySelectorAll(".gd-edge-waypoint"))
+            : [];
+        return record;
+    }
+
+    function edgeChrome(edge) {
+        return resolveEdgeChrome({ edge: edge });
+    }
+
+    /**
+     * Rebuild one connector's DOM, replacing whatever was there.
+     *
+     * `renderEdge` appends. Every other caller reaches it through `renderAllEdges`, which
+     * has just emptied the group — so calling it on its own without this would leave two
+     * elements sharing one id, and `getElementById` would keep finding the stale one.
+     *
+     * @param {object} edge
+     */
+    function reRenderEdge(edge) {
+        const existing = document.getElementById("edge-group-" + edge.id);
+        if (existing) existing.remove();
+        renderEdge(edge);
+    }
+
+    /**
+     * Move an already-drawn connector to where its nodes are now.
+     *
+     * In place. This used to remove the whole `<g>` and call `renderEdge` again, which
+     * rebuilt two paths, the ✕ with its two children, both end handles and all five of
+     * their listeners — every frame, for every connector attached to a moving node. That
+     * is what made a dragged line flicker: the group was briefly not in the document at
+     * all. Setting four attributes leaves the listeners alone and never unparents
+     * anything.
+     *
+     * @param {object} record - from `edgeChrome`
+     */
+    function updateEdgeGeometry(record) {
+        // A connector whose group was never built — `renderEdge` returns early when
+        // neither end could be measured — is built now rather than silently left out of
+        // the drawing, and its freshly created elements picked up for the next frame.
+        if (!record.group || !record.group.isConnected) {
+            reRenderEdge(record.edge);
+            resolveEdgeChrome(record);
+            return;
+        }
+
+        const route = edgeRoute(record.edge);
+        const d = route ? GC.elbowPathD(route) : "";
+        if (record.path) record.path.setAttribute("d", d);
+        if (record.hit) record.hit.setAttribute("d", d);
+        if (!route) return;
+
+        if (record.deleteBtn) {
+            const mid = GC.pointAlongPolyline(route, 0.5);
+            record.deleteBtn.setAttribute("transform", "translate(" + mid.x + "," + (mid.y + 10) + ")");
+        }
+        if (record.sourceHandle) {
+            const pt = GC.pointAlongPolyline(route, 0.15);
+            record.sourceHandle.setAttribute("cx", pt.x);
+            record.sourceHandle.setAttribute("cy", pt.y);
+        }
+        if (record.targetHandle) {
+            const pt = GC.pointAlongPolyline(route, 0.85);
+            record.targetHandle.setAttribute("cx", pt.x);
+            record.targetHandle.setAttribute("cy", pt.y);
+        }
+
+        // The bend handles follow the stored points, not the line — see `waypointHandle`.
+        if (record.waypointHandles.length) {
+            const bends = waypointsOf(record.edge);
+            record.waypointHandles.forEach(function (handle) {
+                const bend = bends[Number(handle.getAttribute("data-waypoint"))];
+                if (!bend) return;
+                handle.setAttribute("cx", bend.x);
+                handle.setAttribute("cy", bend.y);
+            });
+        }
+    }
+
+    /**
+     * The connectors a move of these nodes will disturb, resolved ready to repaint.
+     *
+     * Built once at the start of a drag. Doing it per frame meant walking every edge and
+     * re-querying the DOM for each one, which is work that cannot have changed while the
+     * mouse is down.
+     *
+     * @param {Array<string>} movingIds
+     * @returns {Array<object>}
+     */
+    function chromeForMovingNodes(movingIds) {
+        const moving = {};
+        movingIds.forEach(function (id) { moving[id] = true; });
+
+        return state.edges
+            .filter(function (edge) { return moving[edge.source] || moving[edge.target]; })
+            .map(edgeChrome);
+    }
+
+    // -----------------------------------------------------------------
+    // Layout — asking the server where the nodes go
+    //
+    // The arithmetic is in app/services/canvas_layout/layout_service.py, shared with the
+    // Flow Builder's canvas, and that file says why it is Python: layout is the part of a
+    // drawing that can be wrong without looking wrong, and only Python can be tested here.
+    // What stays on this side is the half that needs a browser — turning a column into an x,
+    // and stacking each layer below the *measured* height of the one above, since a branch
+    // with six conditions is much taller than a Wait node.
+    // -----------------------------------------------------------------
+
+    // Enough for the last of a burst of edits to settle.
+    const LAYOUT_DEBOUNCE_MS = 120;
+
+    // The canvas was a fixed size in the stylesheet, which was enough while pipelines ran
+    // left to right. Top-down they do not fit, and a node placed past the edge cannot be
+    // scrolled to — the wrapper only scrolls as far as its content.
+    const CANVAS_MIN_WIDTH = 4000;
+    const CANVAS_MIN_HEIGHT = 2400;
+
+    let layoutTimer = null;
+
+    /**
+     * The layout's spacing, in pixels, per the stylesheet.
+     *
+     * Read from CSS rather than restated here so the two cannot drift — the same reasoning
+     * the old `portMetrics` carried, applied to the numbers that now matter.
+     */
+    function canvasMetrics() {
+        if (canvasMetricsCache) return canvasMetricsCache;
+
+        const style = window.getComputedStyle(canvasEl);
+        const read = function (name, fallback) {
+            const value = parseFloat(style.getPropertyValue(name));
+            return isFinite(value) && value > 0 ? value : fallback;
+        };
+
+        canvasMetricsCache = {
+            stepWidth: read("--gd-step-w", 176),
+            columnGap: read("--gd-col-gap", 48),
+            rowGap: read("--gd-row-gap", 62),
+            marginX: read("--gd-margin-x", 48),
+            marginY: read("--gd-margin-y", 32),
+        };
+        return canvasMetricsCache;
+    }
+
+    /**
+     * Note that the wiring changed: the graph is now unsaved, and the canvas needs
+     * re-arranging.
+     *
+     * One function at every structural call site rather than a `markDirty()` and a
+     * `syncLayout()` each, so a new kind of edit cannot dirty the graph and forget to
+     * re-arrange it — which would leave a node sitting where its old connections put it.
+     */
+    function wiringChanged() {
+        markDirty();
+        syncLayout();
+    }
+
+    /** Ask for a fresh layout once the current burst of edits stops. */
+    function syncLayout() {
+        if (layoutTimer) window.clearTimeout(layoutTimer);
+        layoutTimer = window.setTimeout(function () {
+            layoutTimer = null;
+            requestLayout();
+        }, LAYOUT_DEBOUNCE_MS);
+    }
+
+    /**
+     * Post the current wiring and use what comes back.
+     *
+     * Sent in both modes, applied in one: even a hand-arranged canvas needs to know which
+     * connectors run backwards, because that decides whether a line is drawn as a step down
+     * or as a return round the side. So positions are used only in `auto`, back edges
+     * always.
+     *
+     * Only ids, types and ends are sent — a node's settings are not the layout's business
+     * and some of them are long (a SQL statement, an email body), and this runs after every
+     * edit.
+     */
+    function requestLayout() {
+        if (!opts.layoutUrl) return;
+
+        const edges = state.edges;
+
+        fetch(opts.layoutUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                nodes: state.nodes.map(function (n) { return { id: n.id, type: n.type }; }),
+                edges: edges.map(function (e) {
+                    return { source: e.source, target: e.target };
+                }),
+            }),
+        })
+            .then(function (r) { return r.ok ? r.json() : Promise.reject(new Error(r.status)); })
+            .then(function (data) {
+                // Indices into the array that was posted, mapped to connector ids while that
+                // array is still in hand — keeping the indices would go stale the moment the
+                // next edit reordered anything.
+                state.backEdges = {};
+                (data.back_edges || []).forEach(function (index) {
+                    const edge = edges[index];
+                    if (edge) state.backEdges[edge.id] = true;
+                });
+
+                if (state.layout === "auto") applyLayout(data.positions);
+                else renderAllEdges();
+            })
+            .catch(function () {
+                // The nodes stay where they are. Nothing is lost and nothing is blank — the
+                // canvas may be holding unsaved work, and its arrangement is the least
+                // important thing on it. Same rule this file's save and run paths follow: a
+                // failed request is a note, never a wiped canvas.
+                noteLayoutFailure();
+            });
+    }
+
+    /**
+     * Say why something the canvas was asked to do did not happen.
+     *
+     * @param {string} [message] - defaults to the layout request's own failure
+     */
+    function noteLayoutFailure(message) {
+        const target = document.getElementById("gdSaveResult");
+        if (!target) return;
+
+        const div = document.createElement("div");
+        div.className = "alert alert-warning py-2 mb-0";
+        div.textContent = message || "Could not tidy the canvas just now. " +
+            "The nodes have been left where they were.";
+        target.innerHTML = "";
+        target.appendChild(div);
+    }
+
+    /**
+     * The widest thing any node draws, measured rather than assumed.
+     *
+     * The node itself is a fixed `--gd-step-w`, which is what keeps every disc centred over
+     * the same point in its column. Its branch pills are not: they sit side by side and
+     * overflow the node evenly on both sides, so a Branch carrying two written conditions is
+     * far wider than the disc above it. Columns are spaced by this number so that a
+     * fractional column — the mean of its parents — still lands somewhere nothing else has
+     * claimed.
+     *
+     * @returns {number} px, 0 when nothing has been rendered yet
+     */
+    function widestStep() {
+        let widest = 0;
+
+        state.nodes.forEach(function (node) {
+            const el = document.getElementById("node-" + node.id);
+            if (!el) return;
+            widest = Math.max(widest, el.getBoundingClientRect().width);
+            const pills = el.querySelector(".gd-step-branches");
+            if (pills) widest = Math.max(widest, pills.getBoundingClientRect().width);
         });
+
+        return widest;
+    }
+
+    /**
+     * Put every node where the server said, and redraw.
+     *
+     * Two passes, because the second needs the first to have happened in the document: x
+     * from the column and everything rendered, then y from the layer with each row starting
+     * below the tallest node of the row above. Uniform row heights would either waste a band
+     * of canvas under every short row or let a six-condition branch overlap what is beneath
+     * it.
+     *
+     * An auto-arrange does **not** mark the graph unsaved: a position changes nothing about
+     * what a run does, and the unsaved badge is a warning that the drawing on screen is not
+     * the drawing that would run. Flagging every open of every pipeline would make it mean
+     * nothing.
+     */
+    function applyLayout(positions) {
+        if (!positions) return;
+
+        const m = canvasMetrics();
+        const rows = {};
+
+        // Render before measuring. A node is `--gd-step-w` wide, but its branch pills sit
+        // side by side and may carry their row wider than that — so the width that decides
+        // how far apart columns go is the widest row on the canvas, not the width of the
+        // node above it.
+        renderAllNodes();
+
+        const widest = Math.max(m.stepWidth, widestStep());
+        const pitch = widest + m.columnGap;
+
+        // Half of a wide row hangs off each side of its node, so the first column has to
+        // start far enough in for the left half to have somewhere to be.
+        const leftPad = Math.max(m.marginX, Math.ceil((widest - m.stepWidth) / 2) + 8);
+
+        state.nodes.forEach(function (node) {
+            const place = positions[node.id];
+
+            // No place means the server did not see this node — it was added while the
+            // request was out. It keeps where it is and the next pass picks it up.
+            if (!place) return;
+
+            node.position = {
+                x: Math.round(leftPad + place.column * pitch),
+                y: (node.position || {}).y || m.marginY,
+            };
+            const el = document.getElementById("node-" + node.id);
+            if (el) el.style.left = node.position.x + "px";
+            (rows[place.layer] = rows[place.layer] || []).push(node);
+        });
+
+        let top = m.marginY;
+
+        Object.keys(rows)
+            .map(Number)
+            .sort(function (a, b) { return a - b; })
+            .forEach(function (layer) {
+                let tallest = 0;
+
+                rows[layer].forEach(function (node) {
+                    const el = document.getElementById("node-" + node.id);
+                    node.position.y = top;
+                    if (!el) return;
+                    el.style.top = top + "px";
+                    tallest = Math.max(tallest, el.getBoundingClientRect().height);
+                });
+
+                top += tallest + m.rowGap;
+            });
+
+        fitCanvas();
+        renderAllEdges();
+    }
+
+    /**
+     * Grow the canvas and its connector layer to hold the drawing.
+     *
+     * Both, and to the same size: the connectors are their own SVG, and one sized smaller
+     * than the canvas would clip every line past its edge rather than fail visibly.
+     */
+    function fitCanvas() {
+        const m = canvasMetrics();
+        let right = 0;
+        let bottom = 0;
+
+        state.nodes.forEach(function (node) {
+            const el = document.getElementById("node-" + node.id);
+            const box = el ? el.getBoundingClientRect() : { width: m.stepWidth, height: 0 };
+            right = Math.max(right, ((node.position || {}).x || 0) + box.width);
+            bottom = Math.max(bottom, ((node.position || {}).y || 0) + box.height);
+        });
+
+        // Past the rightmost node by the return lane's width, so a loop's connector has
+        // somewhere to run rather than being drawn off the edge.
+        const width = Math.max(CANVAS_MIN_WIDTH, right + m.stepWidth + GC.ELBOW_LANE * 2);
+        const height = Math.max(CANVAS_MIN_HEIGHT, bottom + m.marginY * 2);
+
+        [canvasEl, edgesSvgEl].forEach(function (el) {
+            if (!el) return;
+            el.style.width = width + "px";
+            el.style.height = height + "px";
+        });
+    }
+
+    /**
+     * Hand the arranging back to the canvas: the Tidy up button.
+     *
+     * Marks the graph unsaved, unlike an arrange that happens on its own — pressing this
+     * changes what gets stored (the canvas stops being manual), which is an edit even though
+     * the nodes are all that visibly move.
+     */
+    function tidyUp() {
+        // Tidy up already means "throw away my arrangement and let the canvas decide". A
+        // hand-routed wire only means anything against a known arrangement, so leaving the
+        // bends would give a drawing that is neither arranged nor hand-drawn, with no button
+        // that fixes it. But it destroys work somebody did by hand, so it asks — with the
+        // count, so the question is answerable.
+        const bent = state.edges.filter(function (edge) { return waypointsOf(edge).length; });
+        if (bent.length) {
+            const wires = bent.length === 1 ? "1 connector" : bent.length + " connectors";
+            if (!window.confirm("Tidying up will straighten " + wires +
+                " you routed by hand. Continue?")) {
+                return;
+            }
+            bent.forEach(function (edge) { delete edge.waypoints; });
+        }
+
+        state.layout = "auto";
+        updateLayoutButton();
+        markDirty();
+        renderAllEdges();
+        requestLayout();
+    }
+
+    /** Show on the Tidy up button whether the canvas is arranging itself. */
+    function updateLayoutButton() {
+        const button = document.getElementById("gdTidyBtn");
+        if (!button) return;
+
+        const manual = state.layout === "manual";
+        button.classList.toggle("btn-outline-primary", manual);
+        button.classList.toggle("btn-outline-secondary", !manual);
+        button.title = manual
+            ? "Nodes are where you put them. Arrange the canvas automatically again."
+            : "Arrange the canvas again";
     }
 
     // -----------------------------------------------------------------
@@ -724,49 +1504,558 @@ window.GraphDesigner = (function () {
             offsetY: y - ((node.position || {}).y || 0),
             startX: e.clientX,
             startY: e.clientY,
+            clientX: e.clientX,
+            clientY: e.clientY,
             moved: false,
+            // Shift-click picks a node for a test run. Recorded at the press because the
+            // release is where a click is finally recognised, and by then the modifier is
+            // only knowable from the event that started it.
+            shift: e.shiftKey,
+            // Which connectors this move disturbs, and where their geometry is written.
+            // Resolved now, while nothing has moved and the DOM is settled.
+            chrome: chromeForMovingNodes([nodeId]),
         };
+        beginDragAnchors([nodeId], state.dragging.chrome);
         document.addEventListener("mousemove", onDragMove);
         document.addEventListener("mouseup", onDragEnd);
     }
 
+    /**
+     * A mousemove during a node drag: record where the cursor is, and ask for a frame.
+     *
+     * Nothing is written here. Two things used to be wrong with doing the work inline.
+     * The node was moved **before** the threshold was consulted, so a one-pixel click on
+     * a node quietly changed its stored position — discarded on the next auto-arrange, or
+     * kept as an unmarked edit in manual mode. And a repaint ran per mousemove, which
+     * fires faster than the screen updates, so most of them were thrown away unseen.
+     */
     function onDragMove(e) {
         if (!state.dragging) return;
-        const node = findNode(state.dragging.nodeId);
+
+        if (!state.dragging.moved) {
+            const travelled = Math.abs(e.clientX - state.dragging.startX) +
+                Math.abs(e.clientY - state.dragging.startY);
+            if (travelled < DRAG_THRESHOLD_PX) return;
+            state.dragging.moved = true;
+
+            // Manual from the first frame that really moves, not from the release. The
+            // layout request is debounced, so its answer can land while the mouse is
+            // still down — and `applyLayout` is free to re-place every node while the
+            // canvas is still "auto". Flipping here closes that window.
+            state.layout = "manual";
+            updateLayoutButton();
+        }
+
+        state.dragging.clientX = e.clientX;
+        state.dragging.clientY = e.clientY;
+        scheduleDragFrame();
+    }
+
+    function scheduleDragFrame() {
+        if (dragFrame !== null) return;
+        dragFrame = requestAnimationFrame(runDragFrame);
+    }
+
+    function cancelDragFrame() {
+        if (dragFrame === null) return;
+        cancelAnimationFrame(dragFrame);
+        dragFrame = null;
+    }
+
+    /**
+     * Drop a drag in progress without committing it.
+     *
+     * Called from the deletion paths. A drag carries resolved elements for the connectors
+     * it is repainting, and deleting a node or an edge detaches some of them; continuing
+     * would write attributes into a group that is no longer in the document.
+     */
+    function abandonDrag() {
+        if (!state.dragging) return;
+        cancelDragFrame();
+        state.dragging = null;
+        laneXCache = null;
+        endDragAnchors();
+        document.removeEventListener("mousemove", onDragMove);
+        document.removeEventListener("mouseup", onDragEnd);
+    }
+
+    /**
+     * One frame of a node drag: place the node, then move its connectors onto it.
+     */
+    function runDragFrame() {
+        dragFrame = null;
+
+        // A bend and a node move both use this frame, and only one of them is ever live.
+        if (bending) {
+            if (bending.moved) runBendFrame();
+            return;
+        }
+
+        const drag = state.dragging;
+        if (!drag || !drag.moved) return;
+
+        const node = findNode(drag.nodeId);
         if (!node) return;
 
         const rect = wrapperEl.getBoundingClientRect();
-        const x = e.clientX + wrapperEl.scrollLeft - rect.left - state.dragging.offsetX;
-        const y = e.clientY + wrapperEl.scrollTop - rect.top - state.dragging.offsetY;
-
+        const x = drag.clientX + wrapperEl.scrollLeft - rect.left - drag.offsetX;
+        const y = drag.clientY + wrapperEl.scrollTop - rect.top - drag.offsetY;
         node.position = { x: Math.max(0, x), y: Math.max(0, y) };
-        if (Math.abs(e.clientX - state.dragging.startX) +
-            Math.abs(e.clientY - state.dragging.startY) >= DRAG_THRESHOLD_PX) {
-            state.dragging.moved = true;
-        }
 
         const el = document.getElementById("node-" + node.id);
         if (el) {
             el.style.left = node.position.x + "px";
             el.style.top = node.position.y + "px";
         }
-        redrawEdgesForNode(node.id);
+
+        laneXCache = null;
+        drag.chrome.forEach(updateEdgeGeometry);
     }
 
+    /**
+     * Finish a press on a node: either it moved, or it was a click.
+     *
+     * A node that really moved switches the canvas to **manual** — somebody who has placed
+     * a node has said where they want it, and re-arranging it on the next edit would be the
+     * canvas arguing. Tidy up hands the decision back.
+     *
+     * A press that never moved is handled here only for the shift-click that picks a node
+     * for a test run. An ordinary click is left to the step's own `click` listener, which
+     * finishes an armed connector — the behaviour this canvas always had, where the cog
+     * button rather than the body opens the settings.
+     */
     function onDragEnd() {
-        if (state.dragging) {
-            markDirty();
-            // A click always follows the mouseup that ended a drag. If the node really moved,
-            // that click is the tail of the drag and must not be read as "and this node is
-            // the connector's target" — cleared on the next tick, once the click has passed.
-            if (state.dragging.moved) {
-                suppressNodeClick = true;
-                setTimeout(function () { suppressNodeClick = false; }, 0);
-            }
-        }
+        const drag = state.dragging;
+        cancelDragFrame();
         state.dragging = null;
+        laneXCache = null;
+        endDragAnchors();
         document.removeEventListener("mousemove", onDragMove);
         document.removeEventListener("mouseup", onDragEnd);
+
+        if (!drag) return;
+
+        // A click always follows the mouseup that ended a drag. If the node really moved,
+        // that click is the tail of the drag and must not be read as "and this node is
+        // the connector's target" — cleared on the next tick, once the click has passed.
+        const swallowTrailingClick = function () {
+            suppressNodeClick = true;
+            setTimeout(function () { suppressNodeClick = false; }, 0);
+        };
+
+        if (drag.moved) {
+            // `state.layout` was already switched to manual on the first frame that
+            // moved — see `onDragMove` — so all that is left is the once-per-gesture
+            // work: grow the canvas to the new arrangement, and say it is unsaved.
+            fitCanvas();
+            markDirty();
+            swallowTrailingClick();
+            return;
+        }
+
+        if (drag.shift) {
+            togglePicked(drag.nodeId);
+            swallowTrailingClick();
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // Bending a connector
+    //
+    // A connector is routed for you, and now and then the route is wrong — it runs behind a
+    // node, or two of them overlap into one line nobody can follow. Dragging the wire puts a
+    // bend in it, and the wire goes through that point from then on.
+    //
+    // Bends are stored on the connector as `waypoints`, in canvas coordinates. Absolute
+    // rather than relative to the two ends, because a bend exists to dodge something *on the
+    // canvas* — another node, another wire — and a bend that tracked its endpoints would
+    // slide off the thing it was put there to avoid. The cost of absolute is that a bend can
+    // go stale when a node moves, and that is paid explicitly: a group move carrying **both**
+    // ends of a wire carries its bends with it, and a move of one end leaves them alone.
+    // -----------------------------------------------------------------
+
+    // True for one tick after a bend, so the click that trails it does not also select the
+    // connector. The same device as `suppressNodeClick`.
+    let suppressEdgeClick = false;
+
+    // {edgeId, index, inserted, fromX, fromY, clientX, clientY, moved, chrome}
+    let bending = null;
+
+    /**
+     * Whether a press on a connector is a bend, a group move, or nothing.
+     *
+     * One named decision, because this is the seam the selection layer meets: a connector
+     * that is part of a **multi**-item selection drags the whole selection instead of
+     * bending.
+     *
+     * Multi-item, not merely selected. Clicking a wire selects it, so if "selected" alone
+     * meant group-drag, the ordinary sequence of clicking a wire and then dragging it would
+     * move two nodes instead of putting a bend in it.
+     *
+     * @param {string} edgeId
+     * @param {MouseEvent} e
+     * @returns {"group"|"bend"|"ignore"}
+     */
+    function edgeGrabIntent(edgeId, e) {
+        if (e.button !== 0) return "ignore";
+        // Modifiers belong to the selection: the click that follows extends it.
+        if (e.shiftKey || e.ctrlKey || e.metaKey) return "ignore";
+        if (state.connecting || state.reattaching || state.dragging) return "ignore";
+        if (selection && selection.isMulti() && selection.hasEdge(edgeId)) return "group";
+        return "bend";
+    }
+
+    /**
+     * Begin a bend: either move the bend that was grabbed, or put a new one in.
+     *
+     * @param {string} edgeId
+     * @param {MouseEvent} e
+     */
+    function startBend(edgeId, e) {
+        const intent = edgeGrabIntent(edgeId, e);
+        if (intent === "ignore") return;
+        if (intent === "group") {
+            // The selection owns this press. It needs a node to hang the move on, and
+            // either end will do — the connector being in the selection is what brings both
+            // of them along.
+            const edge = findEdge(edgeId);
+            if (edge) selection.beginNodePress(edge.source, e);
+            return;
+        }
+
+        const edge = findEdge(edgeId);
+        if (!edge) return;
+
+        e.preventDefault();
+        e.stopPropagation();
+
+        const bends = waypointsOf(edge).map(function (bend) {
+            return { x: bend.x, y: bend.y };
+        });
+        const at = cursorPoint(e);
+
+        let index = -1;
+        bends.forEach(function (bend, i) {
+            if (index === -1 &&
+                Math.abs(bend.x - at.x) <= WAYPOINT_GRAB_PX &&
+                Math.abs(bend.y - at.y) <= WAYPOINT_GRAB_PX) {
+                index = i;
+            }
+        });
+        let inserted = false;
+
+        if (index === -1) {
+            if (bends.length >= MAX_EDGE_WAYPOINTS) {
+                // Refused, with a sentence rather than by doing nothing.
+                noteLayoutFailure("A connector can have at most " + MAX_EDGE_WAYPOINTS +
+                    " bends. Drag one of the bends it already has instead.");
+                return;
+            }
+
+            const route = edgeRoute(edge);
+            const segment = route ? GC.nearestSegment(route, at) : null;
+            if (!segment) return;
+
+            // Where in the list the new bend goes: after every existing bend that is on an
+            // earlier leg, so the order of the list stays the order of the wire.
+            const detail = GC.waypointRoute(
+                portAnchor(edge.source, sourceSelectorFor(edge)),
+                portAnchor(edge.target, '[data-port-role="in"]') || portAnchor(edge.target, null),
+                bends,
+            );
+            const marks = detail ? detail.waypointAt : [];
+            index = marks.filter(function (mark) { return mark <= segment.index; }).length;
+            // Started at the cursor's foot on the leg that was grabbed, so the wire does not
+            // jump the instant it is taken hold of.
+            bends.splice(index, 0, { x: segment.projection.x, y: segment.projection.y });
+            inserted = true;
+        }
+
+        edge.waypoints = bends;
+        // A handle has to exist for the new bend, so this connector is rebuilt once — and
+        // only this one.
+        reRenderEdge(edge);
+
+        bending = {
+            edgeId: edgeId,
+            index: index,
+            inserted: inserted,
+            fromX: e.clientX,
+            fromY: e.clientY,
+            clientX: e.clientX,
+            clientY: e.clientY,
+            moved: false,
+            chrome: edgeChrome(edge),
+        };
+        // Both ends are still, so the anchor cache freezes them and the whole gesture is
+        // arithmetic — the frame reads nothing.
+        beginDragAnchors([], [bending.chrome]);
+
+        document.addEventListener("mousemove", onBendMove);
+        document.addEventListener("mouseup", onBendEnd);
+    }
+
+    function onBendMove(e) {
+        if (!bending) return;
+
+        if (!bending.moved) {
+            const travelled = Math.abs(e.clientX - bending.fromX) +
+                Math.abs(e.clientY - bending.fromY);
+            if (travelled < DRAG_THRESHOLD_PX) return;
+            bending.moved = true;
+        }
+
+        bending.clientX = e.clientX;
+        bending.clientY = e.clientY;
+        scheduleDragFrame();
+    }
+
+    /** One frame of a bend. Shares the drag frame, so only one gesture repaints per tick. */
+    function runBendFrame() {
+        const edge = findEdge(bending.edgeId);
+        if (!edge) return;
+
+        const bends = waypointsOf(edge);
+        const bend = bends[bending.index];
+        if (!bend) return;
+
+        const at = cursorPoint({ clientX: bending.clientX, clientY: bending.clientY });
+
+        // Lines to snap to: the two ends of the wire, and the neighbouring bends. This is
+        // what makes a hand-routed wire look drawn rather than approximately placed.
+        const from = portAnchor(edge.source, sourceSelectorFor(edge));
+        const to = portAnchor(edge.target, '[data-port-role="in"]') || portAnchor(edge.target, null);
+        const xs = [];
+        const ys = [];
+        if (from) { xs.push(from.x); ys.push(from.y); }
+        if (to) { xs.push(to.x); ys.push(to.y); }
+        bends.forEach(function (other, i) {
+            if (i === bending.index) return;
+            xs.push(other.x);
+            ys.push(other.y);
+        });
+
+        bend.x = Math.max(0, GC.snapToAny(at.x, xs, WAYPOINT_SNAP_PX));
+        bend.y = Math.max(0, GC.snapToAny(at.y, ys, WAYPOINT_SNAP_PX));
+
+        laneXCache = null;
+        updateEdgeGeometry(bending.chrome);
+    }
+
+    function onBendEnd() {
+        const gesture = bending;
+        cancelDragFrame();
+        bending = null;
+        endDragAnchors();
+        laneXCache = null;
+        document.removeEventListener("mousemove", onBendMove);
+        document.removeEventListener("mouseup", onBendEnd);
+
+        if (!gesture) return;
+
+        const edge = findEdge(gesture.edgeId);
+        if (!edge) return;
+
+        // A press that never moved is a click, and the click listener on the hit path will
+        // select the connector. A bend inserted for it is taken back out — clicking a wire
+        // must not leave a bend behind.
+        if (!gesture.moved) {
+            if (gesture.inserted) {
+                edge.waypoints.splice(gesture.index, 1);
+                if (!edge.waypoints.length) delete edge.waypoints;
+                reRenderEdge(edge);
+            }
+            return;
+        }
+
+        // Dropped back onto the line it would take without this bend: the bend is bending
+        // nothing, so it goes and the wire straightens itself.
+        discardRedundantWaypoint(edge, gesture.index);
+
+        reRenderEdge(edge);
+        markDirty();
+        // Manual, for the same reason a moved node switches: a hand-routed wire is only
+        // meaningful against a known arrangement, and an auto-arrange is free to move both
+        // of its ends out from under it.
+        state.layout = "manual";
+        updateLayoutButton();
+
+        suppressEdgeClick = true;
+        setTimeout(function () { suppressEdgeClick = false; }, 0);
+    }
+
+    /**
+     * Remove a bend dropped onto the route the wire would take without it.
+     *
+     * @param {object} edge
+     * @param {number} index
+     */
+    function discardRedundantWaypoint(edge, index) {
+        const bends = waypointsOf(edge);
+        const bend = bends[index];
+        if (!bend) return;
+
+        const without = bends.slice();
+        without.splice(index, 1);
+
+        const from = portAnchor(edge.source, sourceSelectorFor(edge));
+        const to = portAnchor(edge.target, '[data-port-role="in"]') || portAnchor(edge.target, null);
+        if (!from || !to) return;
+
+        const plain = state.backEdges[edge.id] && !without.length
+            ? GC.backEdgePoints(from, to, returnLaneX())
+            : GC.waypointPoints(from, to, without);
+        const segment = plain ? GC.nearestSegment(plain, bend) : null;
+
+        if (segment && segment.distance <= WAYPOINT_DISCARD_PX) {
+            edge.waypoints = without;
+            if (!edge.waypoints.length) delete edge.waypoints;
+        }
+    }
+
+    /**
+     * Throw away every bend on one connector.
+     *
+     * @param {string} edgeId
+     */
+    function straightenEdge(edgeId) {
+        const edge = findEdge(edgeId);
+        if (!edge || !waypointsOf(edge).length) return;
+
+        delete edge.waypoints;
+        reRenderEdge(edge);
+        markDirty();
+    }
+
+    // -----------------------------------------------------------------
+    // Moving several nodes at once
+    //
+    // The gesture is in static/js/graph_selection.js, shared with the other two canvases.
+    // What is here is only what a group move *means* on this one: which connectors have to
+    // follow, and what a finished move says about the drawing.
+    // -----------------------------------------------------------------
+
+    // The connectors a group move is repainting, resolved once when it starts, and the
+    // hand-placed bends it is carrying with it.
+    let groupChrome = null;
+    let groupBends = null;
+
+    function onGroupMoveBegin(ids) {
+        // Manual from the first frame that really moves, exactly as a single drag switches
+        // then and for the same reason: the layout request is debounced, so its answer can
+        // arrive while the mouse is still down and re-place every node under the cursor.
+        state.layout = "manual";
+        updateLayoutButton();
+
+        groupChrome = chromeForMovingNodes(ids);
+        beginDragAnchors(ids, groupChrome);
+        groupBends = captureCarriedBends(ids);
+    }
+
+    /**
+     * A group move carries the bends of any connector it is moving *both* ends of.
+     *
+     * Bends are canvas coordinates, so picking up two nodes and their wire has to move the
+     * wire's hand-routing with them or the route is left behind, dodging nothing. A wire
+     * with only one end in the move keeps its bends exactly where they are, which is the
+     * other half of the same rule: the bend was put there to avoid something on the canvas,
+     * and that something has not moved.
+     *
+     * @param {Array<string>} ids
+     * @returns {Array<{edge: object, starts: Array<{x: number, y: number}>}>}
+     */
+    function captureCarriedBends(ids) {
+        const moving = {};
+        ids.forEach(function (id) { moving[id] = true; });
+
+        return state.edges
+            .filter(function (edge) {
+                return moving[edge.source] && moving[edge.target] && waypointsOf(edge).length;
+            })
+            .map(function (edge) {
+                return {
+                    edge: edge,
+                    starts: waypointsOf(edge).map(function (bend) {
+                        return { x: bend.x, y: bend.y };
+                    }),
+                };
+            });
+    }
+
+    function onGroupMoveFrame(ids, dx, dy) {
+        // From the captured start plus the delta, never by accumulating — the same reason
+        // the nodes themselves are placed that way.
+        if (groupBends) {
+            groupBends.forEach(function (carried) {
+                carried.edge.waypoints = carried.starts.map(function (start) {
+                    return { x: Math.max(0, start.x + dx), y: Math.max(0, start.y + dy) };
+                });
+            });
+        }
+
+        laneXCache = null;
+        if (groupChrome) groupChrome.forEach(updateEdgeGeometry);
+    }
+
+    /**
+     * A group move has finished — committed, or put back by Escape.
+     *
+     * @param {Array<string>} ids
+     * @param {boolean} committed
+     */
+    function onGroupMoveEnd(ids, committed) {
+        endDragAnchors();
+        groupChrome = null;
+        groupBends = null;
+        laneXCache = null;
+
+        if (!committed) return;
+        fitCanvas();
+        markDirty();
+    }
+
+    /**
+     * Keep the properties panel honest about a selection that is no longer one thing.
+     *
+     * The panel edits one node. A box that has just caught five of them has not asked to
+     * edit any of them, so the panel is emptied — rather than left showing whichever node
+     * happened to be open, and rather than closed, since closing a panel somebody opened
+     * is as surprising as opening one they did not.
+     */
+    function onSelectionChange() {
+        updateSelectAllButton();
+
+        if (selection.count() === 1) return;
+        if (!state.selectedNodeId && !state.selectedEdgeId) return;
+
+        const previous = state.selectedNodeId;
+        state.selectedNodeId = null;
+        state.selectedEdgeId = null;
+        if (previous) updateNodeMarks(previous);
+        renderAllEdges();
+        propertiesBodyEl.innerHTML =
+            '<p class="text-muted small">Select a node to edit it here.</p>';
+    }
+
+    /**
+     * The Select all button doubles as Clear, and says which it is.
+     *
+     * Its title says **move**, deliberately: `Test selection (n)` is already in this
+     * header and means the picked set. Two counts side by side need telling apart.
+     */
+    function updateSelectAllButton() {
+        const btn = document.getElementById("gdSelectAllBtn");
+        if (!btn) return;
+
+        const count = selection.count();
+        btn.classList.toggle("btn-outline-primary", count > 0);
+        btn.classList.toggle("btn-outline-secondary", count === 0);
+        btn.innerHTML = count > 0
+            ? '<i class="las la-times-circle"></i> Clear (' + count + ")"
+            : '<i class="las la-object-group"></i> Select all';
+        btn.title = count > 0
+            ? "Clear the move selection"
+            : "Select every node and connector, so they can be moved together";
     }
 
     // -----------------------------------------------------------------
@@ -830,7 +2119,7 @@ window.GraphDesigner = (function () {
             source_port: p.port,
             target: targetId,
         });
-        markDirty();
+        wiringChanged();
         renderAllNodes();
         renderAllEdges();
     }
@@ -915,7 +2204,7 @@ window.GraphDesigner = (function () {
         const path = GC.svg("path");
         path.setAttribute("id", "gd-connect-preview");
         path.setAttribute("class", "gd-edge-preview");
-        path.setAttribute("d", GC.pathD(GC.geometry(from, to)));
+        path.setAttribute("d", GC.elbowPathD(GC.elbowPoints(from, to)));
         edgesGroupEl.appendChild(path);
     }
 
@@ -979,7 +2268,7 @@ window.GraphDesigner = (function () {
                 flash(OUTCOME_CHAIN_REFUSAL);
             } else if (nodeId !== edge.source) {
                 edge.target = nodeId;
-                markDirty();
+                wiringChanged();
             }
         } else if (nodeId !== edge.target) {
             const moving = findNode(nodeId);
@@ -999,7 +2288,7 @@ window.GraphDesigner = (function () {
             if (free) {
                 edge.source = nodeId;
                 edge.source_port = free.port;
-                markDirty();
+                wiringChanged();
             } else {
                 flash("That node has no free outcome to move this connector to.");
             }
@@ -1035,23 +2324,60 @@ window.GraphDesigner = (function () {
     }
 
     function addNode(type) {
-        // Laid out on a grid rather than all at one point, so adding five nodes does not
-        // produce one node with four hidden underneath it.
-        const count = state.nodes.length;
         const node = {
             id: genId("n"),
             type: type,
-            position: { x: 60 + (count % 5) * 230, y: 60 + Math.floor(count / 5) * 150 },
+            position: placementForNewNode(),
             data: defaultData(type),
         };
         state.nodes.push(node);
-        markDirty();
+        wiringChanged();
         renderAllNodes();
         renderAllEdges();
         openProperties(node.id);
     }
 
+    /**
+     * Where a node being added should first appear.
+     *
+     * Under whichever node is selected, or under the whole drawing when none is — which is
+     * where somebody adding a step to the end of a pipeline is looking. It replaces a fixed
+     * grid (`x = 60 + (count % 5) * 230`) that wrapped back to the left margin every fifth
+     * node and took no notice of what the drawing already looked like.
+     *
+     * In `auto` this position lasts a moment: the arrange that follows moves the node to
+     * where its connections put it. Worth getting right anyway — a node that appeared at the
+     * origin and jumped would read as a glitch.
+     */
+    function placementForNewNode() {
+        const m = canvasMetrics();
+        const below = findNode(state.selectedNodeId) || lowestNode();
+
+        if (!below) return { x: m.marginX, y: m.marginY };
+
+        const el = document.getElementById("node-" + below.id);
+        const height = el ? el.getBoundingClientRect().height : m.rowGap;
+
+        return {
+            x: (below.position || {}).x || m.marginX,
+            y: ((below.position || {}).y || m.marginY) + height + m.rowGap,
+        };
+    }
+
+    /** The node furthest down the canvas, or null on an empty one. */
+    function lowestNode() {
+        return state.nodes.reduce(function (lowest, node) {
+            const y = (node.position || {}).y || 0;
+            return !lowest || y > ((lowest.position || {}).y || 0) ? node : lowest;
+        }, null);
+    }
+
     function deleteNode(nodeId) {
+        // A live drag holds resolved elements for the connectors it is repainting. Those
+        // are about to be detached, so the gesture is abandoned rather than left writing
+        // attributes into a group that is no longer in the document.
+        abandonDrag();
+        if (selection) selection.abandon();
         state.nodes = state.nodes.filter(function (n) { return n.id !== nodeId; });
         // Its connectors go with it: an edge naming a node that is not there is refused
         // by the save, so leaving them would make the graph unsavable.
@@ -1060,31 +2386,58 @@ window.GraphDesigner = (function () {
         });
         delete state.picked[nodeId];
         if (state.selectedNodeId === nodeId) state.selectedNodeId = null;
-        markDirty();
+        // Re-derived rather than one key deleted: a node takes its connectors with it, so a
+        // stale connector id can outlive the node deletion that caused it.
+        if (selection) selection.prune();
+        wiringChanged();
         updatePickedCount();
         renderAllNodes();
         renderAllEdges();
     }
 
     function deleteEdge(edgeId) {
+        abandonDrag();
+        if (selection) selection.abandon();
         state.edges = state.edges.filter(function (e) { return e.id !== edgeId; });
         if (state.selectedEdgeId === edgeId) state.selectedEdgeId = null;
-        markDirty();
+        if (selection) selection.prune();
+        wiringChanged();
         renderAllEdges();
     }
 
+    /**
+     * Repaint the three marks a node can carry, from state.
+     *
+     * One element, three class toggles. All three of these used to be applied by rebuilding
+     * every node and every connector on the canvas, which is a lot of DOM for a ring that
+     * changed on one box — and it threw away hover state and the run dock's status
+     * attributes on its way past.
+     *
+     * @param {string} nodeId
+     */
+    function updateNodeMarks(nodeId) {
+        const el = document.getElementById("node-" + nodeId);
+        if (!el) return;
+        el.classList.toggle("gd-node-selected", state.selectedNodeId === nodeId);
+        el.classList.toggle("gd-node-picked", !!state.picked[nodeId]);
+        // Through the controller, not off `state.selection` directly: it decides *when* a
+        // move mark is worth painting, and two answers to that would show a dashed box on
+        // one repaint path and not on another.
+        el.classList.toggle("gd-node-multi", !!(selection && selection.marksNode(nodeId)));
+    }
+
     function selectNode(nodeId) {
+        const previous = state.selectedNodeId;
         state.selectedNodeId = nodeId;
-        renderAllNodes();
-        renderAllEdges();
+        if (previous && previous !== nodeId) updateNodeMarks(previous);
+        updateNodeMarks(nodeId);
     }
 
     function togglePicked(nodeId) {
         if (state.picked[nodeId]) delete state.picked[nodeId];
         else state.picked[nodeId] = true;
         updatePickedCount();
-        renderAllNodes();
-        renderAllEdges();
+        updateNodeMarks(nodeId);
     }
 
     function updatePickedCount() {
@@ -1103,9 +2456,7 @@ window.GraphDesigner = (function () {
         const node = findNode(nodeId);
         if (!node) return;
 
-        state.selectedNodeId = nodeId;
-        renderAllNodes();
-        renderAllEdges();
+        selectNode(nodeId);
 
         // A deep clone, so Cancel is free and closing the panel without saving cannot
         // half-apply an edit. Same approach as flow_builder's properties panel.
@@ -1137,6 +2488,8 @@ window.GraphDesigner = (function () {
             case "for_each": forEachFields(form, draft, node); break;
             case "do_until": doUntilFields(form, draft, node); break;
             case "email": emailFields(form, draft, node); break;
+            case "create_file": createFileFields(form, draft, node); break;
+            case "download_file": downloadFileFields(form, draft, node); break;
             case "timer": timerFields(form, draft, node); break;
             case "wait": waitFields(form, draft); break;
             case "success":
@@ -1174,7 +2527,7 @@ window.GraphDesigner = (function () {
             }
 
             node.data = draft;
-            markDirty();
+            wiringChanged();
             renderAllNodes();
             renderAllEdges();
             bootstrap.Offcanvas.getInstance(document.getElementById("gdProperties")).hide();
@@ -1824,6 +3177,86 @@ window.GraphDesigner = (function () {
      * refuse most of them — the same call `bodyNodes` makes for a loop's collection. A
      * picker whose options are mostly invalid teaches nothing about why.
      */
+    // File formats, as the operator picks them. Mirrored from
+    // `app/models/file_delivery/models.FILE_FORMATS` rather than fetched, like the node
+    // vocabulary above it: four values that change roughly never, against a round trip on
+    // every panel open. The server refuses anything else at save.
+    const FILE_FORMATS = [
+        { uuid: "csv", label: "CSV" },
+        { uuid: "xlsx", label: "Excel (XLSX)" },
+        { uuid: "txt", label: "Text" },
+        { uuid: "parquet", label: "Parquet" },
+    ];
+
+    /**
+     * A Create File node: whose rows, in what format, called what.
+     *
+     * The node picker is `otherNodes`, the same list a variable binding reads from — a
+     * file is written out of exactly the kind of thing a binding reads, and offering a
+     * different list would suggest otherwise.
+     */
+    function createFileFields(form, draft, node) {
+        draft.data = draft.data || { source: "node", source_node: "", path: "" };
+
+        form.appendChild(selectField(
+            "Rows from", draft.data.source_node || "", otherNodes(node),
+            function (v) { draft.data.source_node = v; },
+            "The node whose output holds the rows. A SQL node's output is every matching "
+            + "row, so the file holds the lot.",
+        ));
+
+        form.appendChild(textField(
+            "Field", draft.data.path || "",
+            function (v) { draft.data.path = v; },
+            "Optional. A path into that node's output, such as rows — leave it empty to "
+            + "write the whole output.",
+        ));
+
+        form.appendChild(selectField(
+            "Format", draft.file_format || "csv", FILE_FORMATS,
+            function (v) { draft.file_format = v; },
+        ));
+
+        form.appendChild(textField(
+            "File name", draft.file_name || "",
+            function (v) { draft.file_name = v; },
+            "The extension is added for you. {{VARIABLE}} works here, so a nightly run "
+            + "can write orders-{{RUN_DATE}} instead of overwriting one name.",
+        ));
+
+        attachHelp(form, "Connect failed: a node whose output holds no rows otherwise "
+            + "stops the run with nothing drawn to explain it.");
+    }
+
+    /**
+     * A Download File node: which file, and nothing else.
+     *
+     * No button text and no colour — a pipeline has no chat for one to appear in, and the
+     * server refuses those fields on this canvas rather than accepting and ignoring them.
+     * What this node produces is a link on its output, which an Email node can bind to.
+     */
+    function downloadFileFields(form, draft, node) {
+        const makers = state.nodes
+            .filter(function (n) { return n.type === "create_file" && n.id !== node.id; })
+            .map(function (n) { return { uuid: n.id, label: labelOf(n) }; });
+
+        if (!makers.length) {
+            attachHelp(form, "There is no Create File node on this graph yet. This node "
+                + "hands over a file another node writes, so add one first.");
+            return;
+        }
+
+        form.appendChild(selectField(
+            "File", draft.create_file_node || "", makers,
+            function (v) { draft.create_file_node = v; },
+            "The Create File node that writes it.",
+        ));
+
+        attachHelp(form, "Produces a download link on this node's output, for whoever owns "
+            + "this graph. Bind an Email node's variable to it to send the file on. The "
+            + "link lasts a day.");
+    }
+
     function startTimerNodes(node) {
         return state.nodes
             .filter(function (n) {
@@ -2264,11 +3697,19 @@ window.GraphDesigner = (function () {
                 return { id: n.id, type: n.type, position: n.position, data: n.data };
             }),
             edges: state.edges.map(function (e) {
-                return {
+                const edge = {
                     id: e.id, source: e.source,
                     source_port: e.source_port || "default", target: e.target,
                 };
+                // Only when there are any, so a drawing nobody hand-routed saves exactly
+                // the document it always did.
+                if (waypointsOf(e).length) edge.waypoints = e.waypoints;
+                return edge;
             }),
+            // Whether this canvas arranges itself. Stored with the drawing because it is a
+            // fact about the drawing. `GraphSaveRequest` allows extra keys for exactly
+            // this, so nothing server-side had to change to keep it.
+            layout: state.layout,
         };
     }
 
@@ -2281,17 +3722,39 @@ window.GraphDesigner = (function () {
             };
         });
         state.edges = ((data || {}).edges || []).map(function (e) {
-            return {
+            const edge = {
                 id: e.id || genId("e"), source: e.source,
                 source_port: e.source_port || "default", target: e.target,
             };
+            // Sanitised on the way in as well as on the way out: this loader is the one
+            // place that decides what a connector *is* here, so a stored document with a
+            // malformed bend draws as an unbent wire rather than throwing inside a render.
+            const bends = readWaypoints(e.waypoints);
+            if (bends.length) edge.waypoints = bends;
+            return edge;
         });
+        // Missing means auto, which is every graph saved before the canvas could arrange
+        // itself — and those are the cluttered ones.
+        state.layout = (data || {}).layout === "manual" ? "manual" : "auto";
+        state.backEdges = {};
         state.picked = {};
         state.selectedNodeId = null;
         state.selectedEdgeId = null;
+        // Emptied in place rather than replaced: the controller holds a reference to this
+        // object. Cleared at all because the graph has just come from the server and ids
+        // can differ — a surviving selection would hold ids that resolve to nothing, which
+        // a group move would then try to drag.
+        state.selection.nodes = {};
+        state.selection.edges = {};
         updatePickedCount();
+        updateSelectAllButton();
         renderAllNodes();
         renderAllEdges();
+        updateLayoutButton();
+
+        // Straight away rather than debounced: this is the arrange that makes a stored
+        // drawing readable, and waiting would show the old positions first.
+        requestLayout();
     }
 
     async function save() {
@@ -2890,12 +4353,56 @@ window.GraphDesigner = (function () {
         opts = userOpts || {};
 
         canvasEl = document.getElementById("gd-canvas");
+        edgesSvgEl = document.getElementById("gd-edges");
         edgesGroupEl = document.getElementById("gd-edges-group");
         wrapperEl = document.getElementById("gd-canvas-wrapper");
         paletteBodyEl = document.getElementById("gdPaletteBody");
         propertiesBodyEl = document.getElementById("gdPropertiesBody");
 
         state.vocabulary = readJsonScript("gdVocabulary", state.vocabulary);
+
+        // Before `loadGraph`, which paints the selection as part of rendering.
+        selection = window.GraphSelection.create({
+            wrapperEl: wrapperEl,
+            // The node layer, not the wrapper: it is the element whose box `node.position`
+            // is measured against, so the box needs no border or scroll arithmetic.
+            layerEl: canvasEl,
+            edgesEl: edgesSvgEl,
+            nodeElementId: function (id) { return "node-" + id; },
+            edgeElementId: function (id) { return "edge-group-" + id; },
+            selection: state.selection,
+            getNodes: function () { return state.nodes; },
+            getSelectableEdges: function () { return state.edges; },
+            edgeRoute: edgeRoute,
+            nodeWidth: function () { return canvasMetrics().stepWidth; },
+            threshold: DRAG_THRESHOLD_PX,
+            // No box while another gesture owns the mouse. `state.pending` is the one that
+            // matters: a click on empty canvas is the only way out of an armed port, and
+            // turning that press into a box would strand the user in connect mode.
+            isBusy: function () {
+                return !!(state.pending || state.connecting || state.reattaching || state.dragging);
+            },
+            classes: { node: "gd-node-multi", edge: "gd-edge-multi" },
+            onSelectionChange: onSelectionChange,
+            onGroupMoveBegin: onGroupMoveBegin,
+            onGroupMoveFrame: onGroupMoveFrame,
+            onGroupMoveEnd: onGroupMoveEnd,
+            onEscape: function () {
+                if (!state.pending) return false;
+                state.pending = null;
+                renderAllNodes();
+                renderAllEdges();
+                return true;
+            },
+            // This canvas has its own trailing-click flag, because a click on a node
+            // finishes an armed connector. Kept in step with the module's rather than
+            // duplicated, so the two cannot drift.
+            onSwallowClick: function () {
+                suppressNodeClick = true;
+                setTimeout(function () { suppressNodeClick = false; }, 0);
+            },
+        });
+        selection.attach();
 
         renderPalette();
         loadGraph(readJsonScript("gdGraphData", { nodes: [], edges: [] }));
@@ -2904,10 +4411,15 @@ window.GraphDesigner = (function () {
         // Clicking empty canvas cancels a half-drawn connection, which is the only way
         // out of one other than completing it.
         wrapperEl.addEventListener("click", function (e) {
+            // The click that trails a box or a group move has the wrapper as its target,
+            // and without this it would clear the selection the gesture just made — the
+            // feature would appear to do nothing at all.
+            if (selection.swallowedClick()) return;
             if (e.target === wrapperEl || e.target === canvasEl) {
                 state.pending = null;
                 state.selectedNodeId = null;
                 state.selectedEdgeId = null;
+                selection.clear();
                 renderAllNodes();
                 renderAllEdges();
             }
@@ -2922,15 +4434,33 @@ window.GraphDesigner = (function () {
             startRun("selection");
         });
         document.getElementById("gdStopBtn").addEventListener("click", stopRun);
+        document.getElementById("gdTidyBtn").addEventListener("click", tidyUp);
+        document.getElementById("gdSelectAllBtn").addEventListener("click", function () {
+            if (selection.count()) selection.clear();
+            else selection.selectAll();
+            // The canvas has to hold focus for Ctrl+A and Escape to reach it, and somebody
+            // who has just pressed this button is about to want both.
+            wrapperEl.focus();
+        });
+        updateSelectAllButton();
+
+        // A node's height depends on its font, and the layout stacks layers by measured
+        // height — so a zoom or a font swap invalidates the cached spacing with it.
+        window.addEventListener("resize", function () {
+            canvasMetricsCache = null;
+            syncLayout();
+        });
 
         // A tab closed mid-run leaves a stream open otherwise.
         window.addEventListener("beforeunload", teardown);
 
         await loadOptions();
         // Redrawn once the pickers are known, so a node's preview can name the tool or
-        // datasource it points at rather than its uuid.
+        // datasource it points at rather than its uuid. A longer preview can make a node
+        // taller, so the arrangement is asked for again with it.
         renderAllNodes();
         renderAllEdges();
+        syncLayout();
 
         if (opts.openRun) watch(opts.openRun);
     }

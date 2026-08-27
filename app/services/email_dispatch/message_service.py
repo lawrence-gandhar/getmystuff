@@ -20,7 +20,7 @@ be a test of the shortcut.
 
 import logging
 import uuid as uuid_pkg
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from litestar.exceptions import HTTPException
 from sqlalchemy import select
@@ -29,9 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.db_utils import CRUDQueryBuilder
 from app.db.email_dispatch.queries import message_counts_by_status
 from app.models.email_dispatch import (
-    MESSAGE_CANCELLED,
     MESSAGE_QUEUED,
-    MESSAGE_SENDING,
     MESSAGE_SOURCE_LABELS,
     MESSAGE_SOURCE_VALUES,
     MESSAGE_STATUS_LABELS,

@@ -551,8 +551,13 @@ def upload_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pat
     rebinding them on ``file_utils`` alone leaves it writing to the real
     ``uploads/exports`` — which is what it had been doing, quietly, for every export
     test that touched the disk.
+
+    ``file_delivery.file_service`` is patched for exactly the same reason and it is the
+    same trap: it binds ``GENERATED_FILE_BASE`` at module load, so a file-block test
+    without this writes into the repository's own ``uploads/generated_files`` and passes.
     """
     from app.services.downloader_agents.base import part_store
+    from app.services.file_delivery import file_service
     from app.utils import file_utils
 
     monkeypatch.setattr(file_utils, "UPLOAD_BASE", tmp_path / "uploads")
@@ -562,4 +567,10 @@ def upload_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pat
     monkeypatch.setattr(file_utils, "DOWNLOAD_BASE", tmp_path / "file_downloaders")
     monkeypatch.setattr(part_store, "EXPORT_BASE", tmp_path / "exports")
     monkeypatch.setattr(part_store, "DOWNLOAD_BASE", tmp_path / "file_downloaders")
+    monkeypatch.setattr(
+        file_utils, "GENERATED_FILE_BASE", tmp_path / "generated_files",
+    )
+    monkeypatch.setattr(
+        file_service, "GENERATED_FILE_BASE", tmp_path / "generated_files",
+    )
     yield tmp_path

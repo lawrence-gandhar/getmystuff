@@ -25,7 +25,7 @@ schema is the last gate, not a description of what the dict happens to contain t
 Every identifier in this file is the public ``uuid``.
 """
 
-from typing import Any, ClassVar, Dict, List, Optional
+from typing import Any, ClassVar, List, Optional
 
 from pydantic import Field, field_validator
 
@@ -51,6 +51,7 @@ from app.schemas.base import (
     QueryRequest,
     RequiredText,
     ResponseSchema,
+    validate_edge_waypoints,
 )
 
 #: How many extra field names a workflow may add to the preview deny-list. Generous —
@@ -150,6 +151,29 @@ class FlowGraphRequest(JsonRequest):
     graph_data: JsonObjectField = Field(
         default_factory=dict, title="Workflow drawing"
     )
+
+    @field_validator("graph_data")
+    @classmethod
+    def _waypoints(cls, value: Any) -> Any:
+        """
+        The one thing inside the drawing this layer looks at.
+
+        The drawing is otherwise opaque here on purpose — the module docstring says
+        where its meaning is decided. ``waypoints``, where a connection was dragged
+        to route it by hand, is the exception because of what it can do rather than
+        what it means: a non-finite coordinate satisfies every other rule and then
+        makes PostgreSQL refuse the ``jsonb`` it is written into, turning a bad
+        request into a 500 with no sentence in it.
+
+        The shared cap of four bends is used rather than the one bend this canvas
+        actually draws. Its connections are curves with a single control point, so
+        one is all it writes — but the cap exists to bound the document, four does
+        that, and being stricter than the client would only mean refusing a drawing
+        the day a second bend becomes drawable.
+        """
+        if isinstance(value, dict):
+            validate_edge_waypoints(value.get("edges"))
+        return value
 
 
 class TriggerRequest(FormRequest):

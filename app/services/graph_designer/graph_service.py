@@ -70,6 +70,7 @@ from app.services.email_dispatch import smtp_service as email_smtp_service
 from app.services.email_dispatch import template_service as email_template_service
 from app.db.graph_designer.queries import fetch_graphs_with_owner_names
 from app.models.data_agents import DataAgent
+from app.models.file_delivery import FILE_FORMAT_VALUES
 from app.models.graph_designer import (
     BINDING_MODE_IN_LIST,
     BINDING_MODE_ONE,
@@ -77,7 +78,8 @@ from app.models.graph_designer import (
     HUMAN_EXPECTS_VALUES,
     LOOP_NODE_TYPES,
     NODE_BRANCH,
-    NODE_DO_UNTIL,
+    NODE_CREATE_FILE,
+    NODE_DOWNLOAD_FILE,
     NODE_EMAIL,
     NODE_FOR_EACH,
     NODE_HUMAN,
@@ -987,6 +989,10 @@ def _validate_node(node: dict, node_by_id: Dict[str, dict]) -> None:
         _validate_loop_node(node_type, data, label, node_by_id)
     elif node_type == NODE_EMAIL:
         _validate_email_node(data, label)
+    elif node_type == NODE_CREATE_FILE:
+        _validate_create_file_node(data, label, node_by_id)
+    elif node_type == NODE_DOWNLOAD_FILE:
+        _validate_download_file_node(data, label, node_by_id)
     elif node_type == NODE_TIMER:
         _validate_timer_node(data, label, node_by_id)
     elif node_type == NODE_WAIT:
@@ -1007,6 +1013,128 @@ def _validate_variables(node: dict, label: str, node_by_id: Dict[str, dict]) -> 
     from app.services.graph_designer import node_variables
 
     node_variables.assert_valid(node, label, node_by_id)
+
+
+def _validate_create_file_node(
+    data: dict, label: str, node_by_id: Dict[str, dict],
+) -> None:
+    """
+    A Create File node: a format, and an earlier node whose output holds the rows.
+
+    The formats and the sources come from the file module rather than being restated here,
+    so a node this accepts cannot be one the runner refuses — the arrangement
+    :func:`_validate_email_node` states. A graph offers exactly one source: an earlier
+    node's output. There is no chat session and no agent here, and a literal is not a
+    dataset.
+
+    The **path** is checked for shape with the same restricted reader the email bindings
+    use, so ``rows[0]..id`` is refused at the keyboard rather than at run time. What is not
+    checked is whether that path will find anything — that is a fact about somebody's data,
+    not about the drawing, and it is a run-time refusal down ``error`` naming the node.
+    """
+    from app.services.file_delivery.nodes.graph_designer_runner import GRAPH_DATA_SOURCES
+    from app.services.integrations.mapping import paths
+    from app.services.integrations.mapping.paths import PathError
+
+    if str(data.get("file_format") or "").strip() not in FILE_FORMAT_VALUES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"'{label}' has no file format chosen — CSV, Excel, Text or Parquet."
+            ),
+        )
+
+    source_data = data.get("data")
+
+    if not isinstance(source_data, dict):
+        raise HTTPException(
+            status_code=400, detail=f"The data source on '{label}' could not be read.",
+        )
+
+    source = str(source_data.get("source") or "").strip().lower()
+
+    if source not in GRAPH_DATA_SOURCES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"'{label}' reads its data from '{source}', which is not available in a "
+                "graph. Point it at an earlier node's output."
+            ),
+        )
+
+    target = str(source_data.get("source_node") or "").strip()
+
+    if not target:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"'{label}' does not say which node's rows to write. Choose an earlier "
+                "node."
+            ),
+        )
+
+    if target not in node_by_id:
+        raise HTTPException(
+            status_code=400,
+            detail=f"'{label}' points at a node that is not on this graph.",
+        )
+
+    path = str(source_data.get("path") or "").strip()
+
+    if path and not paths.is_valid(path):
+        try:
+            paths.parse(path)
+        except PathError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"The path on '{label}' could not be read: {exc}",
+            ) from exc
+
+
+def _validate_download_file_node(
+    data: dict, label: str, node_by_id: Dict[str, dict],
+) -> None:
+    """
+    A Download File node: a Create File node on this graph, and no chat-only settings.
+
+    **The button fields are refused rather than ignored.** There is no visitor and no chat
+    in a graph run, so a colour and a label here would be settings an author chose and this
+    application silently dropped — which is worse than not offering them. The canvas does
+    not draw them for this node type; this is what makes that true for a graph saved by
+    other means.
+
+    A node id rather than a typed-in name, for the reason ``_validate_timer_node`` gives:
+    nothing offline can prove two boxes spell a name the same way, and a typo would surface
+    at run time as "no file", which is indistinguishable from a branch not taken.
+    """
+    target = str(data.get("create_file_node") or "").strip()
+
+    if not target:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"'{label}' does not say which file it hands over. Choose the Create "
+                "File node that writes it."
+            ),
+        )
+
+    named = node_by_id.get(target)
+
+    if named is None or named.get("type") != NODE_CREATE_FILE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"'{label}' must point at a Create File node on this graph.",
+        )
+
+    if data.get("show_button") or str(data.get("button_text") or "").strip():
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"'{label}' has chat button settings, and a pipeline has no chat to show "
+                "one in. A Download File node here produces a link on its output — bind "
+                "an Email node to it to send the file on."
+            ),
+        )
 
 
 def _validate_timer_node(data: dict, label: str, node_by_id: Dict[str, dict]) -> None:

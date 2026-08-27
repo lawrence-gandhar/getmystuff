@@ -610,9 +610,27 @@ class TestCanvas:
         # would find the HTML comments that mention graph_designer.js further up the page
         # and compare those instead — which is a test that passes or fails on prose.
         canvas_tag = body.index('src="/static/js/graph_canvas.js"')
+        selection_tag = body.index('src="/static/js/graph_selection.js"')
         designer_tag = body.index('src="/static/js/graph_designer.js"')
 
-        assert canvas_tag < designer_tag
+        # graph_selection.js reads ``window.GraphCanvas`` at module scope, and
+        # graph_designer.js reads ``window.GraphSelection`` in ``init`` — so all three
+        # have to arrive in this order or the canvas comes up blank with a single
+        # "undefined" in the console.
+        assert canvas_tag < selection_tag < designer_tag
+
+    async def test_the_selection_stylesheet_is_linked(
+        self, client, user, make_graph,
+    ) -> None:  # noqa: ANN001
+        """
+        The rubber-band box is the one piece of canvas appearance shared across the
+        three canvases, so it comes from its own sheet rather than from this one.
+        """
+        graph = await make_graph(user, "Styled")
+
+        body = client.get(f"/graph-designer/{graph.uuid}/edit").text
+
+        assert "/static/css/graph_selection.css" in body
 
     async def test_the_graph_endpoint_returns_the_stored_drawing(
         self, client, user, make_graph,

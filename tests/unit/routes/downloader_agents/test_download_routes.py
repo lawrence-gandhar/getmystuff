@@ -29,7 +29,6 @@ from app.db.db_utils import CRUDQueryBuilder
 from app.models.chatbot import ChatbotApiKey
 from app.models.data_agents import DataAgent
 from app.models.datasource import DataSource
-from app.models.downloader_agents import DownloadExport
 from app.models.tool_configs import ToolConfig
 from app.routes.downloader_agents import (
     DownloadController,

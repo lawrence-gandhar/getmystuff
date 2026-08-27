@@ -203,9 +203,10 @@ graph, and the failure from forgetting one is confusing rather than obvious.
 
 Two things in this application are not reachable from pytest, and both have bitten:
 
-**JavaScript.** There is no JS test harness. The two canvases and the shared
-`static/js/graph_canvas.js` are therefore verified outside pytest, and it is worth recording
-how, because both methods found real bugs that every Python test passed straight through:
+**JavaScript.** There is no JS test harness. The three canvases and the two shared modules —
+`static/js/graph_canvas.js` and `static/js/graph_selection.js` — are therefore verified
+outside pytest, and it is worth recording how, because every method used has found real bugs
+that every Python test passed straight through:
 
 * the shared primitives were compared against the arithmetic they replaced, copied verbatim
   out of git — 83 assertions, all identical. That found two id generators created in the same
@@ -215,9 +216,33 @@ how, because both methods found real bugs that every Python test passed straight
   run, and read the node statuses back off the DOM. That found a dock that never moved because
   named SSE events do not reach `onmessage`.
 
-Neither is in the repository as a runnable check. What the suite *can* assert about the
-canvases is asserted from the route tests — that the shared script is included before the
-feature's, and that a refusal quoting a user's node label comes back escaped.
+* the selection and hand-routing work added later was verified the same way plus one more:
+  the new geometry — the rectangle intersections a selection box needs, the waypoint routing,
+  and the bezier-through-a-point — was driven directly in `node` against a hand-rolled DOM
+  stub, since those functions are pure and have sharp contracts. Roughly 100 assertions across
+  three scripts, covering the cases most likely to be wrong: a box dragged right-to-left
+  (negative width silently selects nothing), a small box across a long return-lane segment
+  (a corner-only hit test misses a line it is sitting on), a group clamped at the left wall
+  without deforming, and Escape restoring a move. One expectation in that run was wrong rather
+  than the code, which is its own kind of useful.
+
+None of these is in the repository as a runnable check, which is the honest summary: the
+highest-value follow-up for this part of the codebase is a JS runner, because three
+near-duplicate canvas files of a few thousand lines each currently have no automated coverage
+at all.
+
+What the suite *can* assert about the canvases is asserted from the route tests and the schema
+tests:
+
+* **script order** — `graph_canvas.js` before `graph_selection.js` before the canvas's own
+  file, on all three pages. This one earns its place: get it wrong and the page renders with
+  an empty canvas and a single `undefined` in the console, with nothing in any server log.
+* a refusal quoting a user's node label comes back **escaped**;
+* the **bend payload** a hand-routed connector saves — `tests/unit/schemas/test_base.py` and
+  the three canvases' schema tests. The case that matters most is a non-finite coordinate:
+  `NaN` satisfies every other rule in the schema layer, and PostgreSQL then refuses the
+  `jsonb`, so without that check a hand-made request is a 500 with a stack trace rather than a
+  400 with a sentence.
 
 `test_widget_script.py` and the download-card
 tests in it assert against the *generated source* — that a helper exists, that a socket is

@@ -31,7 +31,7 @@ import asyncio
 import ipaddress
 import socket
 from dataclasses import dataclass, field
-from typing import FrozenSet, List, Optional, Tuple
+from typing import FrozenSet, List, Tuple
 from urllib.parse import urlparse
 
 

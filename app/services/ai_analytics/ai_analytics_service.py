@@ -34,7 +34,6 @@ from app.db.db_utils import (
     CRUDQueryBuilder,
     build_mongo_uri,
     build_rdbms_url,
-    fetch_file_listing,
     fetch_file_preview,
     fetch_mongo_rows,
     fetch_rdbms_rows,

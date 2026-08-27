@@ -95,7 +95,6 @@ from app.utils.sql_guard import (
     bind_placeholders,
     normalised_sql,
     read_only_violation,
-    stripped_literals,
 )
 from app.utils.validators import (
     optional_text,

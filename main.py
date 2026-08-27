@@ -58,10 +58,15 @@ from app.routes.downloader_agents import (
     FileDownloadController,
     PublicDownloadController,
 )
+from app.routes.file_delivery import (
+    GeneratedFileController,
+    PublicGeneratedFileController,
+)
 
 from app.services.agent_recursive_dataframes import frame_buffer
 from app.services.ai_inbuilt import ollama_client
 from app.services.downloader_agents.base import download_service, job_queue
+from app.services.file_delivery import file_service as generated_file_service
 from app.services.integrations.engine import (
     queue as integration_queue,
     run_service as integration_run_service,
@@ -154,6 +159,17 @@ async def on_startup() -> None:
     _background_tasks.append(
         asyncio.create_task(
             download_service.run_expiry_reaper(), name="download-expiry-reaper",
+        )
+    )
+
+    # And the same for files a Create File block wrote. Its own reaper rather than a
+    # branch inside that one: the two have different TTLs for different reasons (see
+    # file_service.FILE_TTL_SECONDS) and neither module should have to know the other's
+    # table to sweep its own.
+    _background_tasks.append(
+        asyncio.create_task(
+            generated_file_service.run_expiry_reaper(),
+            name="generated-file-expiry-reaper",
         )
     )
 
@@ -302,6 +318,8 @@ app = Litestar(
         PublicDownloadController,
         EmailWebhookController,
         FileDownloadController,
+        GeneratedFileController,
+        PublicGeneratedFileController,
     ],
     debug=True,
     request_class=HTMXRequest,

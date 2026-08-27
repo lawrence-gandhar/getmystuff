@@ -86,6 +86,11 @@ class TurnResult:
     insights: List[str] = field(default_factory=list)
     table: Optional[dict] = None
     options: List[dict] = field(default_factory=list)
+    # The download button a Download File block is offering, or None — which is every turn
+    # but the ones that ran one. Separate from `download` above, which is an *export* being
+    # built and carries a status and progress URLs to poll: this file already exists, so
+    # there is nothing to watch and the payload is a link, a label and a colour.
+    file_download: Optional[dict] = None
     message: str = ""
     response_time_ms: int = 0
 
@@ -209,6 +214,7 @@ def _from_flow(engine_result: engine_service.FlowEngineResult) -> TurnResult:
         insights=engine_result.insights,
         table=engine_result.table,
         options=engine_result.options,
+        file_download=engine_result.file_download,
     )
 
 
@@ -416,6 +422,7 @@ async def _log_turn(
             "summary": result.summary,
             "insights": result.insights,
             "table": result.table,
+            "file_download": result.file_download,
             "action": record.action,
         }
     else:

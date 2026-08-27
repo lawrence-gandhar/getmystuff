@@ -87,6 +87,27 @@
     pointer-events: none;
 }
 
+/* The wide invisible twin of each connection, and the only part of it that can be grabbed
+   to bend it. `stroke: transparent` rather than `opacity: 0`: an opacity-0 path still paints
+   and can dim the line under it in some renderers. */
+.int-edges path.int-edge-hit {
+    stroke: transparent;
+    stroke-width: 16;
+    pointer-events: stroke;
+    cursor: pointer;
+}
+
+/* The hand-placed bend. For these curves the stored point *is* the midpoint — see
+   `GC.geometryWithBend` — so the handle sits exactly on the line. The fat hit path takes
+   the press, so this is never a target itself. */
+.int-edge-waypoint {
+    fill: #fff;
+    stroke: #0d6efd;
+    stroke-width: 1.5;
+    cursor: move;
+    pointer-events: none;
+}
+
 .int-edge-delete {
     fill: #fff;
     stroke: #dc3545;
@@ -132,6 +153,29 @@
     box-shadow: 0 0 0 2px rgba(13, 110, 253, .25);
 }
 
+/* In the move selection: this step goes with the next drag. A dashed outline outside the
+   border, so it reads as "and this one, and this one" without competing with the solid
+   border that means selected-for-editing — a step can be both at once. */
+.int-node.int-node-multi {
+    outline: 1px dashed #0d6efd;
+    outline-offset: 2px;
+}
+
+/* A connection in the move selection. Dashes rather than a colour, because a connection's
+   colour already means something — red is a failure path, purple is a loop body. */
+.int-edges .int-edge-multi path.int-edge-path {
+    stroke-width: 3;
+    stroke-dasharray: 6 3;
+}
+
+/* The canvas takes focus so Ctrl+A and Escape can reach it without a document-level
+   handler stealing them from every field on the page. `:focus-visible` keeps the ring off
+   a plain mouse click. */
+.int-canvas-wrap:focus-visible {
+    outline: 2px solid rgba(13, 110, 253, .5);
+    outline-offset: -2px;
+}
+
 /* The step the last refusal named. Amber rather than red: the drawing is not broken,
    it is unfinished, and red is reserved for a step that failed in a run. */
 .int-node.int-invalid {
@@ -154,7 +198,7 @@
     font-size: 11px;
     color: #6c757d;
     min-height: 26px;
-    word-break: break-word;
+    overflow-wrap: break-word;
 }
 
 .int-node-status {

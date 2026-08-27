@@ -2,7 +2,6 @@ import re
 import hashlib
 import asyncio
 from pathlib import Path
-from typing import Optional
 
 # ─────────────────────────────────────────────────────────────
 # Constants
@@ -68,6 +67,23 @@ EXPORT_BASE = Path("uploads/exports")
 # is served by app/routes/downloader_agents/download_routes.py after the session,
 # expiry and ownership checks — never as a static directory.
 DOWNLOAD_BASE = Path("uploads/file_downloaders")
+
+# Base directory for files written by a Create File block, on either canvas. One
+# directory per file, named by the file's own uuid:
+#
+#     uploads/generated_files/<file-uuid>/orders_2026-08-26.csv
+#
+# Keyed by the file rather than by the conversation, which is the one difference from
+# DOWNLOAD_BASE above and is what the two audiences make necessary: a flow's file belongs
+# to a chat session, a pipeline's belongs to a graph run, and one layout that covers both
+# is one cleanup rule and one path builder instead of two of each.
+#
+# Same two constraints as the two bases above, for the same reasons: under the `uploads`
+# volume so a rebuild does not take the files with it, and NOT under static/, which
+# main.py serves with no authentication at all. Every request goes through
+# app/routes/file_delivery/routes.py, which checks ownership (operator) or the widget key,
+# session token and expiry window (visitor).
+GENERATED_FILE_BASE = Path("uploads/generated_files")
 
 # db_type values that represent file-based (non-connection) datasources.
 FILE_BASED_TYPES: frozenset[str] = frozenset({"csv", "xls", "json", "parquet", "avro"})

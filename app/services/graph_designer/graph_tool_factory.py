@@ -54,7 +54,7 @@ graph does not get its own vocabulary for "here are some rows".
 """
 
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field, create_model

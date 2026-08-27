@@ -20,7 +20,6 @@ opened, which is the rule every AI surface in this application follows.
 """
 
 import logging
-import uuid as uuid_pkg
 from typing import Optional
 
 from litestar import Controller, post
@@ -104,7 +103,7 @@ class IntegrationAIController(Controller):
             # A provider that is not configured, or one that answered with an error. The
             # analytics service has already turned it into a sentence for a person.
             return _refusal(str(exc.detail))
-        except Exception as exc:  # noqa: BLE001
+        except Exception:  # noqa: BLE001
             logger.exception("Workflow generation failed for user %s", user.id)
             return _refusal(
                 "The AI could not be reached just now. The canvas still works — you can "

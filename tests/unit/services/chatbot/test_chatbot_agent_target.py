@@ -21,12 +21,11 @@ tested here, only what happens when it fails.
 
 from __future__ import annotations
 
-import uuid as uuid_pkg
 
 import pytest
 from litestar.exceptions import HTTPException
 
-from app.models.chatbot import TARGET_TYPE_AGENT, ChatbotApiKey
+from app.models.chatbot import TARGET_TYPE_AGENT
 from app.models.data_agents import DataAgent
 from app.models.datasource import DataSource
 from app.models.workspaces import Workspace

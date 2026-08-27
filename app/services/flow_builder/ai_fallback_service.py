@@ -81,6 +81,35 @@ def _build_system_prompt(
     return system_prompt
 
 
+def _retrieval_query(custom_prompt: str, visitor_message: str, from_selection: bool) -> str:
+    """
+    What to search the knowledge base for.
+
+    The visitor's own words — except on a turn where they did not type any. A button
+    reply hands on the option's **label** (see ``engine_service._effective_message``),
+    and a label is written to be a good thing to *click*, not a good thing to
+    *search*. Measured against a real proposal document: "Email me the data" retrieves
+    that document's security and authentication sections, so a model told to answer
+    strictly from what was retrieved explains that it cannot share user data — an
+    answer that is grounded, faithful, and about the wrong subject entirely. The same
+    knowledge base searched with the node's own instructions returns the scope,
+    deliverables and estimates, which is what the operator was asking for.
+
+    So on a selection turn the node's instructions join the query. They are the
+    operator's statement of what this block is *for*, and on a turn where nobody typed
+    a question that is the closest thing to one that exists. The label stays in as
+    well, so two options wired to two blocks still retrieve differently.
+
+    On a typed turn the instructions are left out: the visitor's question is a better
+    query than any standing instruction, and folding in "answer in a friendly tone"
+    would make every retrieval slightly worse for no gain.
+    """
+    message = (visitor_message or "").strip()
+    if not from_selection or not custom_prompt:
+        return message
+    return f"{custom_prompt}\n{message}".strip()
+
+
 def _build_user_content(
     context_text: Optional[str],
     visitor_message: str,
@@ -102,7 +131,16 @@ async def run_ai_fallback(
     node_id: str,
     node_data: dict,
     visitor_message: str,
+    from_selection: bool = False,
 ) -> AnalyticsResult:
+    """
+    Answer one turn for this AI Fallback node.
+
+    ``from_selection`` says the visitor clicked a button rather than typing: their
+    "question" is an option's label, which changes what this searches a knowledge base
+    for. See :func:`_retrieval_query` — it is the difference between answering the
+    question the operator wired the block for and answering the words on the button.
+    """
     context_source = node_data.get("context_source") or "datasource"
     if context_source not in _VALID_CONTEXT_SOURCES:
         context_source = "datasource"
@@ -146,7 +184,10 @@ async def run_ai_fallback(
 
     context_text = None
     if context_source == "knowledge_base":
-        context_text = await knowledge_base_service.retrieve_context(db, flow_id, node_id, visitor_message)
+        context_text = await knowledge_base_service.retrieve_context(
+            db, flow_id, node_id,
+            _retrieval_query(custom_prompt, visitor_message, from_selection),
+        )
 
     return await answer_freeform(
         db,

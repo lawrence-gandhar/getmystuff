@@ -149,7 +149,7 @@ async def test_query(
     except SQLAlchemyError as exc:
         logger.info("Test query failed against datasource %s", datasource_id)
         return _failed(_database_message(exc))
-    except Exception as exc:  # noqa: BLE001 — connection-level failures
+    except Exception:  # noqa: BLE001 — connection-level failures
         # Not a query problem: the datasource could not be reached at all. Logged in
         # full, reported as the one thing the user can act on.
         logger.exception("Test query could not reach datasource %s", datasource_id)

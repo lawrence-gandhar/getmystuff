@@ -30,7 +30,7 @@ graph" is not a sentence anybody can act on.
 """
 
 import uuid as uuid_pkg
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 from app.models.integrations import (
     CONNECTOR_NODE_TYPES,

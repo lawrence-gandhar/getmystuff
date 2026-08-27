@@ -36,7 +36,7 @@ for inputs. A kind writes to exactly one of them.
 import logging
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, List, Mapping, Optional, Set
+from typing import Any, Dict, Mapping, Optional, Set
 
 from app.services.integrations.connectors.spec import (
     PAGE_CURSOR,

@@ -31,10 +31,11 @@ depends on ``target_type``: file uuids for ``file``, names for ``table`` and
 the service and resolve to something other than what was picked.
 """
 
+import logging
 import uuid as uuid_pkg
 from typing import ClassVar, List, Optional
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, ValidationError, field_validator, model_validator
 
 from app.models.chatbot import (
     ACTION_HTTP_METHODS,
@@ -59,6 +60,8 @@ from app.schemas.base import (
     ResponseSchema,
 )
 from app.utils.validators import require_object_name
+
+logger = logging.getLogger(__name__)
 
 #: The scopes a chatbot's data can be, taken from the model so the schema, the
 #: service and the column cannot drift. ``chatbot_service`` still enforces it.
@@ -625,6 +628,34 @@ class PublicChatbotStreamQuery(QueryRequest):
     )
 
 
+def _validated_button(payload: Optional[dict]) -> Optional[dict]:
+    """
+    One download button, re-validated on its way to the browser, or None.
+
+    The colour in this payload lands in an inline ``style`` attribute on a page this
+    application does not own, so it is checked once more here — the third gate, after the
+    canvas validator and the runner. Two of the three could be bypassed by a node saved by
+    an older version or edited straight in the database; this one cannot, because every
+    turn goes through it.
+
+    A payload that fails is **dropped**, not raised: the answer the visitor is waiting for
+    is fine, and losing a button is a far better outcome than losing the turn. The
+    ValidationError is logged with the payload, which is where a developer looks.
+    """
+    if not payload:
+        return None
+
+    from app.schemas.file_delivery import FileButtonView
+
+    try:
+        return FileButtonView.model_validate(payload).payload()
+    except ValidationError:
+        logger.warning(
+            "Dropping a download button this turn could not serialise: %r", payload,
+        )
+        return None
+
+
 class ChatbotTurnResponse(ResponseSchema):
     """
     One answered turn, as the widget reads it.
@@ -652,6 +683,12 @@ class ChatbotTurnResponse(ResponseSchema):
     #: is, so this schema need not import another feature's package. None on the
     #: overwhelming majority of turns, and the widget renders nothing when it is.
     download: Optional[dict] = Field(default=None, title="Download")
+    #: The download button a Download File block is offering, already validated by
+    #: ``FileButtonView`` — carried as a plain dict for the same reason ``download`` is.
+    #: Distinct from ``download`` above, which is an export being *built*: that one has a
+    #: status and URLs to poll, this one is a file that already exists. None on every turn
+    #: that did not run the block, and the widget draws nothing when it is.
+    file_download: Optional[dict] = Field(default=None, title="Download button")
 
     @classmethod
     def from_turn(cls, result) -> "ChatbotTurnResponse":
@@ -679,6 +716,7 @@ class ChatbotTurnResponse(ResponseSchema):
             options=list(result.options or []),
             response_time_ms=result.response_time_ms,
             download=result.download,
+            file_download=_validated_button(result.file_download),
         )
 
     def payload(self) -> dict:

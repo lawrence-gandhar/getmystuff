@@ -7,9 +7,8 @@ SQLite gives. Everything else here is a refusal that has to name the column.
 """
 
 import sqlite3
-from typing import Any, Dict, List, Sequence
+from typing import List, Sequence
 
-import polars as pl
 import pytest
 
 from app.services.agent_recursive_dataframes import frame_ops
@@ -396,23 +395,61 @@ class TestDecimals:
 
 
 class TestOneImportSite:
-    def test_polars_is_imported_only_by_frame_ops(self) -> None:
-        """
-        A second import site is a second chance to import the extension first on a
-        worker thread — the hazard parquet_writer.py documents. Asserted rather
-        than trusted, because it is the sort of thing a later edit undoes quietly.
-        """
+    """
+    Where polars may be imported, and — the part that actually matters — *how*.
+
+    The hazard ``parquet_writer.py`` documents at length: a compiled extension first
+    imported on a worker thread that is later destroyed can take the process down on its
+    next use. What prevents it is importing at **module scope**, so the import happens on
+    whichever thread first imports the module rather than inside an ``asyncio.to_thread``
+    callback.
+
+    This started as "exactly one file imports polars", which was true when there was one.
+    The second site — ``file_delivery/file_writer.py``, which writes CSV, XLSX and TXT
+    through polars, see documentations/FILE_NODES.md — makes the *count* the wrong thing to
+    assert: two module-scope imports are no more dangerous than one, and a single
+    function-scope import is the actual bug. So the list is a named allow-list, and the
+    assertion that carries the weight is the second one.
+    """
+
+    #: Modules that may import polars. Adding one is a deliberate act; a module here has to
+    #: keep the module-scope rule below, and its callers have to import *it* from a
+    #: coroutine rather than from inside a thread.
+    ALLOWED = (
+        "services/agent_recursive_dataframes/frame_ops.py",
+        "services/file_delivery/file_writer.py",
+    )
+
+    def _importers(self) -> list:
         import pathlib
 
         root = pathlib.Path(frame_ops.__file__).parents[2]
-        importers = sorted(
-            path.relative_to(root).as_posix()
+
+        return sorted(
+            (path.relative_to(root).as_posix(), path.read_text())
             for path in root.rglob("*.py")
-            if "polars" in path.read_text()
-            and any(
+            if any(
                 line.strip().startswith(("import polars", "from polars"))
                 for line in path.read_text().splitlines()
             )
         )
 
-        assert importers == ["services/agent_recursive_dataframes/frame_ops.py"]
+    def test_only_the_named_modules_import_polars(self) -> None:
+        """
+        Asserted rather than trusted, because a stray ``import polars`` in a service that
+        happens to run inside a thread is the sort of thing a later edit adds quietly.
+        """
+        assert [name for name, _ in self._importers()] == sorted(self.ALLOWED)
+
+    def test_every_import_is_at_module_scope(self) -> None:
+        """
+        The property the hazard actually turns on. An indented ``import polars`` is inside a
+        function, which means it can be first executed on a pool thread.
+        """
+        for name, source in self._importers():
+            for line in source.splitlines():
+                if line.strip().startswith(("import polars", "from polars")):
+                    assert line == line.lstrip(), (
+                        f"{name} imports polars inside a function — it must be at module "
+                        "scope, see parquet_writer.py"
+                    )

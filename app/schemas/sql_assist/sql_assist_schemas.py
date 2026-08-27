@@ -34,7 +34,6 @@ from pydantic import Field, field_validator
 
 from app.schemas.base import (
     MAX_DESCRIPTION_LENGTH,
-    MAX_NAME_LENGTH,
     FormRequest,
     IdentifierName,
     JsonObjectField,

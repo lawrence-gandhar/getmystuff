@@ -15,7 +15,6 @@ being tested here is the form and the wiring, not schema reflection.
 from __future__ import annotations
 
 import pytest
-from litestar.exceptions import HTTPException
 
 from app.models.data_agents import DataAgent
 from app.models.datasource import DataSource

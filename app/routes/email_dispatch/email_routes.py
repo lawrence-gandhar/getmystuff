@@ -21,7 +21,7 @@ is no form to preserve and the global handler's page is the right answer.
 
 import uuid
 
-from litestar import Controller, delete, get, post
+from litestar import Controller, get, post
 from litestar.connection import Request
 from litestar.exceptions import HTTPException
 from litestar.response import Template

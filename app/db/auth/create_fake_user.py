@@ -11,7 +11,6 @@ import asyncio
 import logging
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.db_sessions import AsyncSessionLocal
 from app.db.models import User

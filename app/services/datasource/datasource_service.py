@@ -235,7 +235,7 @@ async def get_datasource_objects(
             result = await db.execute(
                 select(DatasourceFile)
                 .where(DatasourceFile.datasource_id == datasource.id)
-                .where(DatasourceFile.is_active == True)
+                .where(DatasourceFile.is_active == True)  # noqa: E712
             )
             files = result.scalars().all()
             objects = []

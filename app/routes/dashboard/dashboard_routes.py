@@ -1,11 +1,10 @@
 from datetime import datetime
 from litestar import (
     get,
-    post,
     Controller
 )
 
-from litestar.response import Template, Redirect
+from litestar.response import Template
 
 from app.db.auth import require_auth
 from app.db.models import User

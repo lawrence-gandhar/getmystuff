@@ -694,6 +694,19 @@ _WIDGET_SCRIPT_TEMPLATE = r"""
       "border-radius:8px;padding:8px 12px;font-size:13px;font-family:inherit;" +
       "line-height:1.3;cursor:pointer;}" +
       ".gms-chatbot-option:hover{background:" + cfg.brand_color + ";color:#fff;}" +
+      // The download button a Download File block offers. Its own block under the reply,
+      // like the options wrap above it, because it is not part of any one message: the
+      // sentence that mentions it is the operator's Send Message block, which may not even
+      // be next to it. The background colour is set per button from the node's setting, so
+      // it is deliberately absent here.
+      ".gms-chatbot-file{position:relative;z-index:1;display:flex;flex-direction:column;" +
+      "align-items:flex-start;margin:0 0 10px;max-width:85%;}" +
+      ".gms-chatbot-file-indent{margin-left:28px;}" +
+      ".gms-chatbot-file-btn{display:inline-flex;align-items:center;gap:8px;" +
+      "text-decoration:none;color:#fff;border:0;border-radius:8px;padding:9px 14px;" +
+      "font-size:13px;font-family:inherit;line-height:1.3;cursor:pointer;}" +
+      ".gms-chatbot-file-btn:hover{filter:brightness(.92);}" +
+      ".gms-chatbot-file-meta{margin-top:4px;font-size:11px;color:#6c757d;}" +
       ".gms-chatbot-table{border-collapse:collapse;margin-top:6px;font-size:11px;}" +
       ".gms-chatbot-table th,.gms-chatbot-table td{border:1px solid #ced4da;padding:3px 6px;" +
       "text-align:left;white-space:nowrap;}" +
@@ -1157,6 +1170,65 @@ _WIDGET_SCRIPT_TEMPLATE = r"""
     }
 
     container.appendChild(wrap);
+  }
+
+  // ---------------------------------------------------------------------
+  // The download button
+  // ---------------------------------------------------------------------
+  //
+  // A file a flow's Download File block is handing over. Nothing to poll and nothing to
+  // update: the file already exists by the time this payload is sent, which is the whole
+  // difference between this and the card below — that one watches an export being built.
+  //
+  // A plain <a download>, not a fetch. The link carries the widget key and the session
+  // token in its query string and the route authorises on both, so the browser's own
+  // download machinery is all that is needed — and a fetch would have to hold the whole
+  // file in memory to hand it back to the same browser.
+  function renderFileButton(container, payload, cfg) {
+    if (!payload || !payload.url) return;
+
+    var wrap = document.createElement("div");
+    wrap.className = "gms-chatbot-file" + (cfg.bot_icon_url ? " gms-chatbot-file-indent" : "");
+
+    var link = document.createElement("a");
+    link.className = "gms-chatbot-file-btn";
+    link.href = apiUrl(payload.url);
+    // The name the operator's block chose, so the visitor's disk gets "invoice_10432.csv"
+    // rather than whatever the URL's last segment happens to be.
+    link.setAttribute("download", payload.file_name || "");
+    link.target = "_blank";
+    link.rel = "noopener";
+    // textContent, never innerHTML: the label is operator-authored text that may have had
+    // a placeholder — and therefore a visitor's own words — substituted into it.
+    // (Spelled out rather than shown: this file must contain no template braces at all,
+    // which is what proves nothing here is rendered per chatbot key.)
+    link.textContent = "\u2b07  " + (payload.label || "Download file");
+    // Validated server-side three times over (see FileButtonView); the fallback is here so
+    // a payload from an older server still draws a button rather than an unstyled link.
+    link.style.background = payload.colour || cfg.brand_color;
+
+    wrap.appendChild(link);
+
+    var meta = fileMeta(payload);
+    if (meta) {
+      var note = document.createElement("div");
+      note.className = "gms-chatbot-file-meta";
+      note.textContent = meta;
+      wrap.appendChild(note);
+    }
+
+    container.appendChild(wrap);
+    container.scrollTop = container.scrollHeight;
+  }
+
+  // "CSV · 12.4 KB" under the button. The format because a visitor about to click deserves
+  // to know what they are getting, the size because a slow connection makes it matter.
+  function fileMeta(payload) {
+    var parts = [];
+    if (payload.file_format) parts.push(String(payload.file_format).toUpperCase());
+    var size = formatBytes(payload.byte_size);
+    if (size) parts.push(size);
+    return parts.join(" \u00b7 ");
   }
 
   // ---------------------------------------------------------------------
@@ -1810,6 +1882,12 @@ _WIDGET_SCRIPT_TEMPLATE = r"""
       // After the reply, whatever kind it was. The card is what the sentence above it
       // is about, and it goes on updating long after this turn is over.
       if (data.download) renderDownloadCard(messagesEl, data.download, cfg);
+
+      // And the button, likewise after the reply — under the words the operator wrote
+      // about it rather than instead of them. Only the POST path draws one: a flow turn
+      // never streams (see chatbot_turn_service.stream_turn), so a Download File block's
+      // payload cannot arrive on the SSE path, and wiring it there would imply it could.
+      if (data.file_download) renderFileButton(messagesEl, data.file_download, cfg);
     }
 
     sendBtn.addEventListener("click", function () { send(); });

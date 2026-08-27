@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 import pytest
 from litestar.exceptions import HTTPException
 
+from app.schemas.base import MAX_CANVAS_COORD, MAX_EDGE_WAYPOINTS
 from app.schemas.flow_builder import (
     MAX_GRAPH_EDGES,
     MAX_GRAPH_NODES,
@@ -93,6 +94,82 @@ class TestGraphSave:
     def test_the_node_count_boundary_is_inclusive(self) -> None:
         payload = FlowGraphSaveRequest.parse({"nodes": [{}] * MAX_GRAPH_NODES})
         assert len(payload.nodes) == MAX_GRAPH_NODES
+
+    def test_hand_placed_bends_survive(self) -> None:
+        """
+        A connector routed by hand stores where it was dragged to. Nothing
+        server-side needed to change for that — it rides on ``extra="allow"`` the
+        same way ``layout`` does — so this is the test that keeps it true.
+        """
+        graph = {
+            "nodes": [],
+            "edges": [{"id": "e1", "waypoints": [{"x": 40, "y": 120}]}],
+        }
+        assert FlowGraphSaveRequest.parse(graph).graph_data() == graph
+
+    def test_a_connector_with_no_bends_is_untouched(self) -> None:
+        graph = {"nodes": [], "edges": [{"id": "e1", "source": "a", "target": "b"}]}
+        assert FlowGraphSaveRequest.parse(graph).graph_data() == graph
+
+    def test_the_bend_count_boundary_is_inclusive(self) -> None:
+        bends = [{"x": 10, "y": 10}] * MAX_EDGE_WAYPOINTS
+        graph = {"nodes": [], "edges": [{"id": "e1", "waypoints": bends}]}
+        assert FlowGraphSaveRequest.parse(graph).graph_data() == graph
+
+    def test_too_many_bends_is_refused(self) -> None:
+        bends = [{"x": 10, "y": 10}] * (MAX_EDGE_WAYPOINTS + 1)
+        assert "more than 4 bend points" in _detail(
+            FlowGraphSaveRequest, {"edges": [{"id": "e1", "waypoints": bends}]}
+        )
+
+    @pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+    def test_a_non_finite_bend_is_refused(self, value: float) -> None:
+        """
+        The reason this validator exists at all.
+
+        ``NaN`` passes every other rule in this layer, ``json.dumps`` then writes a
+        bare ``NaN``, and PostgreSQL refuses it as ``jsonb`` — so without this the
+        request is a 500 with a stack trace instead of a sentence.
+        """
+        assert "not a valid position" in _detail(
+            FlowGraphSaveRequest,
+            {"edges": [{"id": "e1", "waypoints": [{"x": value, "y": 0}]}]},
+        )
+
+    @pytest.mark.parametrize(
+        "bends",
+        ["not-a-list", {"x": 1, "y": 2}, 7],
+        ids=["string", "object", "number"],
+    )
+    def test_bends_that_are_not_a_list_are_refused(self, bends: object) -> None:
+        assert "could not be read" in _detail(
+            FlowGraphSaveRequest, {"edges": [{"id": "e1", "waypoints": bends}]}
+        )
+
+    @pytest.mark.parametrize(
+        "bend",
+        [{"x": 1}, {"y": 1}, {}, "nope", None, {"x": "10", "y": "20"}, {"x": True, "y": 1}],
+        ids=["no-y", "no-x", "empty", "string", "none", "strings", "bool"],
+    )
+    def test_a_malformed_bend_is_refused(self, bend: object) -> None:
+        assert "missing its position" in _detail(
+            FlowGraphSaveRequest, {"edges": [{"id": "e1", "waypoints": [bend]}]}
+        )
+
+    @pytest.mark.parametrize("value", [-1, MAX_CANVAS_COORD + 1])
+    def test_a_bend_off_the_canvas_is_refused(self, value: int) -> None:
+        assert "outside the canvas" in _detail(
+            FlowGraphSaveRequest,
+            {"edges": [{"id": "e1", "waypoints": [{"x": value, "y": 0}]}]},
+        )
+
+    def test_a_null_bend_list_is_left_alone(self) -> None:
+        """
+        Not the canvas's doing, but a document that has been through a tool which
+        writes ``null`` for an empty list should still load rather than refuse.
+        """
+        graph = {"nodes": [], "edges": [{"id": "e1", "waypoints": None}]}
+        assert FlowGraphSaveRequest.parse(graph).graph_data() == graph
 
     def test_node_types_are_not_pinned_here(self) -> None:
         """

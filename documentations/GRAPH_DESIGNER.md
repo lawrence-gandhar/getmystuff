@@ -67,6 +67,48 @@ step whenever a ceiling, a port name or a validator's wording changes.
 
 ---
 
+# How the canvas draws itself
+
+The nodes are not where somebody put them, unless somebody put them there. The canvas asks
+the server for a **layer and a column per node** and arranges itself top to bottom — on
+open, and again after anything that changes the wiring. Drag a node and the canvas leaves
+your arrangement alone from then on; **Tidy up** hands the arranging back.
+
+That decision is one field on the saved drawing, `layout`, and a drawing without it is
+`auto` — which is every pipeline saved before this existed. So an existing hand-arranged
+canvas *is* re-arranged the first time it is opened; nothing is written until Save, and
+Reload restores what the database holds.
+
+Three things about how a node is drawn are worth knowing:
+
+* **A node with a choice shows a labelled pill per way out**, and each pill *is* that
+  output port. A Branch's conditions, a loop's `each` and `done`, and any node's
+  `on error` are the same thing drawn the same way — and the pill replaced the label that
+  used to be painted on the connector itself, which said the same word twice. A node with
+  one unnamed way out shows a plain dot on its bottom edge instead. The pills sit **side
+  by side** and wrap only when they run out of room; a condition too long for its pill is
+  truncated, with the whole of it in the pill's tooltip. Columns are spaced by the widest
+  pill row on the canvas, so a node carrying two written conditions pushes its neighbours
+  apart instead of overlapping them.
+* **Green means it worked, red means it did not.** A node with exactly two ways out, one of
+  them a failure, draws the other green — a SQL node's ordinary exit, `written`, `queued`.
+  A Branch's conditions, a loop's `each` / `done` and a union's `next` / `execute` stay grey,
+  because none of them says the node did or did not do its work. The Success and Failure
+  nodes' discs are the same green and red, and the Failure red is the one the Flow Builder
+  now ends a flow in.
+* **A connector's ✕ and its two end handles appear on hover.** They used to be on every
+  connector at all times, which on a twelve-connector pipeline meant thirty-six
+  controls competing with the nodes.
+* **A connector that runs back up the canvas takes a lane to the right of every node.**
+  A `for each` or `do until` body sending the run round again has no downward step to
+  take — its target is above it, which is what makes it a loop — so it is routed round
+  rather than drawn through the nodes it passes.
+
+The layering itself, the loop detection and why the arithmetic is in Python rather than in
+the browser are in [CANVAS_LAYOUT.md](CANVAS_LAYOUT.md).
+
+---
+
 # Why it exists
 
 [TOOL_GRAPHS.md](TOOL_GRAPHS.md) draws graphs it did not author: `tool_graph_service`
@@ -87,8 +129,8 @@ Every one of those is control flow, and control flow is a drawing.
 
 # The node vocabulary
 
-Fourteen types. The five that hold something, six that decide where the run goes, and
-three that act on the world or on the clock.
+Sixteen types. The five that hold something, six that decide where the run goes, and five
+that act on the world or on the clock.
 
 | type | ports out | holds |
 |---|---|---|
@@ -102,6 +144,8 @@ three that act on the world or on the clock.
 | `for_each` | `body`, `done` | which node's result to loop over, and a ceiling |
 | `do_until` | `body`, `done` | a condition to repeat until, and a ceiling |
 | `email` | `default`, `error` | a template, a server, recipients, and a value per declared variable |
+| `create_file` | `default`, `error` | which node's rows to write, in which format, called what |
+| `download_file` | `default`, `error` | which `create_file` node's file to hand over |
 | `timer` | `default` | one of *start / pause / resume / stop*, and which timer |
 | `wait` | `default` | a number of seconds to pause the run for |
 | `success` | `default` | a message; records the run as having worked |
@@ -125,6 +169,41 @@ hand.
 browser as `#gdVocabulary`, and the canvas builds its palette and its property forms from
 what it was sent. A palette offering a node type the service refuses is a form that can
 only be filled in wrongly, so there is no second copy in JavaScript.
+
+## The two file nodes
+
+Implemented in `app/services/file_delivery/` and shared with the Flow Builder canvas, the
+arrangement the Email node established: this package contributes two registry entries and
+two validator calls, and everything about what a file *is* lives in that module. See
+[FILE_NODES.md](FILE_NODES.md).
+
+`create_file` writes an earlier node's rows — CSV, XLSX, TXT or Parquet — and puts
+`file_uuid`, `file_name`, `file_path`, `file_format`, `row_count` and `byte_size` on its
+output. `download_file` names one of those nodes and puts an **owner-only** `url` on its
+output, which is what lets an Email node bind `{{LINK}}` to it and mail the file on.
+
+Three things are specific to this canvas.
+
+**The rows are already whole here.** A SQL node's output *is* every matching row —
+`_run_sql` passes `max_rows=None` and nothing on that path caps — so there is no
+preview-versus-total distinction to get wrong. The flow canvas's equivalent has to re-read a
+graph run's result precisely because what a conversation can reach is a preview.
+
+**There is no button, and the fields are refused rather than ignored.** A pipeline has no
+visitor and no chat, so `_validate_download_file_node` says so by name if a graph arrives
+carrying `show_button` or `button_text`. A setting an author chose and this application
+silently dropped is worse than one that was never offered.
+
+**Both nodes declare what they read**, in `node_runners.referenced_nodes` — a `create_file`
+node's source node and the `create_file` node a `download_file` node names. Without that,
+running a **tested selection** of just the file node would read nothing and fail inside the
+runner claiming the upstream produced no rows, rather than saying the upstream was not
+ticked.
+
+`file_name` is the one field on either node that takes a `{{VARIABLE}}`, and it earns it: a
+pipeline that runs nightly wants `orders-{{RUN_DATE}}` rather than one name every run
+overwrites. The format is a picker's value and the node references are resolved by the
+validator before any state exists, which is why neither is in `VARIABLE_FIELDS`.
 
 ## The three value kinds are not decoration
 
@@ -931,20 +1010,30 @@ console **once** rather than every tick — as the download card does.
 # The shared canvas core
 
 `static/js/graph_canvas.js` holds the stateless half of a node-graph editor: the Bezier
-maths, the port measurement, the escaping, and the id generator. Both canvases use it —
-this one and the Flow Builder's.
+maths, the right-angle maths, the rectangle maths a selection box needs, the port
+measurement, the escaping, and the id generator. Three canvases use it — this one, the Flow
+Builder's, and the Integrations workflow canvas.
 
-Nothing stateful moved. The node registry, the properties panel, the palette, save/load and
-the selection model are per-feature, because a conversation flow's nodes and a data
-pipeline's nodes have nothing in common beyond being boxes joined by curves. What they share
-is the curves.
+Nothing stateful moved. The node registry, the properties panel, the palette and save/load
+are per-feature, because a conversation flow's nodes and a data pipeline's nodes have nothing
+in common beyond being boxes joined by lines. What they share is the lines.
 
 Every function there is pure or measures the DOM it is handed — none reads a module-level
-`wrapperEl`, a `state` object or an id prefix. That is what makes one copy safe for two
+`wrapperEl`, a `state` object or an id prefix. That is what makes one copy safe for three
 canvases with different markup, ids and CSS.
 
-`graph_canvas.js` must load **before** either feature's script, which both templates do and
-a route test asserts.
+**The selection model used to be on that per-feature list, and is not any more.** Worth
+stating rather than quietly dropping: selecting several things and moving them together is now
+shared, but from a second module rather than this one. `static/js/graph_selection.js` holds
+it, because a gesture *is* state — where the press began, what was selected before it, which
+frame is pending — and holding that in `graph_canvas.js` would break every promise the
+paragraph above makes. So the line moved rather than blurred: **the geometry and the gesture
+are shared; what a selection means is not.** See `documentations/CANVAS_SELECTION.md`.
+
+`graph_canvas.js` must load **before** `graph_selection.js`, which must load before any
+feature's script. Every template does that and a route test on each of the three asserts it —
+which matters because getting it wrong produces a blank canvas and one `undefined` in the
+console, with nothing in any server log.
 
 **Verifying the extraction.** There is no JavaScript test harness in this repository, so the
 move was checked two ways: the shared functions were compared against the pre-extraction
@@ -991,7 +1080,7 @@ the failure mode here is a control that looks present and is not.
 
 ## Joining two nodes
 
-Two gestures, both supported, because users arrive expecting one or the other:
+Two gestures for *making* one, both supported because users arrive expecting one or the other:
 
 * **Drag** from an output port and release anywhere on the target node. A dashed rubber band
   follows the cursor, the node under it highlights, and releasing over empty canvas abandons
@@ -1005,13 +1094,30 @@ release, leaving the `click` that follows to arm the click-then-click gesture; a
 travels further releases over another element and so produces no `click` on the port at all.
 That is why the two cannot both fire for one press.
 
-Two suppressions keep the forgiving version honest:
+**A third gesture now lands on the connector itself: dragging the line bends it**, routing it
+by hand round whatever is in the way. Same split and so no collision — a press on the wire
+that travels less than the threshold does nothing on release, leaving the `click` to select
+the connector; one that travels further routes it and swallows the trailing click. The grab
+target is the invisible 16px twin of the line that already existed for hovering it.
+
+What makes a press on a wire a *group move* instead of a bend is that the connector is part
+of a **multi**-item selection, not merely the selected one. Clicking a wire selects it, so if
+"selected" alone meant group-drag, the ordinary sequence of clicking a wire and then dragging
+it would move two nodes rather than bending it.
+
+Three suppressions keep the forgiving version honest:
 
 * A node accepts a click as "I am the target" **only while a connector is armed**. Otherwise
   clicking a header just drags, as it always did.
 * For one tick after a drag that actually moved a node, node clicks are ignored
   (`suppressNodeClick`). A mouseup always trails a click, and without this, dragging a node
   while a connector was armed would silently connect it.
+* For one tick after a rubber-band selection or a group move, the canvas's own
+  click-to-deselect is ignored. This one is load-bearing rather than defensive: a selection
+  box begins and ends on the wrapper, so a `click` **will** fire there afterwards and clear
+  the selection the box just made — without the suppression the whole feature appears to do
+  nothing. The module and this file share one flag rather than keeping two, so they cannot
+  drift.
 
 This was originally click-only, and the only thing that accepted the click was the node's
 **body** — so the incoming dot, the obvious place to aim at, was inert, and dragging did
@@ -1343,6 +1449,26 @@ assertions over adding a node, connecting, refusing a second connector on one po
 shift-picking for a test, switching dock tabs, saving, running, and the node statuses
 painting. That run is what found the named-SSE-event bug.
 
+The selection, the group move and the hand-routed connectors added later are covered the same
+way — by hand, against a real drawing — with two exceptions that a Python test *can* hold:
+
+* **`tests/unit/schemas/graph_designer/test_graph_designer_schemas.py`** pins the bend
+  payload: bends survive a save round trip, four is inclusive, a fifth is refused, and a
+  non-finite or out-of-range coordinate is refused with a sentence. That last one is the
+  reason the validator exists — `NaN` satisfies every other rule in the schema layer and then
+  makes PostgreSQL refuse the `jsonb`, so without it a hand-made request is a 500 with a stack
+  trace instead of a 400 with an explanation.
+* **the script-order test** in `tests/unit/routes/graph_designer/` now asserts three files
+  rather than two: `graph_canvas.js` before `graph_selection.js` before `graph_designer.js`.
+  It earns its place because getting that wrong produces a blank canvas and one `undefined`
+  in the console, with nothing in any server log — and it is exactly the sort of thing an edit
+  reorders without noticing.
+
+The manual checklist, including the interactions most likely to regress (a box dragged
+right-to-left, the trailing click that would undo a selection, a group clamped at the left
+wall without deforming, and the absence of forced-layout warnings during a five-node drag) is
+in [CANVAS_SELECTION.md](CANVAS_SELECTION.md) §7.
+
 ---
 
 # Related
@@ -1356,6 +1482,9 @@ painting. That run is what found the named-SSE-event bug.
   binding modes, `labelled_rows`, the row cap and the refuse-rather-than-truncate argument
   are that feature's, reused here rather than restated
 * [FLOW_BUILDER.md](FLOW_BUILDER.md) — the other canvas, and the primitives now shared with it
+* [CANVAS_SELECTION.md](CANVAS_SELECTION.md) — selecting several nodes and moving them as one,
+  routing a connector by hand, and where the shared-versus-per-feature line moved to make that
+  possible across three canvases
 * [QUERY_TEST.md](QUERY_TEST.md) — the insistence that what is tested is what will run
 * [DOWNLOADER_AGENTS.md](DOWNLOADER_AGENTS.md) — the `interrupt()` / resume pattern, the
   DB-backed progress stream, and the relative-URL rule

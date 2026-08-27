@@ -39,6 +39,7 @@ be reached: those need the database and stay in the service layer.
 from __future__ import annotations
 
 import json
+import math
 import uuid as uuid_pkg
 from typing import Any, ClassVar, Mapping, NoReturn, Optional, Sequence, Type, TypeVar
 
@@ -69,6 +70,24 @@ MAX_NAME_LENGTH = 255
 MAX_DESCRIPTION_LENGTH = 2000
 MAX_PROMPT_LENGTH = 20000
 MAX_URL_LENGTH = 2048
+
+# Hand-routed connectors. Every canvas in the application draws its connectors for
+# the user and lets them override the route by dragging the line, and each stores
+# the result the same way: a ``waypoints`` list of ``{"x": .., "y": ..}`` on the
+# edge, in canvas pixels.
+#
+# Here rather than in three feature packages because three of them need exactly
+# these two numbers, and a cap that differs between canvases is a cap that is
+# wrong on two of them. The browsers enforce the same values; a cap only the client
+# knows is not a cap.
+#
+# 4 is what the routing can express: with a fixed exit stub and a fixed entry stub,
+# four free points already give more distinct orthogonal routes than anybody draws.
+# 200_000 is a runaway ceiling rather than a design limit — 500 nodes in a single
+# row at the widest step size is about 106_000px, and the canvas grows to fit, so
+# anything past this is a client that has lost track of where it is.
+MAX_EDGE_WAYPOINTS = 4
+MAX_CANVAS_COORD = 200_000
 
 # The tokens an HTML control can send for a boolean. A checkbox sends "on" when
 # ticked and nothing at all when not; the toggle buttons in this application post
@@ -501,6 +520,80 @@ class ResponseSchema(AppBaseSchema):
 # service, so the schema and the older check reject the same input with the same
 # sentence. Declaring them once here is what keeps that true as fields are added.
 # --------------------------------------------------------------------------
+
+def validate_edge_waypoints(
+    edges: Any,
+    max_waypoints: int = MAX_EDGE_WAYPOINTS,
+) -> Any:
+    """
+    Bound the one key the canvas layer owns on a connector it has hand-routed.
+
+    Every canvas save schema in this application deliberately allows extra keys:
+    the drawing's shape belongs to the client, and pinning it here would mean two
+    places to change for every node type. ``waypoints`` is the exception worth
+    checking, and it is worth checking for one reason above the others.
+
+    A payload of ``{"waypoints": [{"x": NaN, "y": 0}]}`` satisfies every rule this
+    layer would otherwise apply. ``json.dumps`` then writes a bare ``NaN``, which
+    **PostgreSQL's ``jsonb`` rejects** — so the save dies as a 500 with a stack
+    trace and no sentence, which is exactly what this project's error contract
+    exists to prevent. ``Infinity`` behaves the same way. Neither is reachable from
+    the canvas; both are reachable from a hand-made request.
+
+    The count cap matters for the same reason ``MAX_GRAPH_EDGES`` does: without it
+    the new key is an unbounded document into a JSONB column, slipping past the
+    caps that were added to stop precisely that.
+
+    Anything that is not an edge object, or an edge with no ``waypoints``, is left
+    exactly as it is — the vocabulary is still the service's to interpret.
+
+    :param edges: the posted ``edges`` collection, whatever shape it arrived in
+    :param max_waypoints: bends allowed per connector
+    :returns: ``edges`` unchanged, when every bend on it is usable
+    :raises ValueError: with a sentence a reader can act on
+    """
+    if not isinstance(edges, list):
+        return edges
+
+    for edge in edges:
+        if not isinstance(edge, dict) or "waypoints" not in edge:
+            continue
+
+        waypoints = edge["waypoints"]
+        if waypoints is None:
+            continue
+        if not isinstance(waypoints, list):
+            raise ValueError(
+                "A connector's bend points could not be read. Reload the canvas "
+                "and try saving again."
+            )
+        if len(waypoints) > max_waypoints:
+            raise ValueError(
+                f"A connector cannot have more than {max_waypoints} bend points."
+            )
+
+        for point in waypoints:
+            if not isinstance(point, dict) or "x" not in point or "y" not in point:
+                raise ValueError("A connector's bend point is missing its position.")
+
+            for value in (point["x"], point["y"]):
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    raise ValueError(
+                        "A connector's bend point is missing its position."
+                    )
+                # ``math.isfinite`` and not a comparison: NaN fails every
+                # comparison silently, including the range check below.
+                if not math.isfinite(value):
+                    raise ValueError(
+                        "A connector's bend point is not a valid position."
+                    )
+                if value < 0 or value > MAX_CANVAS_COORD:
+                    raise ValueError(
+                        "A connector's bend point is outside the canvas."
+                    )
+
+    return edges
+
 
 def _blank_to_none(value: Any) -> Any:
     """An untouched form field and an unselected dropdown both mean "nothing"."""

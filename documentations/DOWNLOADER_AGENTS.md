@@ -59,6 +59,15 @@ script.
 
 ---
 
+**This is not the only file path any more.** A Create File block on the Flow Builder or
+Graph Designer canvas writes a file because an operator *drew* one, which is a different
+thing from an agent noticing that an answer is too big to print — different rows, different
+audience, and no offer to accept. It owns its own table and its own routes; see
+[FILE_NODES.md](FILE_NODES.md), which states why it is not four nullable columns on
+`download_exports`.
+
+---
+
 # Why it exists
 
 A tool's rows were capped at 200 and handed to the model, and two things followed from

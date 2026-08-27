@@ -9,13 +9,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.auth import require_auth
 from app.models.user import User
+from app.schemas.canvas_layout import CanvasLayoutRequest, CanvasLayoutResponse
 from app.schemas.flow_builder import (
     FlowCreateRequest,
     FlowGraphSaveRequest,
     FlowRenameRequest,
     FlowSetActiveRequest,
+    FlowSetKindRequest,
 )
 from app.services.ai_settings import ai_settings_service
+from app.services.canvas_layout import layout_service
 from app.services.email_dispatch import smtp_service as email_smtp_service
 from app.services.email_dispatch import template_service as email_template_service
 from app.services.flow_builder import flow_service
@@ -77,7 +80,7 @@ class FlowBuilderController(Controller):
         error = None
         try:
             payload = await FlowCreateRequest.from_form(request)
-            await flow_service.create_flow(db, user.id, payload.name)
+            await flow_service.create_flow(db, user.id, payload.name, payload.kind)
         except HTTPException as e:
             error = str(e.detail)
 
@@ -110,6 +113,11 @@ class FlowBuilderController(Controller):
         # pointing at one stays editable.
         email_templates_json = await email_template_service.choices(db, user.id)
         smtp_configs_json = await email_smtp_service.choices(db, user.id)
+        # What a Run Flow block may call: the user's other published flows, each carrying the
+        # variables it reads and writes so the panel can draw its two lists of rows the
+        # instant a flow is chosen — the same reason the email templates above carry their
+        # declared variables. This flow is excluded because a flow cannot run itself.
+        flows_json = await flow_service.callable_flow_choices(db, user.id, flow.uuid)
 
         return Template(
             template_name="flow_builder/canvas.htm",
@@ -121,6 +129,7 @@ class FlowBuilderController(Controller):
                 "graphs_json": json.dumps(graphs_json),
                 "email_templates_json": json.dumps(email_templates_json),
                 "smtp_configs_json": json.dumps(smtp_configs_json),
+                "flows_json": json.dumps(flows_json),
                 "active": "flow_builder",
             },
         )
@@ -132,6 +141,51 @@ class FlowBuilderController(Controller):
     async def graph(self, flow_id: uuid.UUID, db: AsyncSession, user: User) -> Response:
         flow = await flow_service.get_flow(db, user.id, flow_id)
         return Response(flow.graph_data, media_type=_JSON, status_code=200)
+
+    # --------------------------
+    # LAYOUT — where the canvas should put its blocks
+    # --------------------------
+    @post("/{flow_id:uuid}/layout")
+    async def layout(
+        self,
+        flow_id: uuid.UUID,
+        request: Request,
+        db: AsyncSession,
+        user: User,
+    ) -> Response:
+        """
+        Arrange the drawing the canvas is holding: a layer and a column per block.
+
+        **The drawing in the body is the input, not the stored one.** An operator arranges
+        a canvas while it has unsaved changes, so laying out what the row holds would answer
+        for a picture one edit behind. Nothing is written either — the positions come back,
+        and they are stored only if the operator then presses Save.
+
+        The flow is still resolved, which is what makes this endpoint behave like its
+        siblings: a flow that is not this user's, or has been deleted in another tab, is a
+        404 rather than a picture arranged for a graph that no longer exists.
+
+        A refusal is a status code and a sentence; the canvas keeps the positions it already
+        had rather than blanking, which is the rule `integrations.js` states for its own
+        endpoints.
+        """
+        try:
+            payload = await CanvasLayoutRequest.from_json(request)
+            await flow_service.get_flow(db, user.id, flow_id)
+        except HTTPException as exc:
+            return Response(
+                {"error": str(exc.detail)}, media_type=_JSON, status_code=exc.status_code,
+            )
+
+        return Response(
+            CanvasLayoutResponse.payload_for(
+                layout_service.layered_layout(
+                    payload.nodes, payload.edges, payload.entry_ids(),
+                ),
+            ),
+            media_type=_JSON,
+            status_code=200,
+        )
 
     # --------------------------
     # SAVE
@@ -204,6 +258,33 @@ class FlowBuilderController(Controller):
             await flow_service.set_flow_active(
                 db, user.id, flow_id, is_active=payload.is_active,
             )
+        except HTTPException as e:
+            error = str(e.detail)
+
+        return await self._rows(db, user, error)
+
+    # --------------------------
+    # SET KIND
+    # --------------------------
+    @post("/{flow_id:uuid}/set-kind")
+    async def set_kind(
+        self,
+        flow_id: uuid.UUID,
+        request: Request,
+        db: AsyncSession,
+        user: User,
+    ) -> Template:
+        """
+        Switch a flow between an agent's own conversation and a callable child.
+
+        Publishing is untouched — one Active rule serves both kinds. Making an attached
+        flow generic is refused by the service, naming the agent to detach it from, and that
+        sentence comes back in the rows partial like every other refusal on this page.
+        """
+        error = None
+        try:
+            payload = await FlowSetKindRequest.from_form(request)
+            await flow_service.set_flow_kind(db, user.id, flow_id, payload.kind)
         except HTTPException as e:
             error = str(e.detail)
 

@@ -86,8 +86,10 @@ def fallback(monkeypatch: pytest.MonkeyPatch) -> dict:
     """
     calls: dict = {"result": AnalyticsResult(summary=SUMMARY), "asked": []}
 
-    async def run_ai_fallback(db, chatbot_key, flow_id, node_id, node_data, message):  # noqa: ANN001, ANN202
-        calls["asked"].append((node_id, message))
+    async def run_ai_fallback(  # noqa: ANN202
+        db, chatbot_key, flow_id, node_id, node_data, message, from_selection=False,  # noqa: ANN001
+    ):
+        calls["asked"].append((node_id, message, from_selection))
         result = calls["result"]
         if isinstance(result, Exception):
             raise result
@@ -99,9 +101,15 @@ def fallback(monkeypatch: pytest.MonkeyPatch) -> dict:
     return calls
 
 
-async def _run(graph: dict, session: ChatbotFlowSession, message: str = "how many orders?"):  # noqa: ANN202
+async def _run(  # noqa: ANN202
+    graph: dict,
+    session: ChatbotFlowSession,
+    message: str = "how many orders?",
+    from_selection: bool = False,
+):
     return await engine_service._step_ai_fallback(
         None, _key(), FLOW_ID, graph, session, _node(graph), message,
+        from_selection=from_selection,
     )
 
 
@@ -141,6 +149,24 @@ class TestTheAnswerIsKept:
             "the turn ends here, but the next node is where the next message resumes — "
             "which is what lets an Email node a step later read the variable"
         )
+
+
+class TestTheNodeIsToldHowTheQuestionArrived:
+    """
+    A button click and a typed sentence reach the node as the same string, so the flag is
+    the only thing that can tell them apart — and it changes what a knowledge base is
+    searched for. See ``ai_fallback_service._retrieval_query``.
+    """
+
+    async def test_a_selection_turn_is_passed_through(self, fallback) -> None:  # noqa: ANN001
+        await _run(_graph(), _session(), "Email me the data", from_selection=True)
+
+        assert fallback["asked"] == [(AI_NODE_ID, "Email me the data", True)]
+
+    async def test_a_typed_turn_is_passed_through(self, fallback) -> None:  # noqa: ANN001
+        await _run(_graph(), _session(), "what is the warranty?")
+
+        assert fallback["asked"] == [(AI_NODE_ID, "what is the warranty?", False)]
 
 
 class TestWhatTheStoredAnswerContains:

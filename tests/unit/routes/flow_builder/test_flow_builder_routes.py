@@ -37,7 +37,10 @@ _BLOCK_LABELS = {
     "goto": "Goto",
     "ai_fallback": "AI Fallback",
     "run_graph": "Run Graph",
+    "run_flow": "Run Flow",
     "send_email": "Send Email",
+    "create_file": "Create File",
+    "download_file": "Download File",
     "end": "End Flow",
 }
 
@@ -82,9 +85,10 @@ class TestTheHelpPage:
     def test_the_variable_examples_survive_template_rendering(self, client) -> None:  # noqa: ANN001
         """
         The whole body sits inside ``{% raw %}``, so the samples must arrive as written —
-        braces intact. This is the assertion that matters most on this page: its central
-        warning is that message text does *not* interpolate, and an unescaped
-        ``{{NAME}}`` would render as an empty string and teach the exact opposite.
+        braces intact. Still the assertion that matters most on this page, though the reason
+        has inverted: message text now *does* interpolate, so ``Thanks {{NAME}}!`` is an
+        example somebody will copy, and one rendered to an empty string by this page's own
+        template engine would teach them syntax that does not exist.
         """
         body = client.get("/flow-builder/help").text
 
@@ -143,3 +147,111 @@ class TestTheHelpPage:
         body = client.get(f"/flow-builder/{flow.uuid}/edit").text
 
         assert 'href="/flow-builder/help"' in body
+
+
+class TestTheCanvasScripts:
+    """
+    Script order, which is a requirement rather than a preference.
+
+    ``graph_selection.js`` reads ``window.GraphCanvas`` at module scope and
+    ``flow_builder.js`` reads ``window.GraphSelection`` in ``init``. Get the order
+    wrong and the page comes up with an empty canvas and one "undefined" in the
+    console — no server error, nothing in a log. It is also exactly the sort of thing
+    an edit reorders without noticing, and the only part of the canvas's JavaScript
+    that a Python test can hold on to at all: this repository has no JavaScript test
+    runner.
+    """
+
+    async def test_all_three_scripts_are_loaded(self, client, user, make_flow) -> None:  # noqa: ANN001
+        flow = await make_flow(user, "Scripted")
+
+        body = client.get(f"/flow-builder/{flow.uuid}/edit").text
+
+        assert 'src="/static/js/graph_canvas.js"' in body
+        assert 'src="/static/js/graph_selection.js"' in body
+        assert 'src="/static/js/flow_builder.js"' in body
+
+    async def test_they_are_loaded_in_dependency_order(
+        self, client, user, make_flow,
+    ) -> None:  # noqa: ANN001
+        flow = await make_flow(user, "Ordered")
+
+        body = client.get(f"/flow-builder/{flow.uuid}/edit").text
+
+        # The `<script src>` occurrences specifically. Searching for the bare
+        # filenames would find the comments that mention them and compare those
+        # instead — a test that passes or fails on prose.
+        canvas_tag = body.index('src="/static/js/graph_canvas.js"')
+        selection_tag = body.index('src="/static/js/graph_selection.js"')
+        builder_tag = body.index('src="/static/js/flow_builder.js"')
+
+        assert canvas_tag < selection_tag < builder_tag
+
+    async def test_the_selection_stylesheet_is_linked(
+        self, client, user, make_flow,
+    ) -> None:  # noqa: ANN001
+        """
+        The rubber-band box is the one piece of canvas appearance that is shared, so
+        it comes from its own sheet rather than from this page's inline styles.
+        """
+        flow = await make_flow(user, "Styled")
+
+        body = client.get(f"/flow-builder/{flow.uuid}/edit").text
+
+        assert "/static/css/graph_selection.css" in body
+
+
+class TestTheKindColumn:
+    """
+    The library has to say what each flow is *for*, because the two kinds behave
+    differently in two other places — an agent's dropdown and a Run Flow block's list — and
+    a row that did not say which it was would make both look arbitrary.
+    """
+
+    async def test_an_agent_flow_shows_as_agent_and_offers_make_generic(
+        self, client, user, make_flow,
+    ) -> None:  # noqa: ANN001
+        await make_flow(user, "Front door", kind="agent")
+
+        body = client.get("/flow-builder/").text
+
+        assert ">Agent" in body or "Agent\n" in body
+        assert "Make Generic" in body
+        assert "Not attached" in body
+
+    async def test_a_generic_flow_shows_as_generic_and_offers_make_agent(
+        self, client, user, make_flow,
+    ) -> None:  # noqa: ANN001
+        await make_flow(user, "Collect details", kind="generic")
+
+        body = client.get("/flow-builder/").text
+
+        assert "Generic" in body
+        assert "Make Agent" in body
+        assert "child flow" in body, (
+            "a generic flow's Attached Agent cell says 'never attached', not 'not attached "
+            "yet' — the second reads as something left undone"
+        )
+
+    async def test_the_toggle_switches_a_flow_and_says_so_in_the_rows(
+        self, client, user, make_flow,
+    ) -> None:  # noqa: ANN001
+        flow = await make_flow(user, "Reusable bit", kind="agent")
+
+        body = client.post(
+            f"/flow-builder/{flow.uuid}/set-kind", data={"kind": "generic"},
+        ).text
+
+        assert "Make Agent" in body, "the row came back showing the new kind"
+
+    async def test_an_unknown_kind_is_refused_with_a_sentence(
+        self, client, user, make_flow,
+    ) -> None:  # noqa: ANN001
+        flow = await make_flow(user, "Reusable bit", kind="agent")
+
+        body = client.post(
+            f"/flow-builder/{flow.uuid}/set-kind", data={"kind": "sideways"},
+        ).text
+
+        assert "allowed values" in body or "neither" in body
+        assert "Make Generic" in body, "still an agent flow"

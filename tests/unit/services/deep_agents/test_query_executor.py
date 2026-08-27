@@ -36,7 +36,6 @@ from app.services.deep_agents.query_executor import (
     NEEDS_RECONFIGURING,
     NOT_AVAILABLE,
     PROBE_ROWS,
-    PROMPT_ROW_LIMIT,
     ToolQueryError,
     describe_result,
     execute_tool_query,

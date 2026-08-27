@@ -46,6 +46,7 @@ from app.models.graph_designer import (
 )
 from app.models.tool_configs import SQL_PARAM_TYPES
 from app.models.user import User
+from app.schemas.canvas_layout import CanvasLayoutRequest, CanvasLayoutResponse
 from app.schemas.graph_designer import (
     GraphAttachRequest,
     GraphCreateRequest,
@@ -63,6 +64,7 @@ from app.schemas.graph_designer import (
     GraphUpdateRequest,
     GraphView,
 )
+from app.services.canvas_layout import layout_service
 from app.services.graph_designer import (
     graph_run_service,
     graph_service,
@@ -377,6 +379,40 @@ class GraphDesignerController(Controller):
         """The stored drawing, for the canvas's Reload button."""
         graph = await graph_service.get_graph(db, user.id, graph_id)
         return Response(graph.graph_data or {}, media_type=_JSON, status_code=200)
+
+    @post("/{graph_id:uuid}/layout")
+    async def layout(
+        self,
+        graph_id: uuid_pkg.UUID,
+        request: Request,
+        db: AsyncSession,
+        user: User,
+    ) -> Response:
+        """
+        Arrange the drawing the canvas is holding: a layer and a column per node.
+
+        The Flow Builder's identical endpoint carries the reasoning
+        (``FlowBuilderController.layout``); in short, the drawing in the body is the input
+        rather than the stored one, because an operator arranges a canvas that has unsaved
+        changes, and nothing here writes.
+        """
+        try:
+            payload = await CanvasLayoutRequest.from_json(request)
+            await graph_service.get_graph(db, user.id, graph_id)
+        except HTTPException as exc:
+            return Response(
+                {"error": str(exc.detail)}, media_type=_JSON, status_code=exc.status_code,
+            )
+
+        return Response(
+            CanvasLayoutResponse.payload_for(
+                layout_service.layered_layout(
+                    payload.nodes, payload.edges, payload.entry_ids(),
+                ),
+            ),
+            media_type=_JSON,
+            status_code=200,
+        )
 
     @post("/{graph_id:uuid}/save")
     async def save(

@@ -41,7 +41,7 @@ write the whole state 750 times for a large run to buy a resume nobody asks for.
 
 import asyncio
 import logging
-from typing import Any, Dict, List, Mapping, Sequence, Union
+from typing import Any, Dict, List, Mapping, Union
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
@@ -61,8 +61,6 @@ from app.services.deep_agents.query_executor import (
     NEEDS_RECONFIGURING,
     ToolQueryError,
 )
-from app.services.downloader_agents.base import record_reader
-from app.services.downloader_agents.base.record_reader import RecordSource
 
 logger = logging.getLogger(__name__)
 

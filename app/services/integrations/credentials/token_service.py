@@ -36,7 +36,7 @@ import asyncio
 import logging
 import secrets
 from datetime import datetime, timedelta, timezone
-from typing import Any, Awaitable, Callable, Optional
+from typing import Awaitable, Callable, Optional
 
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession

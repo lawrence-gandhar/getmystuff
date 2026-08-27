@@ -1,6 +1,21 @@
 {% for flow in flows %}
+{% set is_generic = flow.kind == "generic" %}
 <tr id="flow-row-{{ flow.uuid }}">
     <td class="fw-semibold">{{ flow.name }}</td>
+    <td>
+        {# What the flow is *for*. A generic flow is a child another flow runs; an agent
+           flow is a chatbot's own conversation. The two are mutually exclusive, which is
+           why the Attached Agent cell below reads differently for each. #}
+        {% if is_generic %}
+            <span class="badge bg-info-subtle text-info-emphasis border border-info-subtle">
+                <i class="las la-sitemap"></i> Generic
+            </span>
+        {% else %}
+            <span class="badge bg-primary-subtle text-primary-emphasis border border-primary-subtle">
+                <i class="las la-comments"></i> Agent
+            </span>
+        {% endif %}
+    </td>
     <td>
         {% if flow.is_active %}
             <span class="badge bg-success">Active</span>
@@ -13,6 +28,10 @@
             <span class="badge bg-light text-dark border">
                 <i class="las la-comments"></i> {{ flow.chatbot_name }}
             </span>
+        {% elif is_generic %}
+            {# Not "not attached yet" — never attached. Saying "Not attached" here would
+               read as something left undone. #}
+            <span class="text-muted small">&mdash; child flow &mdash;</span>
         {% else %}
             <span class="text-muted small">Not attached</span>
         {% endif %}
@@ -36,11 +55,28 @@
                 {% if flow.is_active %}Make Draft{% else %}Make Active{% endif %}
             </button>
             <button
+                class="btn btn-sm btn-outline-info"
+                hx-post="/flow-builder/{{ flow.uuid }}/set-kind"
+                hx-vals='{"kind": "{{ "agent" if is_generic else "generic" }}"}'
+                hx-target="#flow-builder-response"
+                hx-swap="innerHTML"
+                {% if is_generic %}
+                    title="Make this a chatbot's own conversation, so it can be attached to an agent"
+                {% else %}
+                    title="Make this a child flow another flow can run with a Run Flow block"
+                    {% if flow.chatbot_name %}
+                        hx-confirm="{{ flow.name }} is attached to {{ flow.chatbot_name }}. A generic flow cannot be attached to an agent, so this will be refused until you detach it there."
+                    {% endif %}
+                {% endif %}
+            >
+                {% if is_generic %}Make Agent{% else %}Make Generic{% endif %}
+            </button>
+            <button
                 class="btn btn-sm btn-outline-danger"
                 hx-post="/flow-builder/{{ flow.uuid }}/delete"
                 hx-target="#flow-builder-response"
                 hx-swap="innerHTML"
-                hx-confirm="Delete flow '{{ flow.name }}'?{% if flow.chatbot_name %} It is attached to {{ flow.chatbot_name }}, which will stop using it.{% endif %} This cannot be undone."
+                hx-confirm="Delete flow '{{ flow.name }}'?{% if flow.chatbot_name %} It is attached to {{ flow.chatbot_name }}, which will stop using it.{% elif is_generic %} Any flow with a Run Flow block pointing at it will stop working.{% endif %} This cannot be undone."
             >
                 Delete
             </button>
@@ -49,7 +85,7 @@
 </tr>
 {% else %}
 <tr>
-    <td colspan="5" class="text-center text-muted py-4">
+    <td colspan="6" class="text-center text-muted py-4">
         <i class="las la-project-diagram fs-4 d-block mb-1"></i> No flows created yet.
     </td>
 </tr>

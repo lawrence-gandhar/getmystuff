@@ -12,6 +12,8 @@ from app.models.graph_designer.models import (  # noqa: F401
     MAX_NODE_VARIABLES,
     NODE_BRANCH,
     NODE_DO_UNTIL,
+    NODE_CREATE_FILE,
+    NODE_DOWNLOAD_FILE,
     NODE_EMAIL,
     NODE_FAILURE,
     NODE_FOR_EACH,

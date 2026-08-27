@@ -19,7 +19,7 @@ anything we could compose, and an error body frequently echoes the request that 
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Dict, Optional
 
 import pytest
 

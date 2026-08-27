@@ -24,8 +24,6 @@ pytest.importorskip(
 )
 
 from app.models.downloader_agents import (  # noqa: E402
-    EXPORT_BUILDING,
-    EXPORT_FAILED,
     EXPORT_QUEUED,
     EXPORT_READY,
 )

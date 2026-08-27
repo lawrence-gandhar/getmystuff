@@ -47,7 +47,7 @@ from app.models.email_dispatch import (
     EmailTrigger,
 )
 from app.models.workspaces import Workspace
-from app.services.email_dispatch import dispatch_service, rendering, variable_sources
+from app.services.email_dispatch import dispatch_service, variable_sources
 from app.services.email_dispatch.errors import RenderError
 from app.utils.crypto import encrypt_secret
 from app.utils.events import EVENT_NAME_LABELS, EVENT_NAME_VALUES

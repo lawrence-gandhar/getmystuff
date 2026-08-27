@@ -146,6 +146,7 @@ class TestAFinishedGraphIsAStepNotAMessage:
         session = _session()
 
         result = await engine_service._step_run_graph(
+            None,
             _key(), _graph(), session, _graph()["nodes"][1],
         )
 
@@ -164,6 +165,7 @@ class TestAFinishedGraphIsAStepNotAMessage:
         session = _session()
 
         await engine_service._step_run_graph(
+            None,
             _key(), graph, session, graph["nodes"][1],
         )
 
@@ -182,6 +184,7 @@ class TestAFinishedGraphIsAStepNotAMessage:
         session = _session()
 
         await engine_service._step_run_graph(
+            None,
             _key(), graph, session, graph["nodes"][1],
         )
 
@@ -192,7 +195,7 @@ class TestAFinishedGraphIsAStepNotAMessage:
         session = _session()
         graph = _graph()
 
-        await engine_service._step_run_graph(_key(), graph, session, graph["nodes"][1])
+        await engine_service._step_run_graph(None, _key(), graph, session, graph["nodes"][1])
 
         assert session.variables == {}
 
@@ -210,6 +213,7 @@ class TestAFinishedGraphIsAStepNotAMessage:
         session = _session(variables={"department": "Sales"})
 
         await engine_service._step_run_graph(
+            None,
             _key(user_id=42), graph, session, graph["nodes"][1],
         )
 
@@ -227,6 +231,7 @@ class TestAQuestionSuspendsTheConversation:
         session = _session()
 
         result = await engine_service._step_run_graph(
+            None,
             _key(), graph, session, graph["nodes"][1],
         )
 
@@ -247,7 +252,7 @@ class TestAQuestionSuspendsTheConversation:
         graph = _graph()
         session = _session()
 
-        await engine_service._step_run_graph(_key(), graph, session, graph["nodes"][1])
+        await engine_service._step_run_graph(None, _key(), graph, session, graph["nodes"][1])
 
         assert session.current_node_id == GRAPH_NODE_ID
         assert session.awaiting_graph_run == RUN_UUID
@@ -261,6 +266,7 @@ class TestAQuestionSuspendsTheConversation:
         graph = _graph()
 
         result = await engine_service._step_run_graph(
+            None,
             _key(), graph, _session(), graph["nodes"][1],
         )
 
@@ -275,6 +281,7 @@ class TestAnsweringTheQuestion:
         session = _session(awaiting_graph_run=RUN_UUID)
 
         result = await engine_service._answer_waiting_graph(
+            None,
             _key(user_id=9), session, _graph(), "yes",
         )
 
@@ -300,6 +307,7 @@ class TestAnsweringTheQuestion:
         session = _session(awaiting_graph_run=RUN_UUID)
 
         result = await engine_service._answer_waiting_graph(
+            None,
             _key(), session, _graph(), "maybe",
         )
 
@@ -318,6 +326,7 @@ class TestAnsweringTheQuestion:
         session = _session(awaiting_graph_run=RUN_UUID)
 
         result = await engine_service._answer_waiting_graph(
+            None,
             _key(), session, _graph(), "yes",
         )
 
@@ -331,6 +340,7 @@ class TestAnsweringTheQuestion:
         session = _session(awaiting_graph_run=RUN_UUID)
 
         result = await engine_service._answer_waiting_graph(
+            None,
             _key(), session, _graph(), "yes",
         )
 
@@ -345,6 +355,7 @@ class TestAnsweringTheQuestion:
         session = _session(awaiting_graph_run=RUN_UUID)
 
         result = await engine_service._answer_waiting_graph(
+            None,
             _key(), session, _graph(error_edge=True), "yes",
         )
 
@@ -360,6 +371,7 @@ class TestAFailedGraphIsNeverASilentHop:
         session = _session()
 
         result = await engine_service._step_run_graph(
+            None,
             _key(), graph, session, graph["nodes"][1],
         )
 
@@ -378,6 +390,7 @@ class TestAFailedGraphIsNeverASilentHop:
         session = _session()
 
         result = await engine_service._step_run_graph(
+            None,
             _key(), graph, session, graph["nodes"][1],
         )
 
@@ -397,6 +410,7 @@ class TestAFailedGraphIsNeverASilentHop:
         session = _session()
 
         result = await engine_service._step_run_graph(
+            None,
             _key(), graph, session, graph["nodes"][1],
         )
 
@@ -415,6 +429,7 @@ class TestANodeNobodyFinishedConfiguring:
         session = _session()
 
         result = await engine_service._step_run_graph(
+            None,
             _key(), graph, session, graph["nodes"][1],
         )
 

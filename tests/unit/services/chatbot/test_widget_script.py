@@ -208,6 +208,79 @@ def card(script: str) -> str:
     return script[start:end]
 
 
+def _button(script: str) -> str:
+    """Just the download-button renderer, so a match cannot come from elsewhere."""
+    start = script.index("function renderFileButton")
+    end = script.index("function fileMeta")
+
+    assert start < end
+    return script[start:end]
+
+
+class TestTheDownloadButton:
+    """
+    The button a flow's Download File block offers.
+
+    Source assertions, like the rest of this file. What is guarded is the handful of
+    properties that are cheap to edit away and expensive to notice: it has to be a real
+    link, its URL has to go through ``apiUrl`` (the regression the card below documents at
+    length), its label has to be set as text rather than as HTML, and it must be drawn on
+    the POST path only.
+    """
+
+    def test_it_is_drawn_from_the_turn_payload_on_the_post_path_only(
+        self, script: str,
+    ) -> None:
+        """
+        A flow turn never streams — ``chatbot_turn_service.stream_turn`` refuses one — so a
+        button payload cannot arrive on the SSE path. Wiring it there would imply it could.
+        """
+        assert "function renderFileButton(container, payload, cfg)" in script
+        assert script.count("renderFileButton(messagesEl, ") == 1
+
+    def test_it_is_an_anchor_and_not_a_button(self, script: str) -> None:
+        """
+        A real link, so middle-click, "save as" and keyboard Enter all work — and so the
+        browser's own download machinery does the transfer rather than a fetch holding the
+        whole file in memory to hand it back to the same browser.
+        """
+        button = _button(script)
+
+        assert 'document.createElement("a")' in button
+        assert 'link.setAttribute("download"' in button
+        assert "link.href = apiUrl(payload.url)" in button
+
+    def test_its_url_is_not_left_relative(self, script: str) -> None:
+        """
+        The same regression the card's own test documents: a URL used as it arrives
+        resolves against the *embedding page*, so the visitor's own site is asked for the
+        file and the failure is silent.
+        """
+        for expression in re.findall(r"\.href = ([^;\n]*)", _button(script)):
+            assert "apiUrl(" in expression, f"unresolved URL: {expression}"
+
+    def test_the_label_is_set_as_text_and_never_as_html(self, script: str) -> None:
+        """
+        The label is operator-authored and may have had a visitor's own words interpolated
+        into it, which makes it exactly as untrusted as message text.
+        """
+        button = _button(script)
+
+        assert "link.textContent =" in button
+        # An *assignment*, not the word: the renderer's own comment says "textContent,
+        # never innerHTML", and a test that banned the word would delete the explanation.
+        assert "innerHTML =" not in button
+
+    def test_a_payload_with_no_url_draws_nothing(self, script: str) -> None:
+        assert "if (!payload || !payload.url) return;" in _button(script)
+
+    def test_the_colour_falls_back_rather_than_leaving_it_unstyled(
+        self, script: str,
+    ) -> None:
+        """A payload from an older server still gets a button, in the brand colour."""
+        assert "payload.colour || cfg.brand_color" in _button(script)
+
+
 class TestTheDownloadCard:
     """
     The file a visitor asked for, from queued to clickable.

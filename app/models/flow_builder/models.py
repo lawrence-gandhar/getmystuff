@@ -5,6 +5,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -35,6 +36,19 @@ class ChatbotFlow(Base):
     * ``is_active`` is an independent published/draft toggle. A chatbot only
       runs its attached flow while that flow is active (see get_active_flow),
       so a flow can be parked without being detached.
+    * ``kind`` is what the flow is *for*: ``"agent"`` — a chatbot's own
+      conversation, attachable, the default and what every flow was before this
+      column existed — or ``"generic"``, a child flow that exists to be run by
+      another flow's Run Flow block and is never attached to a chatbot at all.
+
+    The third switch is the one worth reading twice, because it constrains the
+    second: **a generic flow must not be attached.** Said in the check
+    constraint below as well as in the service, for the reason the unique
+    constraint above is a constraint rather than a service rule — an invariant
+    the database states cannot be got round by a code path that forgot it. A
+    generic flow is therefore absent from an agent's Conversation Flow dropdown
+    (``get_attachable_flows``) and is the only kind a Run Flow block will offer
+    (``callable_flow_choices``).
 
     Deleting a chatbot detaches its flow (ON DELETE SET NULL) rather than
     destroying work the user may want to point somewhere else.
@@ -78,6 +92,15 @@ class ChatbotFlow(Base):
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
+    # "agent" | "generic" — see the class docstring. A string rather than an
+    # `is_generic` boolean, matching how every other state in this schema is
+    # spelled (ChatbotFlowSession.status, FlowNodeKnowledgeBase.status) and
+    # leaving room for a third kind without a migration that renames a column.
+    # The vocabulary itself lives in flow_service.VALID_FLOW_KINDS.
+    kind: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="agent", server_default="agent",
+    )
+
     created_at: Mapped[DateTime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -93,6 +116,14 @@ class ChatbotFlow(Base):
     __table_args__ = (
         # One flow per chatbot, one chatbot per flow — see the class docstring.
         UniqueConstraint("chatbot_key_id", name="uq_chatbot_flows_chatbot_key"),
+        # A generic flow is a child of another flow, so it is never a chatbot's
+        # own conversation. Stated here as well as in `set_flow_kind` and
+        # `attach_flow` on purpose: those two are the readable refusals, and
+        # this is the guarantee that no third write path can undo them.
+        CheckConstraint(
+            "kind = 'agent' OR chatbot_key_id IS NULL",
+            name="ck_chatbot_flows_generic_unattached",
+        ),
     )
 
 
@@ -159,6 +190,51 @@ class ChatbotFlowSession(Base):
     # own.
     awaiting_graph_run: Mapped[Optional[str]] = mapped_column(
         String(64), nullable=True,
+    )
+
+    # The stack of Run-Flow calls this session is inside, outermost first, or []. One
+    # frame per call in progress: which flow is running, which node in the *caller* to
+    # come back to, the caller's own variables while the callee runs, and which of the
+    # callee's variables to bring back and under what names.
+    #
+    # A stack rather than a single frame because a sub-flow may itself call one, and a
+    # column rather than a key in `variables` for the reason `awaiting_graph_run` gives
+    # above: that dict is the visitor's namespace and is interpolated into chat text, so
+    # a name the application reserves is a name an operator can collide with.
+    #
+    # `flow_id` above deliberately keeps pointing at the **root** flow (the one attached
+    # to the chatbot) even while a sub-flow is running — `_session_needs_restart` compares
+    # it against the attached flow, and a session whose flow_id had become a callee's
+    # would restart itself on every turn. The flow actually being interpreted comes from
+    # the top of this stack; see `subflow_service.current_flow`.
+    #
+    # Plain JSONB, replaced wholesale on every write like `variables` — see
+    # `engine_service._store_answer` for why an in-place mutation would not persist.
+    call_stack: Mapped[list] = mapped_column(
+        JSONB, nullable=False, default=list, server_default="[]",
+    )
+
+    # What a block produced that is too big, or too structured, to be a variable:
+    # {"<node id>": {"kind": "graph_run"|"table", ...}}. Written by the Run Graph and AI
+    # Fallback blocks, read by a Create File block that names one of them as its data.
+    #
+    # Keyed by **node id**, not by variable name. Two blocks can share a variable name —
+    # and a Create File block points at one particular block on the canvas, which is a
+    # different question from "what is the current value of X".
+    #
+    # A separate column from `variables` for the reason `awaiting_graph_run` and
+    # `call_stack` above both give: that dict is the visitor's own namespace and gets
+    # interpolated into chat text, so anything the application reserves in it is a name
+    # an operator can collide with. It is also the wrong shape — `variables` is a flat
+    # string map, and these are records.
+    #
+    # What is stored is deliberately small: a graph run's **id** rather than its rows, so
+    # a Create File block re-reads every row at file time instead of writing a preview
+    # (see `file_delivery.row_source`), and an AI Fallback's own small answer table.
+    #
+    # Plain JSONB, replaced wholesale on every write like `variables`.
+    node_results: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default="{}",
     )
 
     # "active" | "completed"

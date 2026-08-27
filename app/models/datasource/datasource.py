@@ -1,5 +1,5 @@
 import uuid as uuid_pkg
-from typing import Optional, List
+from typing import Optional
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy import BigInteger, String, Boolean, Integer, ForeignKey, UniqueConstraint, DateTime, Index, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID

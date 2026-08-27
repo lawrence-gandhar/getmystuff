@@ -29,23 +29,30 @@ routes/      per-feature subfolders (auth/, dashboard/, datasource/, ai_settings
              tool_configs/, tool_graphs/, graph_designer/, sql_assist/, query_test/,
              deep_agents/, downloader_agents/, agent_recursive_dataframes/, integrations/,
              email_dispatch/ — four authenticated controllers under /emails plus one
-             unauthenticated one under /public/emails for inbound webhooks)
+             unauthenticated one under /public/emails for inbound webhooks —
+             file_delivery/ — one authenticated controller under /generated_files plus one
+             unauthenticated one under /public/generated_files for a widget visitor's own
+             file)
 services/    per-feature subfolders (datasource/, ai_settings/, ai_analytics/, chatbot/,
              chatbot_analytics/, flow_builder/, ai_inbuilt/, workspaces/, data_agents/,
              tool_configs/, tool_graphs/, graph_designer/, sql_assist/, query_test/,
              deep_agents/, downloader_agents/ — itself split into base/, csv/, xls/,
              parquet/ — agent_recursive_dataframes/, email_dispatch/ — with nodes/ holding
              one runner per canvas, so the Email node's behaviour lives with the email
-             module rather than inside the three features that call it)
+             module rather than inside the three features that call it — file_delivery/,
+             the same arrangement for the Create File and Download File blocks —
+             canvas_layout/, one layered layout shared by the Flow Builder and Graph
+             Designer canvases and owned by neither)
 models/      per-feature subfolders (user/, datasource/, ai_settings/, chatbot/, ai_analytics/,
              subscriptions/, flow_builder/, ai_inbuilt/, workspaces/, data_agents/,
              tool_configs/, downloader_agents/, graph_designer/, integrations/,
-             email_dispatch/)
+             email_dispatch/, file_delivery/)
 schemas/     shared infra (base.py, common.py) + per-feature subfolders (auth/, datasource/,
              workspaces/, data_agents/, tool_configs/, ai_settings/, ai_analytics/, chatbot/,
              chatbot_analytics/, flow_builder/, sql_assist/, query_test/, tool_graphs/,
              graph_designer/, deep_agents/, downloader_agents/,
-             agent_recursive_dataframes/, integrations/, email_dispatch/)
+             agent_recursive_dataframes/, integrations/, email_dispatch/,
+             file_delivery/, canvas_layout/)
 utils/       flat helper modules (crypto.py, file_utils.py, validators.py, query_joins.py,
              sql_guard.py, datasource_status.py, http_responses.py, csv_to_db.py,
              csv_to_parquet.py, turn_recorder.py, outbound_http.py, type_coercion.py,
@@ -96,11 +103,11 @@ its own feature — but it is the one page to read first, and the one to give so
 to operate this without reading the source.
 
 Feature deep-dives: [FLOW_BUILDER.md](FLOW_BUILDER.md) (the drawn conversation the widget
-walks before the AI gets a turn — eleven blocks, the two switches that make one live, and the
-flat string map that is the whole of a visitor's session; also served in-app at
-`/flow-builder/help`, from `templates/flow_builder/help.htm`, the third instance of the
-help-page shape, whose central point is the one thing operators reliably assume wrongly:
-message text is sent verbatim and does not interpolate `{{VARIABLES}}`),
+walks before the AI gets a turn — twelve blocks, the kind and two switches that make one live,
+the flat
+string map that is a visitor's session, and the call stack beside it that lets one flow run
+another and take named values back; also served in-app at `/flow-builder/help`, from
+`templates/flow_builder/help.htm`, the third instance of the help-page shape),
 [CHATBOT_AI_SETTINGS.md](CHATBOT_AI_SETTINGS.md) (per-agent prompt, prompt variables,
 language-model choice, webhook actions and flow attachment),
 [CHATBOT_ANALYTICS.md](CHATBOT_ANALYTICS.md) (per-turn performance logging and the
@@ -150,6 +157,20 @@ rather than an error — also served in-app at `/graph-designer/help`, from
 `templates/graph_designer/help.htm`, the operator-facing form of that page: every node, one
 worked example per scenario, the limits and every refusal with its fix, linked from both the
 library and the canvas so nobody has to leave a drawing to find out what a port means),
+[CANVAS_LAYOUT.md](CANVAS_LAYOUT.md) (what decides where the blocks go on both of those
+canvases — a layered top-down arrangement computed in Python, because layout is the part of
+a drawing that can be wrong without looking wrong and only Python is tested here, with the
+browser keeping the half that needs measuring; loops are reported rather than layered and
+drawn as returns round a side lane, which is how a Goto's jump became visible at all,
+and one recorded `layout` field decides whether a canvas arranges itself or keeps what
+somebody dragged),
+[CANVAS_SELECTION.md](CANVAS_SELECTION.md) (selecting several boxes with a rubber band,
+Ctrl-click or Ctrl+A and moving them as one across all three canvases, plus routing a
+connector by hand — the gesture is shared in `static/js/graph_selection.js` while what a
+selection *means* stays with each canvas, which is where the stateless-primitives rule in
+`graph_canvas.js` had to move rather than blur; also the drag-repaint fix that made a group
+move possible at all, since the old loop measured every port after writing every position
+and forced the browser to lay the canvas out again a dozen times a frame),
 [DEEP_AGENTS.md](DEEP_AGENTS.md) (running a data agent's tool configs as real queries so a
 chatbot answers from tool results and the language model never reads the database),
 [DOWNLOADER_AGENTS.md](DOWNLOADER_AGENTS.md) (an answer capped at 100 printed rows plus the
@@ -158,6 +179,16 @@ fifty records at a time as a checkpointed LangGraph that pauses on the user's "y
 failed batch three times and leaves nothing behind when it gives up; the widget draws it as a
 card with live progress and a real download button, built from the turn payload rather than
 from a link the model wrote, and the visitor can keep asking questions the whole time),
+[FILE_NODES.md](FILE_NODES.md) (the other file path, and the one an operator *draws*: a
+Create File block writes an earlier block's rows as CSV, XLSX, TXT or Parquet and a Download
+File block hands the file over — a coloured button in a chat, an authorised link on a
+pipeline's node output. Its own module and its own table rather than nullable columns on
+`download_exports`, whose three `NOT NULL` keys are what say an export belongs to a data
+agent's tool. Worth reading for two decisions: **what reaches the file is everything or the
+block fails** — a Run Graph block's rows are re-read in full at file time, because what the
+conversation saw was a twenty-row preview, and a result past the ceiling is refused rather
+than truncated; and the button is **not a result type**, so it is attached to whatever ends
+the turn and a Send Message after it still speaks),
 [WIDGET_RENDERING.md](WIDGET_RENDERING.md) (how an answer becomes what a visitor sees —
 the embeddable widget renders Markdown so a query result arrives as a real table instead
 of a wall of pipe characters, escaping the model's text *before* any parsing so that

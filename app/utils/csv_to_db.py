@@ -119,7 +119,7 @@ def copy_chunk(engine: Engine, table_name: str, df: pd.DataFrame) -> None:
 
         raw_conn.commit()
 
-    except Exception as e:
+    except Exception:
         raw_conn.rollback()
         logger.exception("COPY failed for table %s", table_name)
         raise

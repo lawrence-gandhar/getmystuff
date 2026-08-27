@@ -23,7 +23,6 @@ typo in its label — and nothing about it would say so until the next run.
 from __future__ import annotations
 
 import socket
-import uuid as uuid_pkg
 from typing import Any, Dict
 
 import httpx
@@ -35,7 +34,6 @@ from litestar.exceptions import HTTPException
 
 from app.models.integrations import (
     AUTH_API_KEY,
-    CONNECTION_ACTIVE,
     CONNECTION_DISABLED,
     CONNECTION_REVOKED,
     OPERATION_READ,
@@ -46,7 +44,6 @@ from app.models.integrations import (
 )
 from app.models.user.user import User
 from app.services.integrations import connection_service
-from app.services.integrations.credentials import credential_service
 from app.services.integrations.runtime import http_client, rate_limiter
 
 BASE = "https://api.example.com"

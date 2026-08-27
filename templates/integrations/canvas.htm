@@ -2,6 +2,9 @@
 {% block title %}{{ flow.name }} | Integrations{% endblock %}
 
 {% block extra_css %}
+{# The rubber-band box, shared with the Graph Designer and the Flow Builder. Only the box:
+   what a selected step looks like is this canvas's business and is in its own sheet. #}
+<link href="/static/css/graph_selection.css" rel="stylesheet">
 <link href="/static/css/integrations.css" rel="stylesheet">
 {% endblock %}
 
@@ -55,6 +58,13 @@
                 <i class="las la-stop"></i> Stop
             </button>
 
+            {# Doubles as Clear, and reports the count — integrations.js rewrites the
+               label. #}
+            <button id="intSelectAllBtn" class="btn btn-sm btn-outline-secondary" type="button"
+                    title="Select every step and connection, so they can be moved together">
+                <i class="las la-object-group"></i> Select all
+            </button>
+
             <span class="vr mx-1"></span>
 
             <button class="btn btn-sm btn-outline-secondary" type="button"
@@ -73,7 +83,10 @@
          CANVAS
          ============================================ -->
     <div class="card shadow-sm mb-2">
-        <div id="intCanvasWrap" class="int-canvas-wrap">
+        {# `tabindex` so the canvas can hold focus: Ctrl+A and Escape are bound to this
+           element rather than to the document, which keeps them out of the properties
+           panel's fields and the mapping grid. #}
+        <div id="intCanvasWrap" class="int-canvas-wrap" tabindex="0">
             <svg id="intEdges" class="int-edges"></svg>
             <div id="intNodes" class="int-nodes"></div>
         </div>
@@ -82,6 +95,11 @@
             then the other. Click a connection's middle to delete it. Cancelling a run stops
             it at the next record boundary — a step already waiting on another system
             finishes that call first.
+            To move several steps at once, drag a box on empty canvas or Ctrl-click steps to
+            add them; Ctrl+A selects everything, Escape clears it. Selecting a connection
+            picks up the two steps it joins.
+            Drag a connection itself to route it by hand round something in the way, and
+            double-click it to let the canvas draw it again.
         </div>
     </div>
 
@@ -194,6 +212,8 @@
 
 {# Shared primitives first: integrations.js reads window.GraphCanvas at module scope. #}
 <script src="/static/js/graph_canvas.js"></script>
+{# After graph_canvas.js, which it uses, and before integrations.js, which uses it. #}
+<script src="/static/js/graph_selection.js"></script>
 <script src="/static/js/integrations.js"></script>
 <script>
     IntegrationsCanvas.init({

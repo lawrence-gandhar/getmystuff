@@ -132,6 +132,7 @@
                 <a href="#s12">12 · Waiting</a>
                 <a href="#s13">13 · {{VARIABLES}}</a>
                 <a href="#s14">14 · Sending an email</a>
+                <a href="#s17">17 · Writing a file</a>
 
                 <div class="help-toc-group">Running it</div>
                 <a href="#s15">15 · Run, test, and the dock</a>
@@ -178,7 +179,7 @@
                                     <p class="small text-muted mb-0">
                                         Nothing infers an order. A node runs when something
                                         leads to it, and the run goes wherever that node's
-                                        output dot points. Nodes run one at a time, in
+                                        connector points. Nodes run one at a time, in
                                         sequence — there are no parallel branches.
                                     </p>
                                 </div>
@@ -334,6 +335,22 @@
                                     </td>
                                 </tr>
                                 <tr>
+                                    <td><strong>Create a file</strong></td>
+                                    <td><code>written</code>, <code>failed</code></td>
+                                    <td>
+                                        Which node's rows to write, in which format, called
+                                        what. <a href="#s17">Scenario 17</a>.
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Download a file</strong></td>
+                                    <td><code>ready</code>, <code>failed</code></td>
+                                    <td>
+                                        Turns a written file into a link on this node's
+                                        output. <a href="#s17">Scenario 17</a>.
+                                    </td>
+                                </tr>
+                                <tr>
                                     <td><strong>Timer</strong></td>
                                     <td>one</td>
                                     <td>
@@ -393,25 +410,55 @@ Dictionary       {"region": "north", "cap": 50}   an object. Named values</code>
                 <section id="wiring" class="help-section mb-5">
                     <h4 class="fw-semibold mb-3">Drawing it</h4>
 
+                    <p>
+                        The canvas <strong>arranges itself</strong> top to bottom as you build:
+                        a node you add lands where its connectors put it, and the run reads down
+                        the page. Every node shows one line of its settings under its name, and a
+                        <strong>labelled pill</strong> for each way out — a Branch's conditions,
+                        a loop's <code>each</code> and <code>done</code>, an
+                        <code>on error</code>. Pills sit <strong>side by side</strong> and wrap
+                        onto a second line only when they run out of room; a condition longer
+                        than its pill is shortened with an ellipsis, so hover it to read the
+                        whole of it.
+                    </p>
+
+                    <p>
+                        <strong>Green means the node did its work; red means it could not.</strong>
+                        A node with exactly two ways out, one of them a failure, draws the other in
+                        green — a SQL node's ordinary exit, <code>written</code>,
+                        <code>queued</code> — and the connector out of the red one is red and
+                        dashed. A Branch's conditions, a loop's <code>each</code> and
+                        <code>done</code> and a union's <code>next</code> stay grey, because none of
+                        them says anything went right or wrong. The <strong>Success</strong> and
+                        <strong>Failure</strong> nodes are that same green and red.
+                    </p>
+
                     <div class="table-responsive">
                         <table class="table table-sm table-bordered align-middle">
                             <tbody>
                                 <tr>
                                     <th scope="row" class="fw-normal" style="width:190px;">Connect two nodes</th>
                                     <td>
-                                        Either <strong>drag</strong> from an output dot and
-                                        release anywhere on the target, or <strong>click</strong>
-                                        the output dot and then click the target. Both work;
-                                        clicking empty canvas cancels.
+                                        Either <strong>drag</strong> from a node's exit dot or
+                                        branch pill and release anywhere on the target, or
+                                        <strong>click</strong> the dot or pill and then click the
+                                        target. Both work; clicking empty canvas cancels.
                                     </td>
                                 </tr>
                                 <tr>
                                     <th scope="row" class="fw-normal">Move a node</th>
-                                    <td>Drag its header.</td>
+                                    <td>
+                                        Drag it. The canvas then leaves your arrangement alone
+                                        until you press <strong>Tidy up</strong>, which hands the
+                                        arranging back to it.
+                                    </td>
                                 </tr>
                                 <tr>
                                     <th scope="row" class="fw-normal">Re-point a connector</th>
-                                    <td>Drag its end onto a different node.</td>
+                                    <td>
+                                        Hover it to reveal its <strong>×</strong> and its two end
+                                        handles, then drag an end onto a different node.
+                                    </td>
                                 </tr>
                                 <tr>
                                     <th scope="row" class="fw-normal">Edit a node</th>
@@ -421,11 +468,47 @@ Dictionary       {"region": "north", "cap": 50}   an object. Named values</code>
                                     </td>
                                 </tr>
                                 <tr>
+                                    <th scope="row" class="fw-normal">Move several nodes</th>
+                                    <td>
+                                        <strong>Drag a box</strong> on empty canvas to select
+                                        everything it touches, or <strong>Ctrl-click</strong>
+                                        nodes one at a time (<strong>Cmd-click</strong> on a
+                                        Mac). <strong>Ctrl+A</strong> or
+                                        <strong>Select all</strong> takes everything;
+                                        <strong>Escape</strong> clears it. Then drag any
+                                        selected node and they all move, connectors following.
+                                        <strong>Escape</strong> mid-drag puts them back.
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <th scope="row" class="fw-normal">Move a node and the one it feeds</th>
+                                    <td>
+                                        Select the <strong>connector</strong> between them —
+                                        a box drawn across it will do — then drag either node.
+                                        Selecting a connector picks up both of its nodes.
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <th scope="row" class="fw-normal">Route a connector by hand</th>
+                                    <td>
+                                        <strong>Drag the line itself</strong> and it bends
+                                        through the point you drop it at, up to four bends.
+                                        Drop a bend back onto the straight line to remove it,
+                                        or <strong>double-click</strong> the connector to
+                                        straighten it completely. <strong>Tidy up</strong> asks
+                                        before straightening connectors you routed by hand.
+                                    </td>
+                                </tr>
+                                <tr>
                                     <th scope="row" class="fw-normal">Pick nodes to test</th>
                                     <td>
                                         <strong>Shift-click</strong> them, then
                                         <strong>Test selection</strong>.
                                         <a href="#s15">Scenario 15</a>.
+                                        Note this is a different thing from selecting nodes to
+                                        <em>move</em>: shift-click picks nodes to
+                                        <em>run</em>, Ctrl-click picks nodes to
+                                        <em>drag</em>, and you can have both at once.
                                     </td>
                                 </tr>
                             </tbody>
@@ -433,7 +516,7 @@ Dictionary       {"region": "north", "cap": 50}   an object. Named values</code>
                     </div>
 
                     <div class="alert alert-warning small mb-0">
-                        <strong>One connector per output dot.</strong> Two would mean the run
+                        <strong>One connector per way out.</strong> Two would mean the run
                         takes one of them and which one is not something the drawing says. To
                         go two ways, that is what a <a href="#s3">Branch</a> is for.
                         <br><br>
@@ -653,7 +736,7 @@ ORDER BY revenue DESC</code></pre>
                                     <tr><th scope="row" class="fw-normal" style="width:190px;">Read from node</th><td>the SQL node</td></tr>
                                     <tr><th scope="row" class="fw-normal">Field (optional)</th><td>blank — the whole result</td></tr>
                                     <tr><th scope="row" class="fw-normal">Comparison</th><td><strong>is not empty</strong></td></tr>
-                                    <tr><th scope="row" class="fw-normal">Outcome name</th><td><code>found</code> — this becomes the output dot's name</td></tr>
+                                    <tr><th scope="row" class="fw-normal">Outcome name</th><td><code>found</code> — this becomes the branch pill's label</td></tr>
                                 </tbody>
                             </table>
 
@@ -1367,6 +1450,62 @@ Variables
                                 <br><br>
                                 A template you own but have shared with a team is still yours to
                                 send — sharing a template does not remove your own access to it.
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ============ SCENARIO 17 ============ -->
+                <section id="s17" class="help-section help-scenario mb-4">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="badge bg-light text-dark border">Acts on the world</span>
+                            <strong class="ms-1">17 · Writing a file, and emailing the link</strong>
+                        </div>
+                        <div class="card-body">
+                            <p class="small mb-3">
+                                A <strong>Create a file</strong> node writes an earlier node's
+                                rows to a file. A <strong>Download a file</strong> node turns
+                                that into a link you can fetch — and that an Email node can
+                                send on.
+                            </p>
+
+                            <pre class="mb-3"><code>SQL "orders" ──→ Create a file ──→ Download a file ──→ Send an email
+                                 CSV of that      url on its          binds {{LINK}}
+                                 node's rows      output              to it</code></pre>
+
+                            <table class="table table-sm table-bordered">
+                                <tbody>
+                                    <tr><th scope="row" class="fw-normal" style="width:170px;">Rows from</th><td>The node whose output holds the rows. A SQL node's output is <em>every</em> matching row, so the file holds the lot.</td></tr>
+                                    <tr><th scope="row" class="fw-normal">Field</th><td>Optional. A path into that output, such as <code>rows</code>. Leave it empty to write the whole output.</td></tr>
+                                    <tr><th scope="row" class="fw-normal">Format</th><td>CSV, Excel (XLSX), Text or Parquet.</td></tr>
+                                    <tr><th scope="row" class="fw-normal">File name</th><td>The extension is added for you. <code>{{VARIABLE}}</code> works, so a nightly run can write <code>orders-{{RUN_DATE}}</code> instead of overwriting one name.</td></tr>
+                                    <tr><th scope="row" class="fw-normal">File <small>(Download)</small></th><td>The Create-a-file node whose file to hand over.</td></tr>
+                                </tbody>
+                            </table>
+
+                            <p class="small mb-2">
+                                The Download node's output carries <code>url</code>,
+                                <code>file_name</code>, <code>row_count</code> and
+                                <code>expires_at</code> — bind an Email node's variable to
+                                <code>url</code> to send the link on.
+                            </p>
+
+                            <div class="alert alert-info small mt-3 mb-0">
+                                <strong>The link is yours, not the world's.</strong> It needs you
+                                to be signed in, so it belongs in an email to your own team
+                                rather than to a customer. It lasts a day.
+                                <br><br>
+                                <strong>There is no download button here.</strong> A pipeline has
+                                no chat for one to appear in, and the canvas says so if a graph
+                                arrives carrying button settings. The chat button belongs to the
+                                Flow Builder's version of these blocks.
+                                <br><br>
+                                <strong>Nothing is ever trimmed to fit.</strong> A result past
+                                500,000 rows fails the node rather than writing the first
+                                500,000 — a file that looks complete and is not would be sent on
+                                by somebody with no way of knowing. Draw the
+                                <code>failed</code> path.
                             </div>
                         </div>
                     </div>

@@ -12,6 +12,13 @@
 
 /* ============================================================
    CANVAS
+
+   A pipeline is drawn top to bottom: one round icon per node with its name under it,
+   a labelled pill per way out, and right-angled connectors between them. The
+   arrangement is not decided here — the server returns a layer and a column per node
+   (app/services/canvas_layout/) and graph_designer.js turns those into pixels using
+   the spacing declared on #gd-canvas below. Those are the only place the geometry is
+   stated; `canvasMetrics()` reads them back rather than restating them.
    ============================================================ */
 
 #gd-canvas-wrapper {
@@ -23,27 +30,44 @@
     border: 1px solid #dee2e6;
     border-radius: 6px;
     background-color: #f8f9fa;
-    background-image: radial-gradient(#dee2e6 1px, transparent 1px);
-    background-size: 20px 20px;
+    background-image: radial-gradient(#e3e6ea 1px, transparent 1px);
+    background-size: 22px 22px;
 }
 
-/* The connector layer and the node layer are the same size and stacked. Both are
-   3000x2000 rather than sized to content because a connector is drawn in canvas
-   coordinates: an SVG that resized as nodes moved would reflow every curve on every
-   drag. */
+/* The connector layer and the node layer are the same size and stacked, the SVG first
+   so nodes paint over the lines. The size here is a *floor*: `fitCanvas()` grows both
+   to hold the drawing, because a top-down pipeline runs off the bottom of any fixed
+   height and a node past the edge cannot be scrolled to. */
 #gd-edges {
     position: absolute;
     top: 0;
     left: 0;
-    width: 3000px;
-    height: 2000px;
+    width: 4000px;
+    height: 2400px;
     pointer-events: none;
 }
 
 #gd-canvas {
     position: relative;
-    width: 3000px;
-    height: 2000px;
+    width: 4000px;
+    height: 2400px;
+
+    /* The layout's spacing, read back by `canvasMetrics()` in graph_designer.js. A
+       column is one node plus one gap; a layer starts a row-gap below the *measured*
+       bottom of the tallest node above it, which is why only the gap is stated here
+       and never a row height. */
+    --gd-step-w: 176px;
+    --gd-col-gap: 48px;
+    --gd-row-gap: 62px;
+    --gd-margin-x: 48px;
+    --gd-margin-y: 32px;
+
+    /* How wide a row of branch pills may grow before it wraps, and how wide one pill may
+       grow before its label is truncated — a Branch's conditions are the operator's own
+       words and can be a sentence. Two full-width pills plus the gap fit on one row. */
+    --gd-branch-max: 320px;
+    --gd-pill-max: 155px;
+
     /* Empty canvas must not swallow clicks meant for the connector layer underneath —
        a div's hit area is its whole box, not only where its children paint. Nodes opt
        back in below. Without this pair, no connector can be clicked or deleted. */
@@ -56,10 +80,10 @@
 /* The rubber band, from the port to the cursor, while a connector is being dragged out.
    Dashed and unfilled so it never reads as a connector that already exists.
 
-   Written as `#gd-edges path.…` rather than as a bare class because `#gd-edges path` below
-   sets `pointer-events: stroke` and an id beats a class: as one class this rule lost, the
-   band stayed hit-testable, and since it ends exactly under the cursor it could answer the
-   drop's own hit test instead of the node beneath it. */
+   Written as `#gd-edges path.…` rather than as a bare class because an id beats a class:
+   as one class this rule lost to the base `#gd-edges path` rule, the band stayed
+   hit-testable, and since it ends exactly under the cursor it could answer the drop's own
+   hit test instead of the node beneath it. */
 #gd-edges path.gd-edge-preview {
     fill: none;
     stroke: #0d6efd;
@@ -75,14 +99,28 @@
 
 #gd-edges path {
     fill: none;
-    stroke: #6c757d;
+    stroke: #adb5bd;
     stroke-width: 2;
+    stroke-linecap: round;
+    pointer-events: none;
+}
+
+/* The wide invisible twin of each connector, and the only part of it that can be hovered
+   or clicked. A 2px line is not a control anybody can hit, and the ✕ and the handles only
+   appear on hover — so without this they would be unreachable. `stroke: transparent`
+   rather than `opacity: 0`: an opacity-0 path still paints and can dim the line under it
+   in some renderers. */
+#gd-edges path.gd-edge-hit {
+    stroke: transparent;
+    stroke-width: 16;
     pointer-events: stroke;
     cursor: pointer;
 }
 
+.gd-edge-group:hover path:not(.gd-edge-hit) { stroke: #0d6efd; }
+
 #gd-edges path.gd-edge-selected {
-    stroke: #dc3545;
+    stroke: #0d6efd;
     stroke-width: 3;
 }
 
@@ -97,13 +135,38 @@
     stroke: #6f42c1;
 }
 
-.gd-edge-label {
-    fill: #6c757d;
-    font-size: 10px;
-    paint-order: stroke;
-    stroke: #f8f9fa;
-    stroke-width: 3px;
+/* ---------- connector controls, revealed on hover ----------
+   Every connector used to carry a red ✕ and two handles at all times, which on a
+   twelve-connector pipeline meant thirty-six controls competing with the nodes. They are
+   the same controls, shown when a reader is asking about that one line. `visibility`
+   rather than `display` so their geometry is still updated in place while hidden. */
+/* A hand-placed bend. Smaller than a reattach handle and drawn under it, so that where the
+   two land close together on a heavily routed wire the reattach handle wins the press —
+   reattaching is the more destructive of the two. The wire's own fat hit path takes the
+   press, so this is never a target itself. */
+.gd-edge-waypoint {
+    fill: #fff;
+    stroke: #0d6efd;
+    stroke-width: 1.5;
+    cursor: move;
     pointer-events: none;
+}
+
+.gd-edge-delete-btn,
+.gd-edge-handle,
+.gd-edge-waypoint {
+    visibility: hidden;
+    opacity: 0;
+    transition: opacity .12s ease-in-out;
+}
+.gd-edge-group:hover .gd-edge-delete-btn,
+.gd-edge-group:hover .gd-edge-handle,
+.gd-edge-group:hover .gd-edge-waypoint,
+.gd-edge-group-selected .gd-edge-delete-btn,
+.gd-edge-group-selected .gd-edge-handle,
+.gd-edge-group-selected .gd-edge-waypoint {
+    visibility: visible;
+    opacity: 1;
 }
 
 .gd-edge-delete-btn { cursor: pointer; pointer-events: auto; }
@@ -114,186 +177,300 @@
 
 .gd-edge-handle {
     fill: #fff;
-    stroke: #6c757d;
+    stroke: #0d6efd;
     stroke-width: 2;
     cursor: grab;
     pointer-events: auto;
 }
-.gd-edge-handle:hover { stroke: #0d6efd; fill: #cfe2ff; }
+.gd-edge-handle:hover { fill: #cfe2ff; }
 
 /* ============================================================
-   NODES
+   NODES — a disc, a name, one line of settings, and its ways out
    ============================================================ */
 
 .gd-node {
-    /* The header's height is pinned rather than left to its content, because the outgoing
-       port stack is positioned from it. A port row carries an opaque label, so any overlap
-       hides the Settings and Delete buttons underneath it — see `.gd-node-ports-out`. */
-    --gd-header-h: 30px;
-    --gd-port-size: 12px;
-    --gd-port-gap: 6px;
     position: absolute;
-    width: 200px;
-    background: #fff;
-    border: 2px solid #adb5bd;
-    border-radius: 8px;
-    box-shadow: 0 1px 4px rgba(0, 0, 0, .08);
+    width: var(--gd-step-w);
+    text-align: center;
     font-size: 12px;
     user-select: none;
-    cursor: default;
+    cursor: grab;
     pointer-events: auto;   /* the other half of the rule on #gd-canvas */
 }
+.gd-node:active { cursor: grabbing; }
 
-.gd-node.gd-node-selected {
-    border-color: #0d6efd;
-    box-shadow: 0 0 0 3px rgba(13, 110, 253, .25);
-}
-
-/* Chosen for a test run. Distinct from selected-for-editing: a user can pick several
-   nodes to test while none of them is the one whose properties are open. */
-.gd-node.gd-node-picked {
-    border-color: #6f42c1;
-    box-shadow: 0 0 0 3px rgba(111, 66, 193, .25);
-}
-
-.gd-node.gd-drop-target {
-    outline: 2px dashed #0d6efd;
-    outline-offset: 2px;
-}
-
-.gd-node-header {
+.gd-step-disc {
+    position: relative;
+    width: 46px;
+    height: 46px;
+    margin: 0 auto;
+    border-radius: 50%;
     display: flex;
     align-items: center;
-    gap: 6px;
-    height: var(--gd-header-h);
-    box-sizing: border-box;
-    padding: 0 8px;
-    border-bottom: 1px solid #e9ecef;
+    justify-content: center;
+    color: #fff;
+    font-size: 22px;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, .18);
+    transition: box-shadow .12s ease-in-out;
+}
+
+.gd-step-title {
+    margin-top: 6px;
     font-weight: 600;
-    cursor: grab;
-    background: #f1f3f5;
-    border-radius: 6px 6px 0 0;
+    color: #212529;
+    line-height: 1.25;
+    overflow-wrap: break-word;
 }
 
-.gd-node-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.gd-node-header-icons { display: flex; align-items: center; gap: 4px; flex: none; }
+.gd-step-kind {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    color: #adb5bd;
+    line-height: 1.4;
+}
 
-.gd-node-icon-btn {
-    border: none;
-    background: none;
+.gd-step-sub {
+    font-size: 11px;
     color: #6c757d;
-    font-size: 13px;
-    line-height: 1;
-    padding: 2px 3px;
-    cursor: pointer;
-    border-radius: 3px;
-}
-.gd-node-icon-btn:hover { color: #0d6efd; background: rgba(13, 110, 253, .1); }
-.gd-node-icon-btn-danger:hover { color: #dc3545; background: rgba(220, 53, 69, .1); }
-
-.gd-node-body { padding: 6px 8px; min-height: 24px; color: #495057; cursor: pointer; }
-
-.gd-node-preview {
+    line-height: 1.3;
     overflow: hidden;
     text-overflow: ellipsis;
     display: -webkit-box;
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
     font-family: var(--bs-font-monospace, monospace);
-    font-size: 11px;
 }
 
-.gd-node-kind {
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: .04em;
-    color: #6c757d;
+/* Selected for editing: a ring on the disc rather than a box round the node, which on a
+   mostly-transparent node would draw a rectangle round empty space. */
+.gd-node.gd-node-selected .gd-step-disc {
+    box-shadow: 0 0 0 4px rgba(13, 110, 253, .35), 0 1px 4px rgba(0, 0, 0, .18);
 }
+.gd-node.gd-node-selected .gd-step-title { color: #0d6efd; }
+
+/* The canvas takes focus so Ctrl+A and Escape can reach it without a document-level
+   handler stealing them from every field on the page. A focusable element with no visible
+   focus is an accessibility regression, and `:focus-visible` keeps the ring off a plain
+   mouse click. */
+#gd-canvas-wrapper:focus-visible {
+    outline: 2px solid rgba(13, 110, 253, .5);
+    outline-offset: -2px;
+}
+
+/* In the move selection: this node goes with the next drag.
+   A third question again, and the reason it is not another ring on the disc is that the
+   disc already carries two. This one is about the whole box travelling, so it is drawn as
+   a box — and the node is given a faint fill so the outline encloses something rather than
+   ringing the empty space around a transparent node. It can show at the same time as
+   either ring without any of the three becoming ambiguous. */
+.gd-node.gd-node-multi {
+    outline: 1px dashed #0d6efd;
+    outline-offset: 2px;
+    border-radius: 4px;
+    background: rgba(13, 110, 253, .06);
+}
+
+/* A connector in the move selection. The class goes on the group, like the selected one
+   does, so it is set on the same element either way. Dashes rather than a colour, because
+   the colours on a connector already mean something — red is a failure path, purple is a
+   loop — and a move selection has to stay legible on all of them. */
+#gd-edges .gd-edge-multi path:not(.gd-edge-hit) {
+    stroke-width: 3;
+    stroke-dasharray: 6 3;
+}
+
+/* Chosen for a test run. A different question from selected-for-editing — several nodes
+   can be picked while none of them is the one being edited — so it gets a mark of its own
+   as well as a ring, and the two can show at once without either being ambiguous. */
+.gd-node.gd-node-picked .gd-step-disc {
+    box-shadow: 0 0 0 4px rgba(111, 66, 193, .45), 0 1px 4px rgba(0, 0, 0, .18);
+}
+.gd-step-pick {
+    position: absolute;
+    bottom: -3px;
+    left: -3px;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: #6f42c1;
+    color: #fff;
+    font-size: 11px;
+    line-height: 18px;
+    display: none;
+    box-shadow: 0 0 0 2px #fff;
+}
+.gd-node.gd-node-picked .gd-step-pick { display: block; }
+
+.gd-node.gd-drop-target .gd-step-disc {
+    box-shadow: 0 0 0 4px rgba(13, 110, 253, .5), 0 1px 4px rgba(0, 0, 0, .18);
+}
+
+/* Settings and Delete, revealed on hover. They were a permanent header bar; on a node
+   this size there is no header to put them in, and a canvas showing thirty buttons
+   nobody is using is the clutter this redesign is about. */
+.gd-step-actions {
+    position: absolute;
+    top: -4px;
+    right: 6px;
+    display: flex;
+    gap: 2px;
+    opacity: 0;
+    transition: opacity .12s ease-in-out;
+}
+.gd-node:hover .gd-step-actions,
+.gd-node.gd-node-selected .gd-step-actions { opacity: 1; }
+
+.gd-step-action {
+    border: 1px solid #dee2e6;
+    background: #fff;
+    color: #6c757d;
+    font-size: 12px;
+    line-height: 1;
+    padding: 3px 4px;
+    cursor: pointer;
+    border-radius: 4px;
+}
+.gd-step-action:hover { color: #0d6efd; border-color: #0d6efd; }
+.gd-step-action-danger:hover { color: #dc3545; border-color: #dc3545; }
 
 /* ---------- run status ----------
    Painted from the run's step rows as frames arrive, which is what makes the canvas a
-   monitor rather than a diagram. One ring per node showing its latest pass. */
-.gd-node[data-status="running"] {
-    border-color: #0d6efd;
+   monitor rather than a diagram. The ring moved from the node's border to the disc,
+   because a step has no border to colour. */
+.gd-node[data-status="running"] .gd-step-disc {
+    box-shadow: 0 0 0 4px rgba(13, 110, 253, .4);
     animation: gd-pulse 1.4s ease-in-out infinite;
 }
-.gd-node[data-status="succeeded"] { border-color: #198754; }
-.gd-node[data-status="failed"] { border-color: #dc3545; }
-.gd-node[data-status="awaiting_input"] { border-color: #fd7e14; }
-.gd-node[data-status="skipped"] { border-color: #ced4da; opacity: .6; }
+.gd-node[data-status="succeeded"] .gd-step-disc { box-shadow: 0 0 0 4px rgba(25, 135, 84, .45); }
+.gd-node[data-status="failed"] .gd-step-disc { box-shadow: 0 0 0 4px rgba(220, 53, 69, .5); }
+.gd-node[data-status="awaiting_input"] .gd-step-disc { box-shadow: 0 0 0 4px rgba(253, 126, 20, .5); }
+.gd-node[data-status="skipped"] { opacity: .5; }
 
 @keyframes gd-pulse {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(13, 110, 253, .35); }
-    50% { box-shadow: 0 0 0 6px rgba(13, 110, 253, 0); }
+    0%, 100% { box-shadow: 0 0 0 0 rgba(13, 110, 253, .45); }
+    50% { box-shadow: 0 0 0 8px rgba(13, 110, 253, 0); }
 }
 
-/* A long build with a static frame reads as a stuck one, so the running ring moves —
-   but not for anyone who has asked the system not to animate. */
+/* A long run with a static frame reads as a stuck one, so the running ring moves — but
+   not for anyone who has asked the system not to animate. */
 @media (prefers-reduced-motion: reduce) {
-    .gd-node[data-status="running"] { animation: none; box-shadow: 0 0 0 3px rgba(13, 110, 253, .3); }
+    .gd-node[data-status="running"] .gd-step-disc {
+        animation: none;
+        box-shadow: 0 0 0 4px rgba(13, 110, 253, .4);
+    }
 }
 
+/* The node's latest verdict, on the corner of its disc. */
 .gd-node-status-badge {
-    font-size: 10px;
-    padding: 0 4px;
-    border-radius: 3px;
-    flex: none;
-}
-
-/* ---------- ports ---------- */
-
-.gd-node-port {
     position: absolute;
-    width: var(--gd-port-size);
-    height: var(--gd-port-size);
-    border-radius: 50%;
-    background: #fff;
-    border: 2px solid #6c757d;
-    cursor: crosshair;
-    z-index: 2;
-}
-
-/* Centred on the body, not on the whole node: half the header's height below the node's
-   midpoint puts it in the middle of what is left once the header is taken out. */
-.gd-node-port-in {
-    left: -7px;
-    top: calc(50% + var(--gd-header-h) / 2);
-    transform: translateY(-50%);
-}
-
-/* Below the header, never across it. The labels are opaque (they have to be, or a
-   connector passing behind one is unreadable), so a row that reached into the header would
-   simply cover the Settings and Delete buttons — which is what it did. `renderNode` grows
-   the node's min-height with its port count so the stack cannot spill past the bottom
-   either; between the two, the header stays clickable on every node type. */
-.gd-node-ports-out {
-    position: absolute;
-    right: -7px;
-    top: calc(var(--gd-header-h) + var(--gd-port-gap));
-    display: flex;
-    flex-direction: column;
-    gap: var(--gd-port-gap);
-    align-items: flex-end;
-}
-
-.gd-node-port-out-row { display: flex; align-items: center; gap: 4px; }
-
-.gd-node-port-out-label {
-    font-size: 10px;
-    color: #6c757d;
-    background: #fff;
-    padding: 0 3px;
-    border-radius: 3px;
+    top: -6px;
+    right: -10px;
+    font-size: 9px;
+    padding: 1px 4px;
+    border-radius: 8px;
+    box-shadow: 0 0 0 2px #fff;
     white-space: nowrap;
 }
 
-.gd-node-port.gd-port-pending { background: #0d6efd; border-color: #0d6efd; }
-.gd-node-port.gd-drop-target { background: #0d6efd; border-color: #0d6efd; }
+/* ---------- the ways in and out ----------
+   `GraphCanvas.anchor` measures an element's *centre*, so each of these is placed so its
+   centre is where the line should meet the node: the entry on the top edge, the exit on
+   the bottom edge. */
 
-/* The error port is the one a user should not wire by accident, so it looks unlike the
-   others rather than merely sitting lower down. */
-.gd-node-port[data-port="error"] { border-color: #dc3545; }
-.gd-node-port-out-row[data-port-kind="error"] .gd-node-port-out-label { color: #dc3545; }
+.gd-step-entry,
+.gd-step-exit {
+    position: absolute;
+    left: 50%;
+    width: 11px;
+    height: 11px;
+    margin-left: -5.5px;
+    border-radius: 50%;
+    background: #fff;
+    border: 2px solid #adb5bd;
+    cursor: crosshair;
+    z-index: 2;
+}
+.gd-step-entry { top: -5.5px; }
+.gd-step-exit { bottom: -5.5px; }
+.gd-step-entry:hover,
+.gd-step-exit:hover { border-color: #0d6efd; }
+
+/* Branch pills — one per way out, when there is more than one, or when the one there is
+   has a name worth saying. A branch's conditions, a loop's `each` / `done` and an
+   `on error` are the same thing and now look it. Each pill *is* the output port: it keeps
+   the `data-port` attribute the connect, reattach and delete paths key off, so it is a
+   word-wide target where there used to be a 12px dot. It also replaces the label that was
+   drawn on the connector, which said the same word twice. */
+.gd-step-branches {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 5px;
+    margin-top: 8px;
+
+    /* Side by side, not stacked. A node stays a fixed `--gd-step-w` so that every disc
+       centres over the same point in its column; its pills do not, because two ways out
+       read as one choice only when they sit on one line. The row grows to what it needs,
+       up to `--gd-branch-max`, and hangs off both sides of the node evenly. `applyLayout`
+       measures it and spaces the columns by it, so a wide row never reaches its
+       neighbour. */
+    width: max-content;
+    max-width: var(--gd-branch-max);
+    position: relative;
+    left: 50%;
+    transform: translateX(-50%);
+}
+
+.gd-step-pill {
+    /* Capped rather than free: one long condition would otherwise set the column pitch
+       for the whole pipeline. The full text is in the pill's tooltip. */
+    max-width: var(--gd-pill-max);
+    padding: 3px 9px;
+    border-radius: 11px;
+    background: #fff;
+    border: 1px solid #ced4da;
+    color: #495057;
+    font-size: 11px;
+    line-height: 1.3;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: crosshair;
+    z-index: 2;
+}
+.gd-step-pill:hover { border-color: #0d6efd; color: #0d6efd; }
+
+/* An outcome is coloured; a choice is not. Green and red are claims about whether the
+   node did its work, so only the two ways out of a node that can fail carry them —
+   `written` / `failed`, `queued` / `not sent`. A branch's conditions, a loop's `each` and
+   `done` and a union's `next` stay grey: none of those says anything went right or wrong.
+   Both rules match the Flow Builder's exactly, because the two canvases are read by the
+   same person on the same afternoon. */
+.gd-step-pill[data-port-kind="ok"] {
+    background: #f0faf4;
+    border-color: #198754;
+    color: #146c43;
+}
+.gd-step-pill[data-port-kind="ok"]:hover { border-color: #0f5132; color: #0f5132; }
+
+/* The error exit is also the one nobody should wire by accident, so it looks unlike the
+   others rather than merely sitting last. */
+.gd-step-pill[data-port-kind="error"] {
+    background: #fdf3f4;
+    border-color: #dc3545;
+    color: #b02a37;
+}
+.gd-step-pill[data-port-kind="error"]:hover { border-color: #b02a37; color: #842029; }
+
+.gd-step-pill.gd-port-pending,
+.gd-step-exit.gd-port-pending,
+.gd-step-pill.gd-drop-target,
+.gd-step-exit.gd-drop-target {
+    background: #0d6efd;
+    border-color: #0d6efd;
+    color: #fff;
+}
 
 .gd-palette-btn { width: 100%; text-align: left; margin-bottom: 6px; }
 
@@ -333,7 +510,7 @@
     font-family: var(--bs-font-monospace, monospace);
     font-size: 11px;
     white-space: pre-wrap;
-    word-break: break-word;
+    overflow-wrap: break-word;
     margin: 0;
 }
 

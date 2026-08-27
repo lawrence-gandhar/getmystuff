@@ -24,9 +24,8 @@ conditions and no measures asks for the matching records themselves.
 from __future__ import annotations
 
 import sqlite3
-from typing import Any, Dict, List, Sequence
+from typing import Any, List, Sequence
 
-import polars as pl
 import pytest
 
 from app.services.agent_recursive_dataframes import filter_algebra as fa

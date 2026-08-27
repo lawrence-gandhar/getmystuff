@@ -31,7 +31,6 @@ from __future__ import annotations
 
 import asyncio
 import socket
-from typing import Any, List
 
 import httpx
 import pytest

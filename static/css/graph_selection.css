@@ -1,0 +1,36 @@
+/* ===== THE SELECTION BOX =====
+   The rubber band drawn by graph_selection.js, on all three canvases.
+
+   Shared, unlike the canvases' own stylesheets, and the split is deliberate. What a node
+   or a connector *looks* like when it is selected belongs to each canvas — that is the
+   decision static/css/integrations.css:1-13 makes in writing, and it still holds: a visual
+   change to one canvas should not have to be checked against the other two. But the box
+   itself is not part of any canvas's appearance. It is the same four lines of chrome drawn
+   over the top for the fraction of a second a hand is dragging, and writing it three
+   times — once of them into a template's inline <style> — would be three copies of
+   something nobody would ever want to differ.
+
+   So each canvas keeps `.gd-node-multi` / `.fb-node-multi` / `.int-node-multi` in its own
+   sheet, and the box lives here. */
+
+.gc-marquee {
+    position: absolute;
+
+    /* Its left/top are written in the same coordinates a node's are, because it is a child
+       of the node layer — the element whose box `node.position` is measured against. That
+       is the whole reason it is parented there rather than to the scrolling wrapper, which
+       has a 1px border and would put the box a pixel out from everything it is selecting. */
+
+    border: 1px solid #0d6efd;
+    background: rgba(13, 110, 253, .08);
+    border-radius: 2px;
+
+    /* Never a hit target. `document.elementFromPoint` is how a dropped connector finds the
+       node under the cursor, and a box painted over the canvas would answer that question
+       with itself. */
+    pointer-events: none;
+
+    /* Above the nodes it is being dragged across. The node layer's children are positioned
+       siblings, so without this the box would slide under any node it overlapped. */
+    z-index: 5;
+}

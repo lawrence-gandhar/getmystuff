@@ -44,7 +44,6 @@ from app.models.integrations import (
     IntegrationCredentialEvent,
 )
 from app.services.integrations.connectors.spec import (
-    PLACEMENT_HEADER,
     PLACEMENT_QUERY,
     ConnectorSpec,
 )

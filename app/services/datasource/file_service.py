@@ -18,7 +18,6 @@ from sqlalchemy import select
 from app.db.db_utils import CRUDQueryBuilder
 from app.models.datasource import DataSource, DatasourceFile
 
-datasource_crud = CRUDQueryBuilder(DataSource)
 from app.utils.file_utils import (
     normalize_filename,
     versioned_filename,
@@ -26,6 +25,8 @@ from app.utils.file_utils import (
     ensure_upload_dir,
     ALLOWED_EXTENSIONS,
 )
+
+datasource_crud = CRUDQueryBuilder(DataSource)
 
 
 # ─────────────────────────────────────────────────────────────

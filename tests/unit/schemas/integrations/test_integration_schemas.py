@@ -157,6 +157,34 @@ class TestFlowRequests:
 
         assert parsed.graph_data == {"nodes": [], "edges": []}
 
+    def test_a_hand_routed_connection_survives(self) -> None:
+        """
+        The drawing is opaque to this schema, which is what let a bend be added to a
+        connection without a schema change. This is the test that keeps it opaque in
+        the one direction that matters.
+        """
+        drawing = {"nodes": [], "edges": [{"id": "e1", "waypoints": [{"x": 8, "y": 9}]}]}
+        parsed = FlowGraphRequest.parse({"graph_data": drawing})
+
+        assert parsed.graph_data == drawing
+
+    @pytest.mark.parametrize("value", [float("nan"), float("inf")])
+    def test_a_non_finite_bend_is_refused(self, value: float) -> None:
+        """
+        The one thing inside the drawing this layer does look at. ``NaN`` satisfies
+        every other rule and then makes PostgreSQL refuse the ``jsonb`` it is
+        written into, turning a bad request into a 500 with no sentence in it.
+        """
+        with pytest.raises(HTTPException) as caught:
+            FlowGraphRequest.parse(
+                {"graph_data": {"edges": [{"id": "e1", "waypoints": [{"x": value, "y": 0}]}]}}
+            )
+
+        assert "not a valid position" in str(caught.value.detail)
+
+    def test_a_drawing_with_no_connections_is_fine(self) -> None:
+        assert FlowGraphRequest.parse({"graph_data": {"nodes": []}}).graph_data == {"nodes": []}
+
     def test_a_drawing_that_is_not_json_is_refused(self) -> None:
         """Refused rather than silently emptied. The version this replaces swallowed a
         malformed document into ``{}`` — so a browser that posted one had the user's work

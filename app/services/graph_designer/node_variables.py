@@ -42,6 +42,8 @@ from app.models.graph_designer import (
     MAX_NODE_VARIABLES,
     NODE_BRANCH,
     NODE_DO_UNTIL,
+    NODE_CREATE_FILE,
+    NODE_DOWNLOAD_FILE,
     NODE_EMAIL,
     NODE_FAILURE,
     NODE_FOR_EACH,
@@ -154,6 +156,15 @@ VARIABLE_FIELDS: Dict[str, Tuple[FieldSpec, ...]] = {
     NODE_FOR_EACH: (),
     NODE_DO_UNTIL: (),
     NODE_EMAIL: (),
+    # A file name, and nothing else. `orders-{{RUN_DATE}}.csv` is the reason this node type
+    # has an entry at all — a pipeline that runs nightly wants a file per run, and without
+    # this every run would overwrite one name. The format, the source node and the path are
+    # absent for the reasons listed above: a picker's value, a node id the validator
+    # resolves before any state exists, and a typed reader respectively.
+    NODE_CREATE_FILE: (FieldSpec("file_name", RENDER_TEXT, "File name"),),
+    # Nothing. Its only fields are a node id and — refused on this canvas — the chat
+    # button's text and colour.
+    NODE_DOWNLOAD_FILE: (),
     NODE_TIMER: (),
     NODE_WAIT: (),
     NODE_SUCCESS: (FieldSpec("message", RENDER_TEXT, "Message"),),

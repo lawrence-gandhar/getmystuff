@@ -116,7 +116,7 @@
                 <a href="#ports">Ports and connections</a>
 
                 <div class="help-toc-group">The blocks</div>
-                <a href="#blocks">All eleven, at a glance</a>
+                <a href="#blocks">All fourteen, at a glance</a>
                 <a href="#b-talk">Start · Send Message · End</a>
                 <a href="#b-ask">Ask for Input</a>
                 <a href="#b-choice">Menu · Dropdown</a>
@@ -124,7 +124,9 @@
                 <a href="#b-goto">Goto</a>
                 <a href="#b-ai">AI Fallback</a>
                 <a href="#b-graph">Run Graph</a>
+                <a href="#b-flow">Run Flow</a>
                 <a href="#b-email">Send Email</a>
+                <a href="#b-files">Create File · Download File</a>
 
                 <div class="help-toc-group">Scenarios</div>
                 <a href="#s1">1 · A greeting that ends</a>
@@ -217,37 +219,61 @@
 
                 <!-- ============ LIVE ============ -->
                 <section id="live" class="help-section mb-5">
-                    <h4 class="fw-semibold mb-3">Making it live takes two switches</h4>
+                    <h4 class="fw-semibold mb-3">Making it live: a kind and two switches</h4>
 
                     <p>
-                        This is the single most common reason a flow "does not work". Both
-                        have to be on, and they are set in two different places.
+                        This is the single most common reason a flow "does not work". What has
+                        to be true depends on what the flow is <em>for</em>, and the three
+                        settings are in three different places.
                     </p>
 
                     <div class="table-responsive">
                         <table class="table table-sm table-bordered align-middle">
                             <thead class="table-light">
-                                <tr><th style="width:130px;">Switch</th><th>Where</th><th>What it means</th></tr>
+                                <tr><th style="width:130px;">Setting</th><th>Where</th><th>What it means</th></tr>
                             </thead>
                             <tbody>
+                                <tr>
+                                    <td><strong>Kind</strong></td>
+                                    <td>Here, on the Flow Builder list</td>
+                                    <td>
+                                        <strong>Agent</strong> — a chatbot's own conversation,
+                                        attachable to one agent. <strong>Generic</strong> — a
+                                        child flow, never attached to an agent, run by another
+                                        flow's <strong>Run Flow</strong> block. Chosen when you
+                                        create a flow and switchable afterwards.
+                                    </td>
+                                </tr>
                                 <tr>
                                     <td><strong>Active</strong></td>
                                     <td>Here, on the Flow Builder list</td>
                                     <td>
                                         The flow is published. A draft is editable but never
-                                        runs for a visitor.
+                                        runs for a visitor — and a draft <em>generic</em> flow
+                                        is not offered to a Run Flow block either. One rule for
+                                        both kinds.
                                     </td>
                                 </tr>
                                 <tr>
                                     <td><strong>Attached</strong></td>
                                     <td>The agent's own settings page</td>
                                     <td>
-                                        This agent runs this flow. Only Active flows that are
-                                        not already attached elsewhere can be picked.
+                                        This agent runs this flow. Only Active <em>agent</em>
+                                        flows that are not already attached elsewhere can be
+                                        picked — a generic flow never appears in that dropdown
+                                        at all.
                                     </td>
                                 </tr>
                             </tbody>
                         </table>
+                    </div>
+
+                    <div class="alert alert-info small">
+                        <strong>A generic flow needs no agent.</strong> It goes live the moment
+                        it is Active and a Run Flow block in some other flow points at it. If a
+                        flow is attached to an agent you cannot make it generic — detach it on
+                        the agent's page first, which stops that agent's conversation
+                        deliberately rather than as a side effect.
                     </div>
 
                     <p class="mb-2"><strong>Two consequences worth knowing:</strong></p>
@@ -298,27 +324,39 @@
                                 <tr><td>If / Else condition</td><td class="text-success"><strong>Yes</strong> — this is what it is for</td></tr>
                                 <tr><td>Send Email — recipients</td><td class="text-success"><strong>Yes</strong> — a TO may be <code>{{EMAIL}}</code></td></tr>
                                 <tr><td>Send Email — template variables</td><td class="text-success"><strong>Yes</strong> — bind each one to a collected value</td></tr>
-                                <tr><td>Send Message text</td><td class="text-danger"><strong>No</strong></td></tr>
-                                <tr><td>Ask for Input prompt</td><td class="text-danger"><strong>No</strong></td></tr>
-                                <tr><td>Menu / Dropdown prompt and options</td><td class="text-danger"><strong>No</strong></td></tr>
-                                <tr><td>End Flow closing message</td><td class="text-danger"><strong>No</strong></td></tr>
+                                <tr><td>Send Message text</td><td class="text-success"><strong>Yes</strong> — <code>Thanks {{NAME}}!</code></td></tr>
+                                <tr><td>Ask for Input prompt</td><td class="text-success"><strong>Yes</strong></td></tr>
+                                <tr><td>Menu / Dropdown prompt</td><td class="text-success"><strong>Yes</strong></td></tr>
+                                <tr><td>End Flow closing message</td><td class="text-success"><strong>Yes</strong></td></tr>
+                                <tr><td>Menu / Dropdown <em>option labels</em></td><td class="text-danger"><strong>No</strong> — see below</td></tr>
                             </tbody>
                         </table>
                     </div>
 
-                    <div class="alert alert-danger small mb-3">
-                        <strong>Message text is sent exactly as you typed it.</strong> Writing
-                        <code>Thanks {{NAME}}!</code> in a Send Message shows the visitor the
-                        literal characters <code>Thanks {{NAME}}!</code> — braces and all. It
-                        is not a broken variable; message text simply is not a template.
+                    <div class="alert alert-info small mb-3">
+                        <strong>Names must match exactly.</strong> <code>{{email}}</code> and
+                        <code>{{EMAIL}}</code> are two different variables here, because every
+                        block treats them that way — an If / Else compares the name as you
+                        typed it. A name this conversation has no value for is
+                        <strong>left on screen as you wrote it</strong> rather than blanked:
+                        a visible <code>{{ORDR_REF}}</code> tells you which name is misspelled,
+                        where an empty gap would just look like a value that failed to arrive.
+                    </div>
+
+                    <div class="alert alert-warning small mb-3">
+                        <strong>Option labels are the exception, on purpose.</strong> A Menu
+                        option's label is not only what the visitor reads — it is also stored
+                        as their answer, and it is the question an AI Fallback after it gets
+                        asked. Substituting into it would quietly change three things at once,
+                        so labels are left exactly as typed. Put the variable in the
+                        <em>prompt</em> above the buttons instead.
                     </div>
 
                     <p class="mb-0">
-                        To greet somebody by name, branch instead: an If / Else on the
-                        variable, with a differently-worded Send Message on each side. To put
-                        a collected value into something a person reads, use
-                        <strong>Send Email</strong>, whose template variables are bound
-                        properly.
+                        A value can come from anywhere that stores one: an Ask for Input
+                        answer, a Menu choice, an AI Fallback's answer, a Run Graph row count,
+                        or a value a <strong>Run Flow</strong> block brought back from another
+                        flow.
                     </p>
                 </section>
 
@@ -327,19 +365,48 @@
                     <h4 class="fw-semibold mb-3">Ports and connections</h4>
 
                     <p>
-                        Every block has zero or more <strong>output ports</strong> — the small
-                        handles on its right edge. A connection runs from one port to the top
-                        of another block.
+                        Every block has zero or more <strong>ways out</strong>. A block with one
+                        shows a small dot on its bottom edge; a block with a choice to make shows
+                        a <strong>labelled pill</strong> for each — <code>written</code> and
+                        <code>failed</code> under a Create File block, one per option under a
+                        Menu. A connection runs from a dot or a pill to the top of another block.
+                    </p>
+
+                    <p>
+                        Pills sit <strong>side by side</strong> under the block and wrap onto a
+                        second line only when they run out of room, so a Menu of two options reads
+                        as one choice rather than a stack. A label longer than its pill is
+                        shortened with an ellipsis — hover the pill to read the whole of it.
+                    </p>
+
+                    <p>
+                        <strong>Green means the block did its work; red means it could not.</strong>
+                        A block that can fail — Create File, Download File, Run Graph, Run Flow,
+                        Send Email — shows a green pill for the way out it takes when it worked and
+                        a red <code>failed</code> pill beside it, and the connector leaving the red
+                        pill is red and dashed. <strong>End Flow is red</strong> as well, because
+                        that is where the conversation stops. A Menu's options and If / Else's
+                        <code>True</code> and <code>False</code> stay grey: those are choices, not
+                        outcomes — nothing has gone wrong when a visitor presses the second button.
+                    </p>
+
+                    <p class="small text-muted">
+                        The canvas <strong>arranges itself</strong> top to bottom as you build, so
+                        a block you add lands where its connections put it. Drag a block if you
+                        want it somewhere else — the canvas then leaves your arrangement alone
+                        until you press <strong>Tidy up</strong>, which hands the arranging back.
+                        A connector's <strong>×</strong> and its two end handles appear when you
+                        hover it.
                     </p>
 
                     <ul class="small mb-3">
                         <li>
-                            <strong>One connection per port.</strong> A port already joined to
-                            something cannot be joined to a second block; the save is refused
-                            rather than one of the two being picked silently.
+                            <strong>One connection per way out.</strong> A dot or pill already
+                            joined to something cannot be joined to a second block; the save is
+                            refused rather than one of the two being picked silently.
                         </li>
                         <li>
-                            <strong>A port left unconnected is an ending.</strong> The
+                            <strong>A way out left unconnected is an ending.</strong> The
                             conversation signs off there. That is legitimate — you do not need
                             an End block on every branch — but it means a
                             <em>forgotten</em> connection looks exactly like a deliberate
@@ -347,17 +414,23 @@
                             Goodbye!" in the middle of your flow.
                         </li>
                         <li>
-                            <strong>Menu and Dropdown grow a port per option.</strong> Add a
-                            fourth option and a fourth port appears; delete an option and its
-                            connection goes with it.
+                            <strong>Menu and Dropdown grow a pill per option.</strong> Add a
+                            fourth option and a fourth pill appears, labelled with what you
+                            typed; delete an option and its connection goes with it.
                         </li>
                         <li>
-                            <strong>Two ports mean two outcomes.</strong> If / Else has
+                            <strong>Two pills mean two outcomes.</strong> If / Else has
                             <code>True</code> and <code>False</code>; Run Graph and Send Email
-                            have a success port and a <code>failed</code> port. Leave
+                            have a success pill and a <code>failed</code> pill. Leave
                             <code>failed</code> unconnected and a failure quietly ends the
                             conversation — connect it to a Send Message if you would rather
                             say something.
+                        </li>
+                        <li>
+                            <strong>A Goto's jump is a dashed line.</strong> It is drawn from
+                            the Goto block round to the block it names, so a flow that loops
+                            back to its own menu looks like one. It has no <strong>×</strong>
+                            and no handles: change where it goes by editing the Goto block.
                         </li>
                     </ul>
 
@@ -373,7 +446,7 @@
                 <!-- ============ BLOCK TABLE ============ -->
                 <section id="blocks" class="help-section mb-5">
                     <h6>The blocks</h6>
-                    <h4 class="fw-semibold mb-3">All eleven, at a glance</h4>
+                    <h4 class="fw-semibold mb-3">All twelve, at a glance</h4>
 
                     <div class="table-responsive">
                         <table class="table table-sm table-bordered align-middle">
@@ -394,7 +467,10 @@
                                 <tr><td class="help-block-icon text-center"><i class="las la-share"></i></td><td><strong>Goto</strong></td><td>Jumps to another block — reuse without redrawing</td><td>none</td></tr>
                                 <tr><td class="help-block-icon text-center"><i class="las la-robot"></i></td><td><strong>AI Fallback</strong></td><td>Hands this turn to the AI, then carries on</td><td>one</td></tr>
                                 <tr><td class="help-block-icon text-center"><i class="las la-project-diagram"></i></td><td><strong>Run Graph</strong></td><td>Runs a published pipeline mid-conversation</td><td><code>done</code>, <code>failed</code></td></tr>
+                                <tr><td class="help-block-icon text-center"><i class="las la-sitemap"></i></td><td><strong>Run Flow</strong></td><td>Runs another flow as one step, and brings values back</td><td><code>done</code>, <code>failed</code></td></tr>
                                 <tr><td class="help-block-icon text-center"><i class="las la-envelope"></i></td><td><strong>Send Email</strong></td><td>Queues an email. Says nothing to the visitor</td><td><code>queued</code>, <code>failed</code></td></tr>
+                                <tr><td class="help-block-icon text-center"><i class="las la-file-export"></i></td><td><strong>Create File</strong></td><td>Writes rows to a CSV, Excel, Text or Parquet file</td><td><code>written</code>, <code>failed</code></td></tr>
+                                <tr><td class="help-block-icon text-center"><i class="las la-download"></i></td><td><strong>Download File</strong></td><td>Hands that file over — as a link, or a button in the chat</td><td><code>offered</code>, <code>failed</code></td></tr>
                                 <tr><td class="help-block-icon text-center"><i class="las la-flag-checkered"></i></td><td><strong>End Flow</strong></td><td>Signs off and hands the visitor to the AI</td><td>none</td></tr>
                             </tbody>
                         </table>
@@ -521,10 +597,11 @@
                     <h4 class="fw-semibold mb-3">Goto</h4>
 
                     <p>
-                        Jumps to a named block. It has no output port — the jump
-                        <em>is</em> its output. Use it to reuse one ending, or one "can I help
-                        with anything else?" section, from several branches without drawing
-                        the same blocks three times.
+                        Jumps to a named block. It has nothing to connect — the jump
+                        <em>is</em> its way out, and the canvas draws it as a
+                        <strong>dashed line</strong> running round to the block it names. Use it
+                        to reuse one ending, or one "can I help with anything else?" section,
+                        from several branches without drawing the same blocks three times.
                     </p>
 
                     <div class="alert alert-warning small mb-0">
@@ -550,7 +627,7 @@
                         <table class="table table-sm table-bordered">
                             <tbody>
                                 <tr><th scope="row" class="fw-normal" style="width:210px;">Guardrails</th><td>What it must not do — topics to refuse, tone to keep</td></tr>
-                                <tr><th scope="row" class="fw-normal">Prompt / instructions</th><td>What it should do at this point in the conversation</td></tr>
+                                <tr><th scope="row" class="fw-normal">Prompt / instructions</th><td>What it should do at this point in the conversation. <strong>Also what it searches the knowledge base for</strong> when the visitor arrived by clicking a button</td></tr>
                                 <tr>
                                     <th scope="row" class="fw-normal">Answer using</th>
                                     <td>
@@ -573,6 +650,19 @@
                         from. The knowledge base belongs to the block, not the flow, so two AI
                         Fallback blocks can answer from two different sets of documents.
                     </p>
+
+                    <div class="alert alert-warning small mb-3">
+                        <strong>Wired off a Menu? Write the prompt as the question.</strong> A
+                        button click carries no typed words, so this block is asked about the
+                        option's <em>label</em> — and a label is written to be clicked, not to be
+                        searched for. An option labelled "Email me the data" pointed at a project
+                        proposal finds that document's privacy section and answers that it cannot
+                        share user data: from the knowledge base, and about the wrong subject. On a
+                        click, the block searches for the <strong>Prompt / instructions</strong>
+                        as well as the label, so putting the real question there
+                        ("give a detailed summary of the proposal in plain language") is what fixes
+                        it. Typed questions are searched for on their own.
+                    </div>
 
                     <div class="alert alert-info small mb-0">
                         <strong>Name a variable to email the answer.</strong> The visitor is
@@ -614,6 +704,75 @@
                     </div>
                 </section>
 
+                <!-- ============ RUN FLOW ============ -->
+                <section id="b-flow" class="help-section mb-5">
+                    <h4 class="fw-semibold mb-3">Run Flow</h4>
+
+                    <p>
+                        Runs <strong>another one of your flows</strong> as a single step of
+                        this one, then carries on. Values go in, the other flow runs as
+                        normally as if it were attached to an agent itself — it can ask
+                        questions, show menus, hand a turn to the AI — and the values you name
+                        come back. Two ports: <code>done</code> and <code>failed</code>.
+                    </p>
+
+                    <p>
+                        This is how you stop drawing the same thing twice. Build
+                        <em>"collect the customer's details"</em> once, then call it from
+                        three places.
+                    </p>
+
+                    <div class="table-responsive mb-3">
+                        <table class="table table-sm table-bordered">
+                            <tbody>
+                                <tr><th scope="row" class="fw-normal" style="width:210px;">Flow to run</th><td>Your published <strong>generic</strong> flows, never the flow you are editing. An <em>agent</em> flow is not offered — that is a chatbot's own conversation, not a step</td></tr>
+                                <tr><th scope="row" class="fw-normal">Values passed in</th><td>One row per variable that flow reads. From a value this conversation collected, an agent variable, or a fixed value</td></tr>
+                                <tr><th scope="row" class="fw-normal">Values brought back</th><td>One row per variable that flow stores. Give each one the name to keep it under here; leave it blank not to bring it back</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <p class="mb-2">
+                        Both lists are read off the flow you pick, so they always match what
+                        it actually does. A value it reads from somewhere this page cannot
+                        see — a Run Graph block inside it is handed everything — can be added
+                        by hand with <strong>Add a value</strong>.
+                    </p>
+
+                    <div class="alert alert-info small mb-3">
+                        <strong>The called flow gets its own variables.</strong> It starts with
+                        exactly what you passed in and nothing else, and when it finishes only
+                        the values you named come back. Its internal variable names are its own
+                        business — two Run Flow blocks calling the same flow cannot tread on
+                        each other, and renaming a variable inside it breaks nothing here
+                        except a row you can re-point.
+                    </div>
+
+                    <div class="alert alert-warning small mb-0">
+                        <strong>An End Flow block inside a called flow means "return".</strong>
+                        It does not end the conversation — the caller picks up from the block
+                        after this one. If that End Flow block has a closing message it is
+                        still said, and the caller carries on from the visitor's next message;
+                        if it is blank, nothing is said and the caller carries straight on.
+                        A flow that simply runs out of blocks returns the same way.
+                        <br><br>
+                        <strong>A flow cannot run itself</strong>, and a loop back to a flow
+                        already running takes <code>failed</code> rather than going round
+                        again. Five calls deep is the limit. Connect <code>failed</code>: a
+                        flow that has since been deleted, unpublished, or switched to an
+                        <em>agent</em> flow otherwise ends the conversation without
+                        explanation.
+                    </div>
+
+                    <div class="alert alert-secondary small mb-0">
+                        <strong>Nothing to pick?</strong> The list is your published
+                        <strong>generic</strong> flows, and a brand-new flow is an
+                        <em>agent</em> flow unless you said otherwise. On the Flow Builder list,
+                        press <strong>Make Generic</strong> on the flow you want to reuse and
+                        make sure it is <strong>Active</strong> — then it appears here.
+                    </div>
+                </section>
+
                 <!-- ============ EMAIL ============ -->
                 <section id="b-email" class="help-section mb-5">
                     <h4 class="fw-semibold mb-3">Send Email</h4>
@@ -650,6 +809,76 @@
                         Whether the mail is later accepted by the relay is answered by the
                         delivery log under <strong>Emails → Messages</strong>, not by this
                         block.
+                    </div>
+                </section>
+
+                <!-- ============ FILE BLOCKS ============ -->
+                <section id="b-files" class="help-section mb-5">
+                    <h4 class="fw-semibold mb-3">Create File · Download File</h4>
+
+                    <p>
+                        A pair. <strong>Create File</strong> writes rows to a file;
+                        <strong>Download File</strong> hands that file to the visitor. They are
+                        two blocks rather than one because the file has to exist before it can
+                        be offered — and because plenty of flows want the first without the
+                        second, writing a file and mailing the link instead.
+                    </p>
+
+                    <p>
+                        Neither block says anything on its own. That is the same rule
+                        <strong>Send Email</strong> keeps: a block that announced "I have made
+                        your file" would be putting words in your mouth. Write the sentence
+                        yourself with a Send Message block. The one exception is the
+                        <em>button</em> below, which you have to switch on.
+                    </p>
+
+                    <h6 class="fw-semibold mt-4">Create File</h6>
+
+                    <div class="table-responsive mb-3">
+                        <table class="table table-sm table-bordered">
+                            <tbody>
+                                <tr><th scope="row" class="fw-normal" style="width:210px;">Where the rows come from</th><td>A <strong>Run Graph</strong> block's result, an <strong>AI Fallback</strong> block's answer table, or a variable holding a dataset</td></tr>
+                                <tr><th scope="row" class="fw-normal">File format</th><td>CSV, Excel (XLSX), Text or Parquet</td></tr>
+                                <tr><th scope="row" class="fw-normal">File name</th><td>The extension is added for you. <code>{{VARIABLE}}</code> works, so <code>invoice-{{ORDER_REF}}</code> gives a file per visitor</td></tr>
+                                <tr><th scope="row" class="fw-normal">Store the file path in</th><td>Optional. A path, not a link — useful in a log line or an email to your own team</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <p class="mb-2">What each source gives you:</p>
+                    <ul class="small mb-3">
+                        <li><strong>A Run Graph block</strong> — every row the pipeline returned, re-read when the file is written. The conversation only ever saw the first twenty; the file holds the lot</li>
+                        <li><strong>An AI Fallback block</strong> — the table in its answer, when the answer had one. Real columns, not the pipe-separated text the variable holds</li>
+                        <li><strong>A variable</strong> — rows stored as JSON become columns. Anything else is text, and only <strong>Text</strong> can write text: there is no honest way to turn an AI answer's prose into a spreadsheet</li>
+                    </ul>
+
+                    <h6 class="fw-semibold mt-4">Download File</h6>
+
+                    <div class="table-responsive mb-3">
+                        <table class="table table-sm table-bordered">
+                            <tbody>
+                                <tr><th scope="row" class="fw-normal" style="width:210px;">File to hand over</th><td>The Create File block that writes it. Required — it names the block, so you can put other blocks in between</td></tr>
+                                <tr><th scope="row" class="fw-normal">Store the download link in</th><td>Optional, and the whole point when there is no button: <code>{{FILE_URL}}</code> in a Send Message block, or bound into an Email block</td></tr>
+                                <tr><th scope="row" class="fw-normal">Show a download button</th><td>Off by default. On, the visitor sees a button under whatever the flow just said</td></tr>
+                                <tr><th scope="row" class="fw-normal">Button text · colour</th><td>Only when the button is on. The text takes <code>{{VARIABLE}}</code> too</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="alert alert-info small mb-3">
+                        <strong>The link belongs to one conversation and lasts a day.</strong>
+                        It carries the widget's id and that visitor's session, and it works for
+                        nobody else — pasting it into another browser gives "that file could not
+                        be found". After a day it says it has expired, which is a different
+                        sentence on purpose.
+                    </div>
+
+                    <div class="alert alert-warning small mb-0">
+                        <strong>Connect <code>failed</code>.</strong> A block whose data holds no
+                        rows, a variable the conversation never set, a Create File block a
+                        branch skipped — all of them take that port, and with nothing drawn
+                        there the conversation signs off instead. A file block never carries on
+                        as though it had worked.
                     </div>
                 </section>
 

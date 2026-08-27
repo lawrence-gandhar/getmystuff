@@ -10,10 +10,34 @@ matrix against each of them so the two can never drift apart.
 
 from __future__ import annotations
 
+import uuid as uuid_pkg
+
 import pytest
+from litestar.exceptions import HTTPException
 from pydantic import ValidationError
 
-from app.schemas.datasource import DatasourceCreateSchema, DatasourceUpdateSchema
+from app.schemas.datasource import (
+    ALL_DB_TYPES,
+    CONNECTION_DB_TYPES,
+    OBJECT_STATUSES,
+    DatasourceCreateRequest,
+    DatasourceCreateSchema,
+    DatasourceDetailsResponse,
+    DatasourceFileView,
+    DatasourceNameRequest,
+    DatasourceUpdateSchema,
+    FileExistsRequest,
+    FileExistsResponse,
+    FilePreviewQuery,
+    FilePreviewResponse,
+    FileUploadRequest,
+    ObjectStatusRequest,
+    TableListQuery,
+    TableStatusView,
+    ToolBaseConfigCreateRequest,
+    ToolNameRequest,
+)
+from app.utils.file_utils import FILE_BASED_TYPES
 
 BOTH_SCHEMAS = [DatasourceCreateSchema, DatasourceUpdateSchema]
 
@@ -141,31 +165,6 @@ class TestSchemasAgree:
 # reuse their normalizer so there is exactly one definition of what a
 # datasource name may be.
 # ==========================================================================
-
-import uuid as uuid_pkg
-
-from litestar.exceptions import HTTPException
-
-from app.schemas.datasource import (
-    ALL_DB_TYPES,
-    CONNECTION_DB_TYPES,
-    OBJECT_STATUSES,
-    DatasourceCreateRequest,
-    DatasourceDetailsResponse,
-    DatasourceFileView,
-    DatasourceNameRequest,
-    FileExistsRequest,
-    FileExistsResponse,
-    FilePreviewQuery,
-    FilePreviewResponse,
-    FileUploadRequest,
-    ObjectStatusRequest,
-    TableListQuery,
-    TableStatusView,
-    ToolBaseConfigCreateRequest,
-    ToolNameRequest,
-)
-from app.utils.file_utils import FILE_BASED_TYPES
 
 VALID_UUID = "3f4b2c1e-0000-4000-8000-000000000001"
 

@@ -41,7 +41,7 @@
     font-size: 0.8125rem;
     padding: 0.15rem 0.4rem;
     white-space: normal;
-    word-break: break-word;
+    overflow-wrap: break-word;
 }
 
 .tool-graph-node:hover {

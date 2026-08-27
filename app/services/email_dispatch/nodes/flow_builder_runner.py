@@ -23,10 +23,10 @@ step had succeeded is how a visitor gets told something that is not true.
 """
 
 import logging
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, Mapping
 
 from app.models.email_dispatch import SOURCE_NODE
-from app.services.email_dispatch import dispatch_service, message_store, queue
+from app.services.email_dispatch import dispatch_service, queue
 from app.services.email_dispatch.errors import EmailFailure
 from app.services.email_dispatch.variable_sources import (
     VariableContext,

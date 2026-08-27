@@ -40,13 +40,11 @@ from app.db.integrations.queries import (
 )
 from app.models.integrations import (
     JOB_FAILED,
-    JOB_QUEUED,
     JOB_RUNNING,
     JOB_SUCCEEDED,
     RUN_CANCELLED,
     RUN_FAILED,
     RUN_PARTIAL,
-    RUN_QUEUED,
     RUN_RUNNING,
     RUN_SUCCEEDED,
     TRIGGER_MANUAL,

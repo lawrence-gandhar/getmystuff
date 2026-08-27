@@ -52,7 +52,6 @@ from app.models.integrations import (
     RUN_FAILED,
     RUN_MODE_DRY_RUN,
     RUN_MODE_LIVE,
-    RUN_RUNNING,
     STEP_SKIPPED,
     TRIGGER_MANUAL,
     IntegrationFlow,

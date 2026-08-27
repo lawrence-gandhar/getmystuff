@@ -2,7 +2,21 @@
 {% block title %}{{ flow.name }} | Flow Builder{% endblock %}
 
 {% block extra_css %}
+{# The rubber-band box, shared with the Graph Designer and the Integrations canvas. Only
+   the box: what a selected block looks like is this canvas's business and is below. #}
+<link href="/static/css/graph_selection.css" rel="stylesheet">
 <style>
+/* ============================================================================
+   The Flow Builder canvas.
+
+   A flow is drawn top to bottom: one round icon per block with its name under it,
+   a labelled pill per branch, and right-angled connectors between them. The
+   arrangement is not done here — the server returns a layer and a column per block
+   (app/services/canvas_layout/) and flow_builder.js turns those into pixels using
+   the four spacing values declared on #flow-canvas below. Those are the only place
+   the geometry is stated; `canvasMetrics()` reads them back rather than restating
+   them, so restyling a step cannot silently break the spacing between steps.
+   ============================================================================ */
 #flow-canvas-wrapper {
     position: relative;
     width: 100%;
@@ -11,8 +25,8 @@
     border: 1px solid #dee2e6;
     border-radius: 6px;
     background-color: #f8f9fa;
-    background-image: radial-gradient(#dee2e6 1px, transparent 1px);
-    background-size: 20px 20px;
+    background-image: radial-gradient(#e3e6ea 1px, transparent 1px);
+    background-size: 22px 22px;
 }
 #flow-edges {
     position: absolute;
@@ -24,201 +38,350 @@
 }
 #flow-edges path {
     fill: none;
-    stroke: #6c757d;
+    stroke: #adb5bd;
     stroke-width: 2;
+    stroke-linecap: round;
+    pointer-events: none;
+}
+/* The wide invisible twin of each connector, and the only part of it that can be
+   hovered or clicked. A 2px line is not a control anybody can hit, and the ✕ and
+   the handles only appear on hover — so without this they would be unreachable.
+   `stroke: transparent` rather than `opacity: 0`: an opacity-0 path still paints
+   and can dim the line under it in some renderers. */
+.fb-edge-hit {
+    stroke: transparent !important;
+    stroke-width: 16 !important;
     pointer-events: stroke;
     cursor: pointer;
 }
 #flow-edges path.fb-edge-selected {
-    stroke: #dc3545;
+    stroke: #0d6efd;
     stroke-width: 3;
 }
-.fb-edge-delete-btn {
-    cursor: pointer;
-    pointer-events: auto;
-}
-.fb-edge-delete-btn circle {
-    fill: #fff;
+/* A connector out of a failure port. Drawn like the Graph Designer's, because it means
+   the same thing on both canvases: the path taken only when the block it leaves could not
+   do its work. Dashed as well as red, so it reads as different for anyone who cannot
+   separate the two hues. */
+#flow-edges path.fb-edge-error {
     stroke: #dc3545;
-    stroke-width: 1.5;
+    stroke-dasharray: 5 4;
 }
-.fb-edge-delete-btn text {
-    fill: #dc3545;
-    font-size: 11px;
-    font-weight: 700;
+
+/* A Goto block's return jump. Dashed because it is not a step of the flow — nothing
+   travels down it in order — and grey-blue so it reads as machinery rather than as a
+   fault. Derived from the block's settings, so it carries no controls of its own. */
+.fb-edge-derived path {
+    stroke: #748ffc;
+    stroke-width: 2;
+    stroke-dasharray: 5 5;
 }
-.fb-edge-delete-btn:hover circle {
-    fill: #dc3545;
+.flow-edge-group:hover path:not(.fb-edge-hit) {
+    stroke: #0d6efd;
 }
-.fb-edge-delete-btn:hover text {
+
+/* ---------------------------------------------------------------------------
+   Connector controls — hidden until the connector is hovered or selected.
+
+   Previously every connector carried a red ✕ and two handles at all times, which
+   on a ten-connector flow meant thirty controls competing with fourteen blocks.
+   They are the same controls, revealed when a reader is asking about that one
+   line. `visibility` rather than `display` so their geometry is still updated in
+   place while they are hidden — see `updateEdgeGeometry`.
+   --------------------------------------------------------------------------- */
+/* A hand-placed bend. Smaller than a reattach handle and drawn under it, so that where the
+   two land close together on a heavily routed wire the reattach handle wins the press —
+   reattaching is the more destructive of the two. */
+.fb-edge-waypoint {
     fill: #fff;
+    stroke: #0d6efd;
+    stroke-width: 1.5;
+    cursor: move;
+    pointer-events: none;   /* the wire's own fat hit path takes the press */
 }
+
+.fb-edge-delete-btn,
+.fb-edge-handle,
+.fb-edge-waypoint {
+    visibility: hidden;
+    opacity: 0;
+    transition: opacity .12s ease-in-out;
+}
+.flow-edge-group:hover .fb-edge-waypoint,
+.fb-edge-group-selected .fb-edge-waypoint,
+.flow-edge-group:hover .fb-edge-delete-btn,
+.flow-edge-group:hover .fb-edge-handle,
+.fb-edge-group-selected .fb-edge-delete-btn,
+.fb-edge-group-selected .fb-edge-handle {
+    visibility: visible;
+    opacity: 1;
+}
+.fb-edge-delete-btn { cursor: pointer; pointer-events: auto; }
+.fb-edge-delete-btn circle { fill: #fff; stroke: #dc3545; stroke-width: 1.5; }
+.fb-edge-delete-btn text { fill: #dc3545; font-size: 11px; font-weight: 700; }
+.fb-edge-delete-btn:hover circle { fill: #dc3545; }
+.fb-edge-delete-btn:hover text { fill: #fff; }
 .fb-edge-handle {
     fill: #fff;
-    stroke: #6c757d;
+    stroke: #0d6efd;
     stroke-width: 2;
     cursor: grab;
     pointer-events: auto;
 }
-.fb-edge-handle:hover {
-    stroke: #0d6efd;
-    fill: #cfe2ff;
-}
-#flow-canvas-wrapper.fb-reattaching {
-    cursor: grabbing;
-}
-.flow-node.fb-drop-target {
-    outline: 2px dashed #0d6efd;
-    outline-offset: 2px;
-}
-.flow-node-port.fb-drop-target {
-    background: #0d6efd;
-    border-color: #0d6efd;
-}
+.fb-edge-handle:hover { fill: #cfe2ff; }
+#flow-canvas-wrapper.fb-reattaching { cursor: grabbing; }
+
 #flow-canvas {
     position: relative;
     width: 3000px;
     height: 2000px;
+
+    /* The layout's spacing, read back by `canvasMetrics()` in flow_builder.js. A
+       column is one step plus one gap; a layer starts a row-gap below the *measured*
+       bottom of the tallest step above it, which is why only the gap is stated here
+       and never a row height. */
+    --fb-step-w: 168px;
+    --fb-col-gap: 44px;
+    --fb-row-gap: 58px;
+    --fb-margin-x: 48px;
+    --fb-margin-y: 32px;
+
+    /* How wide a row of branch pills may grow before it wraps, and how wide one pill may
+       grow before its label is truncated. Two full-width pills plus the gap fit exactly:
+       the common case — one Menu of two options, or a `done` / `failed` pair — is one row. */
+    --fb-branch-max: 310px;
+    --fb-pill-max: 150px;
+
     /* Empty space here must not swallow clicks meant for the edges layer
        underneath — a <div>'s hit area is its whole box, not just where
-       its node children paint. Nodes opt back in below. */
+       its node children paint. Steps opt back in below. */
     pointer-events: none;
 }
+
+/* ---------------------------------------------------------------------------
+   A step: disc, name, one line of settings, and its connector anchors.
+   --------------------------------------------------------------------------- */
 .flow-node {
-    /* The header's height is pinned rather than left to its content, because the
-       outgoing port stack is positioned from it. A port row carries an opaque
-       label, so any overlap hides the Edit and Delete buttons underneath it — see
-       `.flow-node-ports-out`. Read back by `portMetrics()` in flow_builder.js, so
-       these two are the only place either number is stated. */
-    --fb-header-h: 30px;
-    --fb-port-gap: 6px;
     position: absolute;
-    width: 190px;
-    background: #fff;
-    border: 2px solid #adb5bd;
-    border-radius: 8px;
-    box-shadow: 0 1px 4px rgba(0,0,0,.08);
+    width: var(--fb-step-w);
+    text-align: center;
     font-size: 12px;
     user-select: none;
-    cursor: default;
+    cursor: grab;
     pointer-events: auto;
 }
-.flow-node.fb-node-selected {
-    border-color: #0d6efd;
-    box-shadow: 0 0 0 3px rgba(13,110,253,.25);
-}
-/* The header always wins. Its Edit and Delete buttons are the only way to open or
-   remove a block, so nothing may paint over them: a pinned height the port stack is
-   positioned from, plus a stacking context above the ports' own z-index so a stack
-   that outgrows its block still cannot cover the buttons. */
-.flow-node-header {
-    position: relative;
-    z-index: 3;
+.flow-node:active { cursor: grabbing; }
+.fb-step-disc {
+    width: 46px;
+    height: 46px;
+    margin: 0 auto;
+    border-radius: 50%;
     display: flex;
     align-items: center;
-    gap: 6px;
-    height: var(--fb-header-h);
-    box-sizing: border-box;
-    padding: 0 8px;
-    border-bottom: 1px solid #e9ecef;
+    justify-content: center;
+    color: #fff;
+    font-size: 22px;
+    box-shadow: 0 1px 4px rgba(0,0,0,.18);
+    transition: box-shadow .12s ease-in-out;
+}
+.fb-step-title {
+    margin-top: 6px;
     font-weight: 600;
-    cursor: grab;
-    background: #f1f3f5;
-    border-radius: 6px 6px 0 0;
+    color: #212529;
+    line-height: 1.25;
+    overflow-wrap: break-word;
 }
-.flow-node-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.flow-node-header-icons { display: flex; align-items: center; gap: 4px; flex: none; }
-.flow-node-icon-btn {
-    border: none; background: none; color: #6c757d; font-size: 13px; line-height: 1;
-    padding: 2px 3px; cursor: pointer; border-radius: 3px;
-}
-.flow-node-icon-btn:hover { color: #0d6efd; background: rgba(13,110,253,.1); }
-.flow-node-icon-btn-danger:hover { color: #dc3545; background: rgba(220,53,69,.1); }
-.flow-node-body {
-    padding: 6px 8px;
-    min-height: 24px;
-    color: #495057;
-    cursor: pointer;
-}
-.flow-node-preview {
+.fb-step-sub {
+    margin-top: 2px;
+    font-size: 11px;
+    color: #6c757d;
+    line-height: 1.3;
     overflow: hidden;
     text-overflow: ellipsis;
     display: -webkit-box;
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
 }
-.flow-node-options {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    margin-top: 6px;
+/* Selected for editing: a ring on the disc rather than a box round the step, which
+   on a mostly-transparent step would draw a rectangle round empty space. */
+.flow-node.fb-node-selected .fb-step-disc {
+    box-shadow: 0 0 0 4px rgba(13,110,253,.35), 0 1px 4px rgba(0,0,0,.18);
 }
-.flow-node-option-row {
-    position: relative;
-    display: flex;
-    align-items: center;
-    background: #f8f9fa;
-    border: 1px solid #dee2e6;
+.flow-node.fb-node-selected .fb-step-title { color: #0d6efd; }
+
+/* In the move selection: this block goes with the next drag.
+   A box rather than a third ring on the disc, because this one is about the whole block
+   travelling — and the block is given a faint fill so the outline encloses something
+   rather than ringing the empty space around a transparent one. It shows at the same time
+   as the selected ring without either becoming ambiguous. */
+.flow-node.fb-node-multi {
+    outline: 1px dashed #0d6efd;
+    outline-offset: 2px;
     border-radius: 4px;
-    padding: 4px 16px 4px 8px;
+    background: rgba(13, 110, 253, .06);
 }
-.flow-node-option-label {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: 11px;
+
+/* A connector in the move selection. The class goes on the group, like the selected one
+   does. Dashes rather than a colour, because a connector's colour already means something
+   — red is a failure path — and a move selection has to stay legible on all of them. */
+#flow-edges .fb-edge-multi path:not(.fb-edge-hit) {
+    stroke-width: 3;
+    stroke-dasharray: 6 3;
 }
-.flow-node-option-row .flow-node-port-out {
+
+/* The canvas takes focus so Ctrl+A and Escape can reach it without a document-level
+   handler stealing them from every field on the page. A focusable element with no visible
+   focus is an accessibility regression, and `:focus-visible` keeps the ring off a plain
+   mouse click. */
+#flow-canvas-wrapper:focus-visible {
+    outline: 2px solid rgba(13, 110, 253, .5);
+    outline-offset: -2px;
+}
+
+/* Edit and Delete, revealed on hover. They were a permanent header bar; on a step
+   this size there is no header to put them in, and a canvas showing twenty-eight
+   buttons nobody is currently using is the clutter this redesign is about. */
+.fb-step-actions {
     position: absolute;
-    right: -7px;
-    top: 50%;
-    transform: translateY(-50%);
+    top: -4px;
+    right: 8px;
+    display: flex;
+    gap: 2px;
+    opacity: 0;
+    transition: opacity .12s ease-in-out;
 }
-.flow-node-port {
+.flow-node:hover .fb-step-actions,
+.flow-node.fb-node-selected .fb-step-actions { opacity: 1; }
+.fb-step-action {
+    border: 1px solid #dee2e6;
+    background: #fff;
+    color: #6c757d;
+    font-size: 12px;
+    line-height: 1;
+    padding: 3px 4px;
+    cursor: pointer;
+    border-radius: 4px;
+}
+.fb-step-action:hover { color: #0d6efd; border-color: #0d6efd; }
+.fb-step-action-danger:hover { color: #dc3545; border-color: #dc3545; }
+
+/* ---------------------------------------------------------------------------
+   Connector anchors.
+
+   `GraphCanvas.anchor` measures an element's *centre*, so each of these is placed
+   so that its centre is where the line should meet the step: the entry on the top
+   edge, the exit on the bottom edge.
+   --------------------------------------------------------------------------- */
+.fb-step-entry,
+.fb-step-exit {
     position: absolute;
-    width: 12px;
-    height: 12px;
+    left: 50%;
+    width: 11px;
+    height: 11px;
+    margin-left: -5.5px;
     border-radius: 50%;
     background: #fff;
-    border: 2px solid #6c757d;
+    border: 2px solid #adb5bd;
     cursor: crosshair;
     z-index: 2;
 }
-/* Centred on the body rather than on the whole block, so it lines up with the
-   out-ports opposite it now that those start below the header. */
-.flow-node-port-in {
-    left: -7px;
-    top: calc(50% + var(--fb-header-h) / 2);
-    transform: translateY(-50%);
+.fb-step-entry { top: -5.5px; }
+.fb-step-exit { bottom: -5.5px; }
+.fb-step-entry:hover,
+.fb-step-exit:hover { border-color: #0d6efd; }
+/* Where a Goto's jump leaves. Nothing to connect here, so it does not invite a
+   click and is drawn in the dashed line's own colour. */
+.fb-step-exit-jump {
+    border-color: #748ffc;
+    cursor: default;
 }
-/* Below the header, never across it. The labels are opaque (they have to be, or a
-   connector passing behind one is unreadable), so a row that reached into the header
-   would simply cover the Edit and Delete buttons — which is what `top: 8px` did.
-   `renderNode` grows the block's min-height with the measured stack so it cannot
-   spill past the bottom either; between the two, the header stays clickable on every
-   block type. Same fix, same reasoning as `.gd-node-ports-out` in graph_designer.css. */
-.flow-node-ports-out {
-    position: absolute;
-    right: -7px;
-    top: calc(var(--fb-header-h) + var(--fb-port-gap));
+
+/* ---------------------------------------------------------------------------
+   Branch pills — one per way out, when there is more than one.
+
+   A Menu's options and a two-port block's `written` / `failed` are the same thing
+   drawn the same way, which is what the reference canvas does with its Branch
+   node. Each pill *is* the output port: it carries the `data-port` attribute the
+   connection, reattach and delete paths all key off, so it is a word-wide target
+   where there used to be a 12px dot.
+   --------------------------------------------------------------------------- */
+.fb-step-branches {
     display: flex;
-    flex-direction: column;
-    gap: var(--fb-port-gap);
-    align-items: flex-end;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 5px;
+    margin-top: 8px;
+
+    /* Side by side, not stacked. A block is a fixed `--fb-step-w` so that every disc
+       centres over the same point in its column, but two options of a Menu read as one
+       choice only when they sit on one line — and at 168px they cannot. So the row is
+       allowed to be as wide as it needs, up to `--fb-branch-max`, and hangs off both
+       sides of the block evenly. `applyLayout` measures the row and spaces the columns
+       by it, so a wide row never reaches its neighbour. */
+    width: max-content;
+    max-width: var(--fb-branch-max);
+    position: relative;
+    left: 50%;
+    transform: translateX(-50%);
 }
-.flow-node-port-out-row { display: flex; align-items: center; gap: 4px; }
-.flow-node-port-out-label {
-    font-size: 10px;
-    color: #6c757d;
+.fb-step-pill {
+    /* Capped rather than free, because one very long option would otherwise set the
+       column pitch for the whole canvas. The full text is in the pill's tooltip. */
+    max-width: var(--fb-pill-max);
+    padding: 3px 9px;
+    border-radius: 11px;
     background: #fff;
-    padding: 0 3px;
-    border-radius: 3px;
+    border: 1px solid #ced4da;
+    color: #495057;
+    font-size: 11px;
+    line-height: 1.3;
     white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: crosshair;
+    z-index: 2;
 }
-.flow-node-port.fb-port-pending {
+.fb-step-pill:hover { border-color: #0d6efd; color: #0d6efd; }
+
+/* An outcome is coloured; a choice is not.
+   Green and red are claims about whether the block did its work, so only the ways out of
+   a block that can fail carry them — `written` / `failed`, `queued` / `failed`,
+   `done` / `failed`. A Menu's options and If / Else's True / False stay grey on purpose:
+   a visitor pressing the second button has not made anything go wrong, and colouring that
+   red would say they had. These rules sit above the pending and drop-target ones, which
+   have the same specificity and must keep winning while a connector is being drawn. */
+.fb-step-pill[data-port-kind="ok"] {
+    background: #f0faf4;
+    border-color: #198754;
+    color: #146c43;
+}
+.fb-step-pill[data-port-kind="ok"]:hover { border-color: #0f5132; color: #0f5132; }
+
+.fb-step-pill[data-port-kind="error"] {
+    background: #fdf3f4;
+    border-color: #dc3545;
+    color: #b02a37;
+}
+.fb-step-pill[data-port-kind="error"]:hover { border-color: #b02a37; color: #842029; }
+
+/* Chosen as a connector's starting point, waiting for a block to be clicked. */
+.fb-step-pill.fb-port-pending,
+.fb-step-exit.fb-port-pending {
     background: #0d6efd;
     border-color: #0d6efd;
+    color: #fff;
 }
+
+/* Under the cursor during a connector-end drag. */
+.flow-node.fb-drop-target .fb-step-disc {
+    box-shadow: 0 0 0 4px rgba(13,110,253,.5), 0 1px 4px rgba(0,0,0,.18);
+}
+.fb-step-pill.fb-drop-target,
+.fb-step-exit.fb-drop-target {
+    background: #0d6efd;
+    border-color: #0d6efd;
+    color: #fff;
+}
+
 .fb-palette-btn { width: 100%; text-align: left; margin-bottom: 6px; }
 </style>
 {% endblock %}
@@ -249,6 +412,19 @@
             <button class="btn btn-outline-secondary btn-sm" type="button" data-bs-toggle="offcanvas" data-bs-target="#paletteOffcanvas">
                 <i class="las la-plus"></i> Add Node
             </button>
+            {# Hands the arranging back to the canvas. Highlighted by flow_builder.js
+               whenever blocks have been dragged, which is the only time it has anything
+               to offer. #}
+            <button class="btn btn-outline-secondary btn-sm" type="button" id="fbTidyBtn"
+                    title="Arrange the canvas again">
+                <i class="las la-stream"></i> Tidy up
+            </button>
+            {# Doubles as Clear, and reports the count — flow_builder.js rewrites the
+               label. One button rather than two, so there is one place to look. #}
+            <button class="btn btn-outline-secondary btn-sm" type="button" id="fbSelectAllBtn"
+                    title="Select every block and connector, so they can be moved together">
+                <i class="las la-object-group"></i> Select all
+            </button>
             <button class="btn btn-outline-secondary btn-sm" type="button" id="fbReloadBtn">
                 <i class="las la-sync"></i> Reload
             </button>
@@ -260,16 +436,39 @@
 
     <div id="fb-save-response" class="mb-2"></div>
 
-    <div id="flow-canvas-wrapper">
+    {# `tabindex` so the canvas can hold focus: Ctrl+A and Escape are bound to this
+       element rather than to the document, which is what keeps them from being taken from
+       the fields in the properties panel. Clicking anywhere on the canvas focuses it,
+       because the browser focuses the nearest focusable ancestor of whatever was pressed. #}
+    <div id="flow-canvas-wrapper" tabindex="0">
         <svg id="flow-edges"><g id="flow-edges-group"></g></svg>
         <div id="flow-canvas"></div>
     </div>
 
     <p class="text-muted small mt-2">
-        Click a node's output dot, then click another node to connect them. Drag a node's header to move it.
-        Click a node body to edit its properties, or a connector line to select it.
-        Click the <strong>×</strong> button on a connector to delete it, or drag either of its small end handles
-        onto a different node (or output dot) to move it there.
+        The canvas arranges itself top to bottom as you build. Click a block to edit it, or drag one to put it
+        where you want — <strong>Tidy up</strong> hands the arranging back.
+        To connect two blocks, click the dot or the branch label a connector should leave from, then click the
+        block it should lead to. Hover a connector for its <strong>×</strong> and its two end handles: <strong>×</strong>
+        deletes it, and dragging an end onto another block (or another branch label) moves it there.
+        A dashed line is a <strong>Goto</strong> block's jump — change it by editing that block.
+    </p>
+
+    <p class="text-muted small">
+        To move several blocks at once, <strong>drag a box</strong> on empty canvas, or
+        <strong>Ctrl-click</strong> blocks to add and remove them one at a time.
+        <strong>Ctrl+A</strong> selects everything and <strong>Escape</strong> clears it.
+        Then drag any selected block and the whole selection moves together, connectors
+        included. Selecting a connector picks up the two blocks it joins, so dragging it
+        moves both.
+    </p>
+
+    <p class="text-muted small">
+        A connector that runs somewhere awkward can be <strong>routed by hand</strong>: drag
+        the line itself and it bends through the point you drop it at, up to four bends per
+        connector. Drop a bend back onto the straight line to remove it, double-click a
+        connector to straighten it completely, and note that <strong>Tidy up</strong> asks
+        before throwing hand-routing away along with your arrangement.
     </p>
 </div>
 
@@ -305,18 +504,22 @@
    generation — used by this canvas and by the Graph Designer's. Must come first:
    flow_builder.js reads window.GraphCanvas at module scope. #}
 <script src="/static/js/graph_canvas.js"></script>
+{# After graph_canvas.js, which it uses, and before flow_builder.js, which uses it. #}
+<script src="/static/js/graph_selection.js"></script>
 <script src="/static/js/flow_builder.js"></script>
 <script>
     FlowBuilder.init({
         graphData: {{ graph_data_json | safe }},
         saveUrl: "/flow-builder/{{ flow.uuid }}/save",
         graphUrl: "/flow-builder/{{ flow.uuid }}/graph",
+        layoutUrl: "/flow-builder/{{ flow.uuid }}/layout",
         responseTargetId: "fb-save-response",
         kbBaseUrl: "/flow-builder/{{ flow.uuid }}/nodes",
         aiApiKeys: {{ ai_api_keys_json | safe }},
         graphs: {{ graphs_json | safe }},
         emailTemplates: {{ email_templates_json | safe }},
         smtpConfigs: {{ smtp_configs_json | safe }},
+        flows: {{ flows_json | safe }},
     });
 </script>
 {% endblock %}

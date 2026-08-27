@@ -2383,17 +2383,18 @@ binding mode needs explaining and its unsaved state lives only in the DOM, so na
 read the help would cost the drawing.
 
 **Flow Builder is now the third**, at `GET /flow-builder/help` from
-`templates/flow_builder/help.htm`: eleven blocks, nine worked scenarios, the limits in one table
+`templates/flow_builder/help.htm`: twelve blocks, nine worked scenarios, the limits in one table
 and every validator refusal with its fix. Same route shape, same literal path above
 `/{flow_id:uuid}/…`, same `{% raw %}` body, same pair of `target="_blank"` links from the library
 and the canvas. Two things about it are worth carrying forward.
 
-*The `{% raw %}` is load-bearing for a different reason than on the other two.* There the risk was
-a `{{TABLE}}` sample rendering empty; here the page's central warning is that Flow Builder message
-text is **not** a template — it is sent to the visitor verbatim, braces and all — so an unescaped
-`Thanks {{NAME}}!` in the example would render as `Thanks !` and demonstrate the precise opposite
-of the paragraph above it. That is the one help-page escaping bug that would actively teach the
-wrong thing rather than merely look broken, and there is a test on the literal string.
+*The `{% raw %}` is load-bearing, and the reason inverted without the mechanism changing.* The page
+used to warn that Flow Builder message text was **not** a template, so an unescaped
+`Thanks {{NAME}}!` would render as `Thanks !` and demonstrate the precise opposite of the paragraph
+above it. Message text interpolates now (see below), so the same sample is instead a line somebody
+will copy — and one rendered to `Thanks !` by this page's own template engine would teach syntax
+that does not exist. Either way it is the one help-page escaping bug that would actively teach the
+wrong thing rather than merely look broken, and the test on the literal string is unchanged.
 
 *The completeness test degraded, and the reason is a real gap.* The recommendation above — walk the
 server-owned label vocabulary and require every label in the page — could not be followed, because
@@ -2828,7 +2829,7 @@ measured from the rendered stack — plus a stacking context on the header, so i
 rather than only by arithmetic. Two canvases, one rule; a third would copy it rather than
 rediscover it.
 
-### Two gestures for one connector
+### Three gestures for one connector
 
 **Drag** from an output port and release on the target (a dashed rubber band follows the cursor, the
 target highlights, releasing over empty canvas abandons the attempt). Or **click** the output port
@@ -2840,10 +2841,25 @@ leaving the `click` that follows to arm the click-then-click gesture; a press th
 releases over another element and so produces no `click` on the port at all. **That is why the two
 cannot both fire for one press.**
 
-Two suppressions keep the forgiving version honest: a node accepts a click as "I am the target" only
-**while a connector is armed**, and for one tick after a drag that actually moved a node, node
+**And a third gesture now lands on the connector itself: dragging the line bends it.** Same split,
+same reason it cannot collide — a press on the wire that travels less than the threshold does nothing
+on release, leaving the `click` to select the connector as it always did; a press that travels
+further routes it by hand and swallows the trailing click. The grab target is the invisible 16px twin
+of the line that already existed for hovering it, so nothing new had to be drawn to be pressable.
+
+The one subtlety is what makes a press on a wire a *group move* instead of a bend: the connector has
+to be part of a **multi**-item selection, not merely the selected one. Clicking a wire selects it, so
+if "selected" alone routed to a group drag, the ordinary sequence of clicking a wire to read its
+properties and then dragging it would move two nodes instead of bending it.
+
+Three suppressions keep the forgiving version honest: a node accepts a click as "I am the target"
+only **while a connector is armed**; for one tick after a drag that actually moved a node, node
 clicks are ignored — a mouseup always trails a click, so without this, dragging a node while a
-connector was armed would silently connect it.
+connector was armed would silently connect it; and for one tick after a rubber-band selection or a
+group move, the canvas's own click-to-deselect is ignored. That third one is load-bearing in a way
+worth stating: a selection box begins and ends on the wrapper, so a `click` **will** fire there
+afterwards and clear the selection the box just made. Without the suppression the entire feature
+appears to do nothing at all.
 
 This was originally click-only, and the only thing that accepted the click was the node's **body** —
 so the incoming dot, the obvious place to aim at, was inert, and dragging did nothing at all. Three
@@ -2856,14 +2872,80 @@ Both offcanvas panels open from the **right**, because the application's sidebar
 
 ### The shared canvas core
 
-`static/js/graph_canvas.js` holds the **stateless** half of a node-graph editor: the Bezier maths,
-the port measurement, the escaping and the id generator. Both canvases use it — this one and Flow
-Builder's — and it must load **before** either feature's script, which both templates do and a route
-test asserts.
+`static/js/graph_canvas.js` holds the **stateless** half of a node-graph editor: the connector maths,
+the port measurement, the escaping and the id generator. **Three** canvases use it — this one, Flow
+Builder's, and the Integrations workflow canvas — and it must load **before** any of their scripts,
+which every template does and a route test asserts.
 
-**Nothing stateful moved.** The node registry, the properties panel, the palette, save/load and the
-selection model are per-feature, because a conversation flow's nodes and a data pipeline's nodes have
-nothing in common beyond being boxes joined by curves. **What they share is the curves.**
+**Nothing stateful moved.** The node registry, the properties panel, the palette and save/load are
+per-feature, because a conversation flow's nodes and a data pipeline's nodes have nothing in common
+beyond being boxes joined by lines. **What they share is the lines.**
+
+**The selection model is the one item that left that list, and the line moved rather than blurred.**
+It used to be named above as per-feature, and it is now shared — but not from `graph_canvas.js`. It
+lives in `static/js/graph_selection.js`, because a gesture *is* state: where the press began, what was
+selected before it, which frame is pending. Holding that in `graph_canvas.js` would break the promise
+the rest of this section makes about it, so the shared gesture got its own module and the stateless
+file kept its rule. The new rule reads: **the geometry and the gesture are shared; what a selection
+*means* is not.** Which class paints a selected thing, whether a properties panel opens, and what a
+finished move says about the drawing all stay with each canvas. `graph_canvas.js`'s contribution is
+four rectangle functions — `rectFromPoints`, `rectsIntersect`, `segmentIntersectsRect`,
+`polylineIntersectsRect` — with no more state than `elbowPoints` has.
+
+`polylineIntersectsRect` tests **segments, not corners**, and that is the whole reason it is not a
+one-line `some` over the points. A connector taking the return lane has a single vertical segment
+hundreds of pixels long; a small box dragged across the middle of it contains none of its corners, and
+a corner-only test reports a miss on a line the box is plainly sitting on top of.
+
+### Two connector geometries, side by side
+
+The module carries both, plus a hand-routed variant of each, and that is deliberate rather than
+transitional:
+
+| | used by | shape |
+|---|---|---|
+| `geometry` / `pathD` / `pointAt` | Integrations | cubic Bezier, source's right edge to target's left |
+| `geometryWithBend` | Integrations | the same curve, forced through one point somebody dragged it to |
+| `elbowPoints` / `backEdgePoints` / `elbowPathD` / `pointAlongPolyline` | Flow Builder, Graph Designer | orthogonal, source's bottom edge to target's top |
+| `waypointRoute` / `waypointPoints` | Flow Builder, Graph Designer | the same right angles, routed through up to four hand-placed bends |
+| `nearestSegment` / `snapToAny` | all three | which leg of a line was grabbed, and lining a bend up |
+
+The second set was **added beside** the first rather than replacing it, because three canvases share
+this file and only two of them became top-down. Editing `geometry` in place would have silently
+restyled a canvas nobody asked to change — the kind of change that is invisible in a diff of the file
+that was edited.
+
+**The hand-routing pair was added the same way, and for the same reason plus one more.** With no
+waypoints, `waypointRoute` returns *exactly* `elbowPoints` and `geometryWithBend` returns *exactly*
+`geometry` — so `edgeRoute` on all three canvases calls the new function unconditionally instead of
+branching, and every drawing saved before bends existed is drawn identically. That property is what
+made a data-carrying feature safe to add to three working canvases at once.
+
+`geometryWithBend` is worth one line of arithmetic: both control points are put at the same place,
+which makes the cubic behave as a quadratic, and the control that puts `B(0.5)` on a chosen point then
+falls out of the cubic's own definition — `C = (8·bend − p0 − p3) / 6`. The curve passes **exactly**
+through the point, not near it, because the handle a person drags has to end up under their cursor. A
+curve that merely leans toward the point reads as a bug.
+
+`waypointRoute`'s own load-bearing detail: each turn goes on the axis the line **arrived** on,
+alternating rather than fixed. A fixed choice makes two consecutive segments collinear and then
+doubled back, which `elbowPathD` can only render as the kink described below. It also collapses
+collinear triples, not just duplicate points — without that, a bend dragged into line with a stub
+leaves a corner that is not a corner, and `pointAlongPolyline` puts the ✕ at a slightly wrong place on
+a line that looks perfectly straight.
+
+Two details in the orthogonal set are load-bearing:
+
+* **The corner radius is clamped to half the shorter of the two segments meeting at a corner.**
+  Unclamped, a corner near the end of a short segment overshoots into the next one and the line
+  visibly doubles back. The symptom is a kink, which reads as anything but a rounding bug.
+* **A connector whose target is not below it takes a side lane.** The obvious alternative — step out
+  below the source and climb in the *target's own column* — overshoots above the target and drops back
+  into it, drawing a line folded over itself. Reachable without any loop, because a dragged block can
+  end up above the one feeding it.
+
+`pointAlongPolyline` measures **by length**, not by segment, so the ✕ on a connector whose first leg is
+ten pixels and second is three hundred lands in the middle of the line a reader actually sees.
 
 Every function there is pure or measures the DOM it is handed — none reads a module-level
 `wrapperEl`, a `state` object or an id prefix. That is what makes one copy safe for two canvases with
@@ -2874,6 +2956,69 @@ compared against the pre-extraction arithmetic copied verbatim out of git (83 as
 identical), then both canvas pages were driven in headless Chromium. **One real bug was found that
 way:** two id generators created in the same millisecond both started at 1 and minted identical ids,
 so the counter is now module-wide.
+
+The orthogonal rewrite was verified the same way — both canvases driven under jsdom against fixtures
+generated from real saved drawings — and it found two more: an **unexported `ELBOW_LANE`**, which made
+every return lane's x `NaN` and left the canvas silently unsized, and the folded-over upward connector
+described above. Neither is the kind of fault a reader of the diff would have seen, which is the
+argument for driving the page rather than reading it.
+
+### Only an outcome gets a colour
+
+Green and red on a canvas are a claim, and the claim is *this block did or did not do its
+work*. So the rule is deliberately narrow: a way out is coloured only when the block has
+**exactly two of them and one is a failure** — `written` / `failed`, `queued` / `not sent`,
+`done` / `failed`. That is what makes the other one a *success* rather than merely the next
+step.
+
+Everything else stays grey, and the exclusions are the point:
+
+| Stays grey | Why |
+|---|---|
+| A Menu's or Dropdown's options | A visitor pressing the second button has not made anything go wrong. Red would say they had |
+| If / Else's `True` / `False` | A condition being false is the flow working, not failing |
+| A Branch's conditions, `else` | Same — the author wrote both paths on purpose |
+| `each` / `done`, `next` / `execute` | A loop finishing is not a success, it is an ending |
+
+The single-dot case is grey for the same reason: a block with one way out has an outcome
+nobody can disagree with, and painting it green would make green mean "there is an arrow
+here".
+
+**End Flow moved out of `edge_of_flow`.** That colour held End Flow *and* Goto under one
+grey, which put "the conversation is over" and "carry on, elsewhere" in one hue. End Flow is
+now `#b02a37` — the same red the Graph Designer's Failure node already used, so "this is
+where it stops" is one colour across both canvases — and Goto keeps the grey, because a jump
+is machinery rather than an ending.
+
+**The failure connector is red *and* dashed.** A 2px red line and a 2px grey line are the
+same line to a reader who cannot separate the two hues, and roughly one man in twelve cannot.
+The Graph Designer already drew its `error` edges this way; the Flow Builder did not, so the
+two canvases disagreed about the most consequential connector either of them draws.
+
+### Column pitch is measured, not declared
+
+A block on either authored canvas is a fixed width — `--fb-step-w`, `--gd-step-w` — and that fixed
+width is load-bearing: it is what puts every disc over the same point in its column, so a connector
+between two layers is a straight vertical line rather than a jog. **Its branch pills are not that
+width.** They sit side by side, may be wider than the block, and hang off it evenly on both sides,
+because two options of a Menu read as one choice only when they occupy one line, and at 168px with
+sentence-length labels they cannot.
+
+So the distance between columns cannot come from the stylesheet. `applyLayout` renders first, measures
+the widest pill row on the canvas, and uses **that** as the pitch — with the first column pushed in by
+half the overhang, or the left half of a wide row would be clipped by the canvas edge. A canvas whose
+pills are all narrower than a block gets the plain block-width pitch back, so nothing is spread apart
+for nothing.
+
+Two things keep this from being unbounded. A single pill is capped (`--fb-pill-max`) and truncated with
+its full label in its tooltip, and a row wraps at `--fb-branch-max` — otherwise one operator writing a
+sentence as a Menu option would set the column spacing for every other block on the canvas.
+
+Verifying it needed a stub, and the stub is the interesting part: **jsdom performs no layout, so every
+`getBoundingClientRect` is 0×0 and the measuring path cannot run at all.** The driver replaces that one
+method with widths for a block and for a pill row, which is enough to assert what the arithmetic does
+with them — that the pitch equals row-width plus gap, that no two rows on a layer overlap, that the
+leftmost row starts at x ≥ 0, and that narrow pills leave the pitch alone.
 
 ---
 
@@ -3244,6 +3389,20 @@ in-place `variables[key] = ...` would never persist.
 The label is resolved **before** the selection is consumed, since consuming it moves the session off
 the node that owns the options.
 
+**And a label is written to be clicked, not to be searched for** — the sharper edge of the same
+problem, and the one `_effective_message` alone does not reach. Measured against a real proposal
+document: an option labelled "Email me the data" retrieved that document's *security and
+authentication* sections, being the nearest chunks to the word "data", and the model — told to answer
+strictly from what was retrieved — explained that it could not share user data. Grounded, faithful,
+about the wrong subject. The same knowledge base searched with the node's own instructions returned
+the scope, deliverables and estimates the operator wired the node to produce.
+
+`ai_fallback_service._retrieval_query` therefore puts the node's Prompt/instructions in front of the
+label **on a selection turn only**, with a `from_selection` flag threaded from `advance_flow_session`
+— the only thing that can tell a click from a typed sentence once both have become the same string.
+On a typed turn the instructions stay out: the visitor's question is the better query, and folding a
+tone instruction into every search degrades all of them.
+
 ### An AI Fallback answer is a value, not only a message
 
 The same class of bug one node further on. An AI Fallback node **said** its answer and then dropped
@@ -3274,6 +3433,117 @@ needs no special case, the variable being on the session row rather than in memo
 Fixed alongside it: `engine_service` used a module-level `logger` it never defined, so the
 `except` branch in `_step_send_email` raised `NameError` instead of routing an email failure to the
 `error` port — a handler that failed only when it was needed.
+
+### One flow calling another: a call stack on the session row
+
+Flow Builder could call *out* — a Graph Designer pipeline, an email — but not into itself, so
+anything a conversation does twice was drawn twice and no flow could return a value. The Run Flow
+block is Azure Data Factory's *Execute Pipeline* for conversations, and four decisions carry it.
+
+**Which graph is being interpreted is re-decided on every hop.** `_run_internal_hops` asks
+`subflow_service.current_flow` each iteration rather than closing over the attached flow's
+`graph_data`. That single change is the whole mechanism: `_step_run_flow` pushes a frame and points
+the session at the callee's Start node, `_step_end` pops one, and the loop simply notices it is
+somewhere else. Nothing else in the engine learns that more than one flow exists — including
+`_step_ai_fallback`, which is handed the *current* flow's id and so keeps resolving a sub-flow's own
+knowledge bases (keyed on flow id plus node id) correctly. A per-turn cache makes re-resolving cost
+one query per distinct flow per turn.
+
+**A frame, not a child session row.** `chatbot_flow_sessions` is unique on
+`(chatbot_key_id, session_token)` and a sub-flow that can ask a question has to survive between two
+requests. The new `call_stack` JSONB column sits beside `awaiting_graph_run` and is the same kind of
+thing for the same reason: work parked between two turns, in a column rather than a reserved key in
+`variables`, because that dict is the visitor's namespace and is interpolated into chat text.
+
+**Each call is a variable scope, and that is the feature.** On entry the caller's map moves into the
+frame and the callee starts with the resolved inputs and nothing else; on exit the caller's map
+returns with the named outputs merged in. Without it a callee writes into its caller's namespace,
+two blocks calling the same flow overwrite each other, and a reusable flow's internal names become
+part of its contract. Inputs are resolved by `subflow_service.resolve_inputs` and deliberately
+**not** by `variable_sources.resolve_bindings`, which upper-cases the destination name — right for
+`{{CUSTOMER}}` in an email template, wrong for a flow variable an operator typed as `email`.
+
+**Failure crosses the call boundary.** `_failed_step` routes every failing block: its own `error`
+port, else the enclosing call's `failed` port, else sign off. The middle rule was missing in the
+first draft and a test found it — a callee that broke returned through the caller's `done` edge and
+the caller carried on as though the step had worked, the exact failure `_step_run_graph` has always
+refused one level down.
+
+Two guards for two shapes of mistake: a **self-call** is refused at save time by name, while a
+**cycle** (A → B → A) cannot be seen from one graph and is refused at run time by
+`subflow_service.guard` — which counts `session.flow_id` as already running as well as every frame,
+so the refusal happens at the second A rather than one level later at the second B. Depth is capped
+at 5.
+
+Three bugs found by running it rather than reasoning about it, all worth remembering:
+
+- `_session_needs_restart` asked whether the parked node still existed **in the root graph**. A
+  visitor inside a call is parked in the callee's graph, so every turn looked like a lost position:
+  the session restarted, re-entered the call, and re-asked the same question forever. The check now
+  skips when a frame is open, because the same situation one level down is handled where the
+  callee's graph is actually in hand.
+- `advance_flow_session` read `flow.graph_data` for `_selected_option` and
+  `_deliver_reply_to_waiting_node`, which are precisely the functions that read the node the visitor
+  is *parked* on — the callee's. Resolved once at the top of the turn now, sharing the hop loop's
+  cache.
+- A callee that simply **runs out of blocks** — no End block, which is how most flows are drawn —
+  completed the whole session. It ends the call instead; and the generic sign-off is suppressed,
+  because "Goodbye!" mid-conversation is a lie about what just happened.
+
+### The flow kind, and why the invariant is in the schema
+
+A Run Flow block first offered every published flow the user owned, which put two unlike things
+in one list: an agent's live front door, and a flow built to be reused. `ChatbotFlow.kind` —
+`'agent'` or `'generic'` — makes the difference explicit, and what it buys is that the two
+candidate lists are now **disjoint by construction**: `get_attachable_flows` filters to
+agent-kind, `callable_flow_choices` to generic-kind.
+
+**A string column, not an `is_generic` boolean.** Every other state in this schema is spelled as
+a string (`ChatbotFlowSession.status`, `FlowNodeKnowledgeBase.status`), and a boolean would need
+renaming the day a third kind appears. The vocabulary lives in `flow_service.VALID_FLOW_KINDS`
+and is mirrored by `flow_schemas.FLOW_KINDS` for the form's error message, the way
+`ai_analytics_schemas.TARGET_TYPES` mirrors its own service's set.
+
+**The invariant is a check constraint, not only a service rule.** A generic flow must never be
+attached to an agent, so `ck_chatbot_flows_generic_unattached` says so beside the existing
+unique constraint on `chatbot_key_id` — the same instinct that let one constraint express both
+halves of "one flow per agent, one agent per flow". `set_flow_kind` and `attach_flow` are the
+two readable refusals (the first names the agent to detach from, because "detach it first" is
+useless advice otherwise); the constraint is what stops a third write path undoing them, and a
+test writes straight to the row to prove it fires.
+
+**Three of the four target checks are re-run at run time.** `_assert_run_flow_targets` refuses a
+save whose Run Flow block points at a flow that is missing, someone else's, agent-kind or
+unpublished; `_run_flow_refusal` checks the same set again on every call. Not duplication —
+deleted, unpublished and switched-to-agent can all happen *after* a block was saved, and the two
+places want different things from the same fact: a sentence on the canvas, or a `failed` port
+mid-conversation with the reason logged.
+
+**Existing rows became `'agent'` by server default**, which is what they all were — the kind did
+not exist and every flow in a library was built to be attached. The one visible consequence is
+intended rather than incidental: a flow somebody had already pointed a Run Flow block at stops
+being offered until they mark it generic, and both the save refusal and the run-time log say
+exactly that.
+
+### Message text interpolates, and this is the third renderer
+
+`{{NAME}}` in a Send Message, an End Flow message and an Ask/Menu/Dropdown **prompt** is now
+substituted from the session's variables by `engine_service._render_text` — which is what makes a
+returned value worth having, since until now one could only be branched on or bound into an email.
+The documentation claimed this worked and the help page warned that it did not; both were describing
+an engine that did neither.
+
+Its semantics differ from the other two renderers **on purpose**, and the three now read as a
+spectrum of how recoverable the output is: `email_dispatch/rendering.render` refuses the whole send
+(an email cannot be recalled), `chatbot_action_service._render` raises (a half-built URL must not be
+called), and this one leaves an unknown placeholder **standing** and logs it — a chat bubble is one
+message in a live conversation, and a visible `{{ORDR_REF}}` names the misspelling where a blank
+would look like a value that failed to arrive.
+
+Names match **exactly** rather than case-insensitively, unlike the email module: every other block
+in this feature treats `email` and `EMAIL` as different variables. Option **labels** are excluded,
+because a label is also the stored answer and the question an AI Fallback is asked — substituting
+there would change three things at once, including what a knowledge base gets searched for.
 
 ### The knowledge-base pipeline
 
@@ -3315,6 +3585,55 @@ Chunk count is the largest remaining latency lever — prompt evaluation is ~9.7
 from 1 to 8 was recovered **8/8** times, so there is no "lost in the middle" effect and the 5th–8th
 chunks are genuinely used. Trading half the retrieval depth for 6s is a bad deal — particularly as
 the model choice already cut the same answer from 47.4s to 17.4s.
+
+### The file blocks, and the three decisions worth restating here
+
+The Create File and Download File blocks live in `app/services/file_delivery/` and run on
+both canvases, the arrangement the Email node established. [FILE_NODES.md](FILE_NODES.md) is
+the whole story; three decisions belong in this document because they are about the schema
+and about this engine.
+
+**Its own table, not nullable columns on `download_exports`.** That table's `data_agent_id`,
+`tool_config_id` and `thread_id` are all `NOT NULL`, and they are what say *what an export
+is* — one offer to export a data agent tool's result set, parked on a checkpointer thread. A
+file a block wrote has none of the three. Making them nullable to fit it in would delete the
+invariant, and every later reader of the table would have to ask which kind of row they were
+looking at. `generated_files` carries two statuses rather than five for the same kind of
+reason: the row is inserted *after* the bytes are on disk, so "a row exists" means "a file
+exists" and there is no work in progress to model.
+
+**polars here, the stdlib in `downloader_agents`, and the divergence is deliberate.**
+`csv_writer` avoids pandas because `DataFrame.from_records` over dicts turns an integer
+column containing one NULL into floats — `qty: 3` written as `3.0`, the file disagreeing with
+the answer the agent gave in the chat. polars does not do that, so a dataframe is the right
+tool *here* and the wrong one *there*, and there is a test per format asserting the dtype
+survives. What it buys is consistent quoting, encodings and dates across CSV, XLSX and TXT in
+about twelve lines each. Parquet goes through pyarrow, the library `parquet_writer` and
+`csv_to_parquet` already use.
+
+One trap worth recording, because the first implementation fell into it: a nested or
+mixed-type value passes `pl.from_dicts` happily as a Struct and then fails **at the write**
+("CSV format does not support nested data"). The stringifying fallback therefore wraps the
+frame *and* the write. A version that wrapped only the construction passed its one-format
+test and broke on the other three.
+
+**`node_results`, and why the flow session needed a column.** `variables` is a flat map of
+strings, so "the rows the previous block produced" has nowhere to live in it — and must not
+live in it anyway, for the reason `awaiting_graph_run` and `call_stack` are both columns:
+that dict is the visitor's namespace and is interpolated into chat text, so a key the
+application reserves is a key an operator can collide with. The new column holds one small
+record per block, keyed by **node id** (two blocks can share a variable name, and a Create
+File block points at one particular box). What it stores is a graph run's *id* rather than
+its rows — `GraphOutcome.rows` is a twenty-row preview, and `graph_runner.full_result` reads
+the whole result back at file time. A file made from the preview would be a twenty-row file
+with nothing about it saying so, which is the failure mode §14 of this document is largely
+about.
+
+The button is the one thing on this canvas that adds to a turn without being the turn. It is
+**not** a `FlowEngineResult.type`: `_with_download` attaches it to whatever ends the turn, so
+a Send Message after the block still speaks and a Menu after it still offers its options. A
+type would have made those mutually exclusive, and the operator's own sentence is the one
+thing a download button should never replace.
 
 ### Known limits
 
@@ -3736,7 +4055,7 @@ they need the database and the request's `Origin` header.
 
 # 23. Frontend engineering
 
-Server-rendered fragments, no SPA framework. Five patterns carry the whole interface.
+Server-rendered fragments, no SPA framework. Six patterns carry the whole interface.
 
 ### Cascading selects, and out-of-band resets
 
@@ -3861,11 +4180,59 @@ D3 7 is used on one page, for **three things only**: the zoom/pan behaviour, the
 connectors, and nothing else. **If the library fails to load the pane says so, rather than sitting
 empty.**
 
+**Two standing exceptions, both deliberate.** `flow_builder.js` builds a node from an HTML string and
+then re-queries it to attach listeners, and `integrations.js` builds its whole node layer that way —
+both route every user-supplied string through `GC.escapeHtml`/`escapeAttr` first, which is why the two
+escaping helpers are in the shared primitives module rather than duplicated. The rule above is still
+the default for new code; these are the places to look if a label ever renders as markup.
+
 ### Server-owned conversation state
 
 For a multi-turn panel, the server writes the state into the response and the form pulls it back in
 with `hx-include`. **The state is then whatever the server last confirmed** — not whatever the browser
 has been holding — and a failed turn can re-render it unchanged instead of discarding it.
+
+### A stateful shared module, instantiated with a config
+
+The sixth pattern, and the newest — it has one instance in `static/js/` and it is worth naming
+because everything else in that directory is a self-contained IIFE owning one page.
+
+`static/js/graph_selection.js` holds a gesture — the rubber-band selection and the group move — that
+three canvases need to behave identically, and a gesture is state: where the press began, what was
+selected before it, which animation frame is pending. So it is not a primitives module like
+`graph_canvas.js`; it is `window.GraphSelection.create(config)`, called once per page, returning a
+controller the canvas keeps.
+
+**The config is the whole abstraction, and it is eighteen keys.** That size is the honest cost rather
+than something to apologise for: every key is a place the three canvases genuinely differ — the
+wrapper, the node layer, how an element id is built from a model id, which classes to paint, how to
+reach the model, and six callbacks for what a selection *means* here. A smaller surface would have
+meant pretending two canvases are the same in a way they are not.
+
+Two decisions make it safe to drop into three working pages:
+
+* **It declines presses.** `beginNodePress(nodeId, e)` returns a boolean, and returns `false` for
+  anything that is not a Ctrl-click or a genuine group move — so the single-item drag each canvas
+  already had, with all of its own click and modifier behaviour, runs exactly as before. Adoption is
+  one line per canvas.
+* **Pointer events, not mouse events.** Two canvases drive their drags with `mousedown` and the third
+  with `pointerdown`. Pointer events work from either starting point — for a mouse,
+  `pointermove`/`pointerup` fire whichever kind of press began the gesture — so the module takes a
+  `MouseEvent` from one canvas and a `PointerEvent` from another without caring. The reverse is not
+  true, and choosing mouse events would have meant converting a working canvas to suit a new module.
+
+**Keyboard handling is bound to the canvas element, not the document,** which is the part of this
+pattern most worth copying. The wrapper carries `tabindex="0"` and the handler sits on it. A
+document-level Ctrl+A would have to *prove* the key was not meant for something else — every input in
+every properties panel, the mapping grid, the schedule form, the run dock's tables — and every field
+added later would be a fresh chance to break typing in it. A handler on the wrapper never fires when
+focus is elsewhere, and clicking the canvas focuses it because the browser focuses the nearest
+focusable ancestor of whatever was pressed. The cost is that the shortcut does nothing until the
+canvas has been clicked once, which is what the explicit toolbar button is for. A `:focus-visible`
+outline came with the `tabindex`, since a focusable element with no visible focus is an accessibility
+regression.
+
+Full account in `documentations/CANVAS_SELECTION.md`.
 
 ### The browser check is the earlier, gentler half
 
@@ -3886,11 +4253,26 @@ already existed and writes nothing.
 | | Tool Graphs | Graph Designer |
 |---|---|---|
 | The picture is | **Derived** from tool configs every time it is drawn | **Authored** — the drawing is the source of truth |
-| Positions | **Computed per request**, never stored | Stored, because nothing can recompute them |
+| Positions | **Computed per request**, never stored | Computed too, but *stored*, and a drag overrides them |
 | Writes | Nothing | Three tables |
 
 Derived means **it cannot fall out of step with the tools** — which is the failure mode of a persisted
-`{x, y}`, and is acceptable in Flow Builder because those positions are the user's own authored layout.
+`{x, y}`.
+
+**That middle row used to read "stored, because nothing can recompute them", and that is no longer
+true.** `app/services/canvas_layout/` recomputes both authored canvases' positions on demand, and the
+layering it does is the same shape as the `(layer, row)` this module computes — which is where the idea
+came from. What is left of the distinction is narrower and more interesting:
+
+* Tool Graphs has **nothing to override**. There is no drag, so a computed position is the only kind
+  there could be.
+* Graph Designer and Flow Builder store positions because a *person* may disagree with the computed
+  ones, and the stored `layout` field records which of the two is currently in charge. So the position
+  is derived by default and authored by exception — see [CANVAS_LAYOUT.md](CANVAS_LAYOUT.md).
+
+The reason layout is Python on all three is one reason, stated first by this module and quoted by the
+other two: it is the part of a drawing that can be wrong without looking wrong, and only the Python
+side of this repository has a test harness.
 
 ### What the drawing adds over the list
 
@@ -4723,7 +5105,9 @@ Stated rather than hidden. Each is a real limitation somebody will otherwise red
   the manual check.
 - **pgvector similarity cannot be tested on SQLite.**
 - **`FOR UPDATE SKIP LOCKED` cannot be proved on SQLite.**
-- **There is no JavaScript test harness.** The headless-browser runs are manual.
+- **There is no JavaScript test harness.** The headless-browser and jsdom runs are manual. This is
+  the reason layout arithmetic lives in Python on all three canvases, and it is the largest single
+  gap in the suite: the canvas code it cannot reach is where two of the last three real bugs were.
 
 ---
 
@@ -4763,7 +5147,9 @@ Where to go for the next level of detail on each topic.
 | Ask AI and Auto Create Tool | [SQL_ASSIST.md](SQL_ASSIST.md) |
 | The authored canvas, its runs and its dock | [GRAPH_DESIGNER.md](GRAPH_DESIGNER.md) |
 | The derived, read-only diagrams | [TOOL_GRAPHS.md](TOOL_GRAPHS.md) |
+| Where the blocks go on both authored canvases, and what Tidy up does | [CANVAS_LAYOUT.md](CANVAS_LAYOUT.md) |
 | Exports: the count, the offer, the file | [DOWNLOADER_AGENTS.md](DOWNLOADER_AGENTS.md) |
+| The file blocks: where their rows come from, and who may fetch a file | [FILE_NODES.md](FILE_NODES.md) |
 | Whole-result grouping and its exactness proof | [AGENT_RECURSIVE_DATAFRAMES.md](AGENT_RECURSIVE_DATAFRAMES.md) |
 | Prompts, variables, model modes, the action router | [CHATBOT_AI_SETTINGS.md](CHATBOT_AI_SETTINGS.md) |
 | Scripted conversations, AI fallback, knowledge bases | [FLOW_BUILDER.md](FLOW_BUILDER.md) |

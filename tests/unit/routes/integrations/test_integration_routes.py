@@ -132,6 +132,41 @@ class TestTheLibrary:
         assert 'data-success="true"' not in response.text
 
 
+class TestTheCanvasScripts:
+    """
+    Script order, which is a requirement rather than a preference.
+
+    ``graph_selection.js`` reads ``window.GraphCanvas`` at module scope and
+    ``integrations.js`` reads ``window.GraphSelection`` in ``init``. Get the order
+    wrong and the page comes up with an empty canvas and one "undefined" in the
+    console — no server error, nothing in a log. It is the only part of the canvas's
+    JavaScript a Python test can hold on to: this repository has no JavaScript test
+    runner.
+    """
+
+    async def test_they_are_loaded_in_dependency_order(
+        self, client, user, make_flow
+    ) -> None:
+        flow = await make_flow(user, name="Ordered")
+
+        body = client.get(f"/integrations/{flow.uuid}/canvas").text
+
+        canvas_tag = body.index('src="/static/js/graph_canvas.js"')
+        selection_tag = body.index('src="/static/js/graph_selection.js"')
+        integrations_tag = body.index('src="/static/js/integrations.js"')
+
+        assert canvas_tag < selection_tag < integrations_tag
+
+    async def test_the_selection_stylesheet_is_linked(
+        self, client, user, make_flow
+    ) -> None:
+        flow = await make_flow(user, name="Styled")
+
+        body = client.get(f"/integrations/{flow.uuid}/canvas").text
+
+        assert "/static/css/graph_selection.css" in body
+
+
 class TestSaving:
     async def test_a_valid_drawing_is_accepted(self, client, user, make_flow) -> None:
         flow = await make_flow(user)
@@ -315,7 +350,7 @@ class TestRunning:
         self, client, make_user, make_flow, auth_client_factory
     ) -> None:
         other = await make_user(email="other@example.com")
-        flow = await make_flow(other, graph_data=trigger_then_success())
+        await make_flow(other, graph_data=trigger_then_success())
 
         # Started as the owner, then read as somebody else.
         owner_client = auth_client_factory(IntegrationsController)

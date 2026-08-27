@@ -169,6 +169,20 @@ multi-field to `[]` (because "nothing selected" is a state, not an absent field)
 `validation_error_detail`, `raise_request_error`, `raise_response_error` are the
 error bridge itself.
 
+`validate_edge_waypoints(edges, max_waypoints=MAX_EDGE_WAYPOINTS)` — the one canvas rule
+that lives here rather than in a feature package, because **three** canvases store a
+hand-routed connector the same way (`edges[].waypoints`, canvas pixels) and a cap that
+differed between them would be wrong on two. `MAX_EDGE_WAYPOINTS = 4` is what the routing can
+express; `MAX_CANVAS_COORD = 200_000` is a runaway ceiling rather than a design limit — 500
+blocks in one row is about 106,000px and the canvas grows to fit.
+
+It is the exception to those save schemas' "the client owns this document's shape" policy, and
+it is worth knowing which failure justifies the exception: `{"x": NaN}` satisfies every
+declared rule in this layer, `json.dumps` then writes a bare `NaN`, and **PostgreSQL's
+`jsonb` refuses it** — so a hand-made request becomes a 500 with a stack trace and no
+sentence, which is the exact outcome the error bridge above exists to prevent. `Infinity`
+behaves identically. Everything without the key passes through untouched.
+
 ---
 
 ## Cross-feature responses — `app/schemas/common.py`
@@ -404,7 +418,7 @@ The canvas is entirely client-rendered, so this module's endpoints exchange JSON
 | `FlowCreateRequest` | `name` | required, ≤255 |
 | `FlowRenameRequest` | `name` | same |
 | `FlowSetActiveRequest` | `is_active` | the publish/draft flag; attachment is separate |
-| `FlowGraphSaveRequest` | `nodes` (≤500), `edges` (≤2000), `extra="allow"` | bounded but not narrowed — the node vocabulary belongs to `flow_builder.js` and `flow_service.update_flow_graph`. `.graph_data()` returns the whole document, extras included |
+| `FlowGraphSaveRequest` | `nodes` (≤500), `edges` (≤2000), `extra="allow"` | bounded but not narrowed — the node vocabulary belongs to `flow_builder.js` and `flow_service.update_flow_graph`. `.graph_data()` returns the whole document, extras included. One exception to "not narrowed": `edges[].waypoints`, a hand-routed connector's bends, goes through `validate_edge_waypoints` — see the note under `graph_designer` below for why that one key is worth checking |
 | `KnowledgeBaseManualTextRequest` | `label`, `text` (≤100000) | replaces `payload.get(...)` on a body that might not be an object |
 | `FlowView` | `uuid`, `name`, `is_active`, `updated_at`, `chatbot_name` | |
 | `KnowledgeBaseDocumentView` | `id` (public uuid), `label`, `source_type`, `size_bytes`, `extraction_status`, `error_message`, `created_at` | |
@@ -516,6 +530,16 @@ differs from `flow_builder`'s. `FlowGraphSaveRequest` bounds a conversation flow
 nodes because a flow that large is a runaway client; a data pipeline is not. What bounds a
 *run* is the per-loop iteration ceiling in `graph_compiler` — a bound on work rather than on
 drawing, and the one that actually protects anything.
+
+**One key inside an edge is now checked, and it is worth saying why that is not a reversal
+of the paragraph above.** A connector routed by hand carries `waypoints`, and both canvas
+save schemas run `validate_edge_waypoints` over their `edges`. It bounds only that key —
+the vocabulary is still the service's — and it exists for a failure the rest of this layer
+cannot catch: `{"x": NaN}` satisfies every declared rule, `json.dumps` writes a bare `NaN`,
+and **PostgreSQL's `jsonb` refuses it**, so the save dies as a 500 with a stack trace and no
+sentence. That is precisely the outcome this whole layer exists to prevent, which is why one
+narrow validator earns its place in a schema that otherwise refuses to narrow anything. The
+cap is per connector, so it does not quietly reintroduce a ceiling on the drawing.
 
 ### deep_agents — `app/schemas/deep_agents/deep_agent_schemas.py`
 

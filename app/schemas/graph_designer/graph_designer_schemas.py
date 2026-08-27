@@ -46,6 +46,7 @@ from app.schemas.base import (
     QueryRequest,
     RequiredText,
     ResponseSchema,
+    validate_edge_waypoints,
 )
 
 #: How long a node id may be. Matches ``ToolGraphRunStep.node_id``'s column width, so a
@@ -151,6 +152,20 @@ class GraphSaveRequest(JsonRequest):
 
     nodes: List = Field(default_factory=list, title="Nodes")
     edges: List = Field(default_factory=list, title="Edges")
+
+    @field_validator("edges")
+    @classmethod
+    def _waypoints(cls, value: List) -> List:
+        """
+        The one key inside an edge this layer checks, and why it is the exception.
+
+        The rest of the edge vocabulary belongs to the service. ``waypoints`` — where
+        a connector was dragged to route it by hand — is bounded here because the
+        failure it can otherwise cause is not a refusal but a 500: a non-finite
+        coordinate passes every other rule, and PostgreSQL then refuses the ``jsonb``
+        it becomes. See ``app.schemas.base.validate_edge_waypoints``.
+        """
+        return validate_edge_waypoints(value)
 
     def graph_data(self) -> dict[str, Any]:
         """

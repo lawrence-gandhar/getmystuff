@@ -8,8 +8,10 @@
 <link href="/static/css/brand.css" rel="stylesheet">
 
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-<link href="https://cdnjs.cloudflare.com/ajax/libs/line-awesome/1.3.0/line-awesome/css/line-awesome.min.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet"
+      integrity="sha384-T3c6CoIi6uLrA9TneNEoa7RxnatzjcDSCmG1MXxSR1GAsXEV/Dwwykc2MPK8M2HN" crossorigin="anonymous">
+<link href="https://cdnjs.cloudflare.com/ajax/libs/line-awesome/1.3.0/line-awesome/css/line-awesome.min.css" rel="stylesheet"
+      integrity="sha384-h0HFp1r+Vq/1x7modzqZaqvMelro9pikGIVdLDs045XCE8IfHpIQDcGPiBNslfXT" crossorigin="anonymous">
 
 
 <link href="/static/css/dashboard.css" rel="stylesheet">
@@ -23,9 +25,31 @@ body {
     font-family: 'Poppins', sans-serif;
 }
 
+/* Buttons — app-wide sizing and text colour for every Bootstrap button.
+   --bs-btn-font-size feeds Bootstrap's own .btn rule, so padding, icon sizing and
+   line-height stay proportional instead of being overridden one property at a time.
+   Declared ahead of the component rules below so a specific button (.logout-btn)
+   still wins — same specificity, so source order decides. */
+.btn {
+    --bs-btn-font-size: 0.65rem;
+    color: #000000;
+}
+
+/* Buttons inside a sized button group. Bootstrap ships these as
+   `.btn-sm, .btn-group-sm > .btn { --bs-btn-font-size: .875rem }`, and the
+   descendant form is two classes deep — it outranks the single-class .btn rule
+   above, so a .btn-group-sm would keep Bootstrap's size while every other button
+   on the page shrank. Repeating the value at matching specificity is what keeps a
+   group visually identical to the loose buttons beside it. .btn-sm / .btn-lg on
+   their own need no entry: one class each, and this stylesheet loads after
+   Bootstrap, so source order already settles them. */
+.btn-group-sm > .btn,
+.btn-group-lg > .btn {
+    --bs-btn-font-size: 0.65rem;
+}
+
 /* Layout */
 .wrapper {
-    /* display: flex; */
     min-height: 100vh;
 }
 
@@ -91,7 +115,6 @@ body {
     position: fixed;
     width: 100%;
     z-index: 1000;
-    /* background: #ffffff; */
     border-bottom: 1px solid #60a5fa;
 }
 
@@ -235,7 +258,7 @@ body {
     </div>
 
     <!-- 🔷 MAIN CONTENT -->
-    <div class="main-content container-fluid" style="width:87vw;">
+    <div class="main-content container-fluid" style="width:85vw;">
         {% block content %}{% endblock %}
     </div>
 
@@ -246,8 +269,10 @@ body {
     © GetMyStuff — All rights reserved.
 </footer>
 
-<script src="https://unpkg.com/htmx.org@1.9.10"></script>
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://unpkg.com/htmx.org@1.9.10"
+        integrity="sha384-D1Kt99CQMDuVetoL1lrYwg5t+9QdHe7NLX/SoJYkXDFfX37iInKRy5xLSi8nO7UC" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"
+        integrity="sha384-C6RzsynM9kWDrMNeT87bh95OGNyZPhcTNXj1NW7RuBCsyN/o0jlpcV8Qyq46cDfL" crossorigin="anonymous"></script>
 
 <script>
     /**
@@ -314,7 +339,7 @@ body {
         return fetch(url, options).then(function (response) {
             if (response.redirected && response.url.includes('/auth/login')) {
                 window.location.href = '/auth/login';
-                return Promise.reject(new Error('Session expired'));
+                throw new Error('Session expired');
             }
             return response;
         });

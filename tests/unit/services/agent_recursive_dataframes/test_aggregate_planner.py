@@ -12,7 +12,7 @@ calls so that stays true.
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict
 
 import pytest
 

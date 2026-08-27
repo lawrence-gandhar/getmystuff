@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import uuid
 
-import pytest
-from litestar.exceptions import HTTPException
 
 from app.schemas.email_dispatch import TemplateCreateRequest
 

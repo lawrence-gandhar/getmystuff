@@ -11,7 +11,6 @@ in the DOM.
 
 from __future__ import annotations
 
-import uuid
 
 import pytest
 from litestar.exceptions import HTTPException

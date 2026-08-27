@@ -24,6 +24,8 @@ from litestar.exceptions import HTTPException
 from pydantic import Field
 
 from app.schemas.base import (
+    MAX_CANVAS_COORD,
+    MAX_EDGE_WAYPOINTS,
     MAX_NAME_LENGTH,
     AppBaseSchema,
     CheckboxBool,
@@ -39,6 +41,7 @@ from app.schemas.base import (
     RequiredUUID,
     ResponseSchema,
     form_to_dict,
+    validate_edge_waypoints,
 )
 
 VALID_UUID = "3f4b2c1e-0000-4000-8000-000000000001"
@@ -357,6 +360,112 @@ class TestResponseSchema:
         payload = _WithUuid.payload_for({"uuid": VALID_UUID})
         assert payload["uuid"] == VALID_UUID
         assert isinstance(payload["uuid"], str)
+
+
+class TestEdgeWaypoints:
+    """
+    ``validate_edge_waypoints`` — the one key inside a canvas's own document that
+    this layer bounds.
+
+    It lives here rather than in a feature package because all three canvases store
+    a hand-routed connector the same way, and a cap that differed between them would
+    be wrong on two.
+    """
+
+    def test_a_usable_bend_passes_through_unchanged(self) -> None:
+        edges = [{"id": "e1", "waypoints": [{"x": 10, "y": 20}]}]
+
+        assert validate_edge_waypoints(edges) is edges
+
+    @pytest.mark.parametrize(
+        "edges",
+        [
+            "not a list",
+            None,
+            7,
+            [],
+            [{"id": "e1"}],
+            ["not an edge"],
+            [{"id": "e1", "waypoints": None}],
+        ],
+        ids=["string", "none", "number", "empty", "no-key", "not-object", "null-list"],
+    )
+    def test_anything_without_bends_is_left_exactly_as_it_is(self, edges: object) -> None:
+        """
+        The edge vocabulary belongs to the service. This function has an opinion
+        about one key and no opinion about anything else.
+        """
+        assert validate_edge_waypoints(edges) is edges
+
+    @pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+    def test_a_non_finite_coordinate_is_refused(self, value: float) -> None:
+        """
+        The reason the function exists. ``NaN`` satisfies every other rule in this
+        layer; ``json.dumps`` then writes a bare ``NaN``, which PostgreSQL refuses
+        as ``jsonb``. Without this the request is a 500 with a stack trace rather
+        than a 400 with a sentence, which is the one thing this layer exists to
+        prevent.
+        """
+        with pytest.raises(ValueError, match="not a valid position"):
+            validate_edge_waypoints([{"waypoints": [{"x": value, "y": 0}]}])
+
+    def test_more_bends_than_allowed_is_refused(self) -> None:
+        bends = [{"x": 1, "y": 1}] * (MAX_EDGE_WAYPOINTS + 1)
+
+        with pytest.raises(ValueError, match="more than 4 bend points"):
+            validate_edge_waypoints([{"waypoints": bends}])
+
+    def test_the_cap_is_inclusive(self) -> None:
+        bends = [{"x": 1, "y": 1}] * MAX_EDGE_WAYPOINTS
+
+        assert validate_edge_waypoints([{"waypoints": bends}])
+
+    def test_a_caller_may_ask_for_a_tighter_cap(self) -> None:
+        with pytest.raises(ValueError, match="more than 1 bend point"):
+            validate_edge_waypoints(
+                [{"waypoints": [{"x": 1, "y": 1}, {"x": 2, "y": 2}]}], max_waypoints=1
+            )
+
+    @pytest.mark.parametrize(
+        "bends", ["nope", {"x": 1, "y": 2}, 7], ids=["string", "object", "number"]
+    )
+    def test_bends_that_are_not_a_list_are_refused(self, bends: object) -> None:
+        with pytest.raises(ValueError, match="could not be read"):
+            validate_edge_waypoints([{"waypoints": bends}])
+
+    @pytest.mark.parametrize(
+        "bend",
+        [{"x": 1}, {}, "nope", None, {"x": "1", "y": "2"}, {"x": True, "y": 1}],
+        ids=["no-y", "empty", "string", "none", "strings", "bool"],
+    )
+    def test_a_malformed_bend_is_refused(self, bend: object) -> None:
+        """
+        ``True`` is refused with the rest. Python calls it an ``int``, so an
+        ``isinstance`` check alone would have accepted a boolean as a coordinate.
+        """
+        with pytest.raises(ValueError, match="missing its position"):
+            validate_edge_waypoints([{"waypoints": [bend]}])
+
+    @pytest.mark.parametrize("value", [-1, MAX_CANVAS_COORD + 1])
+    def test_a_coordinate_off_the_canvas_is_refused(self, value: int) -> None:
+        with pytest.raises(ValueError, match="outside the canvas"):
+            validate_edge_waypoints([{"waypoints": [{"x": value, "y": 0}]}])
+
+    def test_the_coordinate_bounds_are_inclusive(self) -> None:
+        assert validate_edge_waypoints(
+            [{"waypoints": [{"x": 0, "y": MAX_CANVAS_COORD}]}]
+        )
+
+    def test_a_later_bad_connector_is_still_caught(self) -> None:
+        """Every connector is checked, not just the first one carrying the key."""
+        edges = [
+            {"id": "e1", "waypoints": [{"x": 1, "y": 1}]},
+            {"id": "e2"},
+            {"id": "e3", "waypoints": [{"x": 1, "y": float("nan")}]},
+        ]
+
+        with pytest.raises(ValueError, match="not a valid position"):
+            validate_edge_waypoints(edges)
 
 
 class TestAppBaseSchemaConfig:

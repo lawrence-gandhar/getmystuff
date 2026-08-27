@@ -24,7 +24,7 @@ comes from a record and the record comes from somebody else's system.
 """
 
 import json
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional
 from urllib.parse import quote, urlsplit
 
 from app.services.integrations.connectors.spec import OperationSpec, PreparedRequest

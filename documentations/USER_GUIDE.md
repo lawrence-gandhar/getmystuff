@@ -650,31 +650,116 @@ scripted reply.
 > explained, nine worked flows to copy, all the limits, and every "save refused" message with
 > what to do about it. It opens in its own tab.
 >
-> If you read one thing there first, make it **Variables, honestly**: writing `{{NAME}}` in a
-> message shows the visitor those exact characters. Message text is not a template, and that
-> catches almost everybody once.
+> If you read one thing there first, make it **Variables, honestly**: `{{NAME}}` in a message
+> is filled in from what the conversation has collected, names must match exactly — `{{email}}`
+> and `{{EMAIL}}` are different variables — and a name with no value is left on screen as you
+> wrote it rather than blanked, so you can see which one is misspelled.
+
+### Reading the canvas
+
+The canvas **arranges itself**. Blocks run down the page from the Start block, and one you
+add lands where its connections put it rather than wherever there happened to be room. Each
+block is a coloured circle with its name under it and one line of its settings under that —
+so `for_loop_on_departmants → DATA` on a Run Graph block, or the first words of a message.
+
+A block with one way out has a small dot on its bottom edge. A block with a **choice** has a
+labelled tag for each way out instead: one per option on a Menu, or `written` and `failed`
+on a Create File block. The tags sit **side by side** and only wrap onto a second line when
+they run out of room, so a two-option Menu reads as one question rather than a stack; a label
+too long for its tag is shortened with an ellipsis, and hovering the tag shows all of it. To
+connect two blocks, click the dot or the tag the connection should leave from, then click the
+block it should lead to.
+
+**Green and red say whether the block did its work.** A block that can fail — Create File,
+Download File, Run Graph, Run Flow, Send Email — has a **green** tag for the way out it takes
+when it worked and a **red** one for `failed`, and the connector leaving the red tag is red
+and dashed. **End Flow is red too**, because that is where the conversation stops. Everything
+else stays grey on purpose: a Menu's options and If / Else's True and False are *choices*, and
+a visitor pressing the second button has not made anything go wrong.
+
+| You want to | Do this |
+|---|---|
+| Edit a block | Click it |
+| Delete a block | Hover it and use the bin button that appears |
+| Move a block yourself | Drag it. The canvas then leaves your layout alone |
+| Get the tidy layout back | **Tidy up** in the toolbar |
+| Delete a connector | Hover it and click the **×** that appears |
+| Re-point a connector | Hover it and drag either small end handle onto another block |
+| Select several blocks | Drag a box on empty canvas — anything it touches is selected |
+| Add or remove one | **Ctrl-click** it (**Cmd-click** on a Mac) |
+| Select everything | **Ctrl+A**, or the **Select all** button |
+| Clear the selection | **Escape**, or click empty canvas |
+| Move several blocks at once | Drag any selected block. They all move, connectors following |
+| Move a block and the one it feeds | Select the **connector** between them, then drag either block |
+| Put a move back | **Escape** while you are still dragging |
+| Route a connector round something | Drag the line itself — it bends through where you drop it |
+| Straighten a connector | Double-click it, or drop the bend back onto the straight line |
+
+Three things follow from "arranges itself" that are worth knowing before they surprise you:
+
+- **A flow you laid out by hand will be re-arranged the first time you open it.** Nothing is
+  saved until you press **Save**, and **Reload** brings back exactly what is stored — so if
+  you preferred your own layout, press Reload and then drag one block, which tells the canvas
+  to stop arranging.
+- **A dashed line is a Goto block's jump.** It runs from the Goto round to the block it
+  names, which is how a flow that loops back to its own menu now looks like one. You cannot
+  delete or move that line; change where it goes by editing the Goto block.
+- **Moving blocks, or bending a connector, stops the canvas arranging itself** — the same as
+  dragging one block does. That is usually what you want, and **Tidy up** hands the arranging
+  back. It will ask first if you have routed any connectors by hand, because tidying up
+  straightens them: you arranged those wires against where the blocks were, and the blocks
+  are about to move.
+
+### Two kinds of flow
+
+Every flow is one of two things, and you choose which when you create it:
+
+- an **Agent** flow — a chatbot's own conversation, attached to one agent. This is the
+  default and what every flow was before this setting existed.
+- a **Generic** flow — a *child*, never attached to an agent at all. It exists to be run by
+  another flow's **Run Flow** block, which is how you build a step once and use it in three
+  places.
+
+The Kind column on the Flow Builder list says which, and the **Make Generic** / **Make
+Agent** button switches it. The two kinds appear in two different lists and never in both:
+
+- an agent's *Conversation Flow* dropdown offers **agent** flows only;
+- a Run Flow block offers **generic** flows only.
+
+So if a flow you want to reuse is not in a Run Flow block's list, that is almost always the
+reason — press **Make Generic** on it.
+
+**A flow attached to an agent cannot be made generic.** Detach it on the agent's page first.
+That is refused rather than done silently because making it generic would take a live
+conversation away from an agent as a side effect of a click somewhere else.
 
 ### Ownership and the two switches
 
-Flows belong to **you**, not to a chatbot. You build one standalone, then attach it to an
-agent from that agent's settings page. Two independent switches decide whether it actually
-drives a conversation:
+Flows belong to **you**, not to a chatbot. You build one standalone, then — if it is an agent
+flow — attach it from that agent's settings page. Two independent switches decide whether it
+actually drives a conversation:
 
 | Switch | Meaning | Set where |
 |---|---|---|
 | Active / Draft | Published or still being written | The Flow Builder list |
 | Attached | Which agent runs it | The agent's settings page |
 
-Both are required. So a finished flow can be parked without detaching it, and a draft can
-sit attached while you finish it. Only flows that are active *and* unattached are offered in
-an agent's dropdown — **a flow runs on at most one agent**, and deleting an agent detaches
-its flow rather than destroying it.
+Both are required for an agent flow. So a finished flow can be parked without detaching it,
+and a draft can sit attached while you finish it. Only flows that are active *and* unattached
+are offered in an agent's dropdown — **a flow runs on at most one agent**, and deleting an
+agent detaches its flow rather than destroying it.
+
+**A generic flow needs only the first switch.** It has no agent to attach to; it goes live as
+soon as it is Active and some other flow's Run Flow block points at it. Active still means the
+same thing for both kinds, so a half-drawn child flow is not offered to a caller.
 
 **A flow needs no tools.** Nothing about attaching one depends on the agent's Tool Configs:
 a Send Message / Menu / If-Else / AI Fallback conversation reads a knowledge base, not a
 database, and runs perfectly well on an agent with no tools at all. If your flow isn't
-answering, the cause is one of the two switches above — check that the flow is **Active**
-and that it's the one selected in the agent's *Conversation Flow* dropdown.
+answering, the cause is one of the settings above — check that the flow is an **Agent** flow,
+that it is **Active**, and that it's the one selected in the agent's *Conversation Flow*
+dropdown. A flow marked Generic cannot be selected there at all, which is the answer when a
+flow you expected to see is missing from that list.
 
 ### What happens when the flow ends
 
@@ -704,6 +789,71 @@ found, for a later Send Message or If/Else block to use.
 wait.** If the graph contains a **Human** box, its question goes to the visitor word for word
 and the flow pauses until they reply — then carries on from the block after this one. See
 [§14](#14-workflow-drawing-a-pipeline) for the whole picture.
+
+### The Run Flow node — calling one flow from another
+
+A flow block that runs **another one of your flows** as a single step, then carries on. This
+is how you stop drawing the same thing twice: build *"collect the customer's details"* once
+and call it from three places.
+
+The called flow runs as normally as if it were attached to an agent itself — it can ask
+questions, show menus, hand a turn to the AI. Two exits, *done* and *failed*, and you should
+draw the failed one for the same reason Run Graph gives.
+
+Three fields:
+
+- **Flow to run** — your published **generic** flows, minus the one you are editing. Agent
+  flows are not offered: one of those is a chatbot's own front door, not a step. A flow cannot
+  run itself either.
+- **Values passed in** — one row per variable that flow reads, from a value this conversation
+  collected, an agent variable, or a fixed value.
+- **Values brought back** — one row per variable that flow stores. Type the name to keep it
+  under here; leave a row blank not to bring it back.
+
+Both lists are read off the flow you pick, so they always match what it actually does. A value
+it consumes from somewhere the panel cannot see — a Run Graph block inside it is handed
+everything — can be added with **Add a value**.
+
+**The called flow gets its own variables.** It starts with exactly what you passed in and
+nothing else, and only the values you named come back. Its internal names are its own
+business: two Run Flow blocks calling the same flow cannot tread on each other, and renaming
+a variable inside it breaks nothing except a row here you can re-point.
+
+**An End Flow block inside a called flow means "return", not goodbye.** The caller picks up
+from the block after the Run Flow one. If that End Flow block has a closing message it is
+still said, and the caller carries on from the visitor's next message; if it is blank, nothing
+is said and the caller continues immediately. A flow that simply runs out of blocks returns
+the same way.
+
+**Loops are refused, not run.** A flow cannot run itself, a call back into a flow already
+running in this conversation takes *failed*, and five calls deep is the limit. If a block
+inside the called flow fails with no *failed* port of its own, the failure comes out of the
+Run Flow block's *failed* port — it never returns through *done* as though it had worked.
+
+**Switching a called flow back to Agent breaks the callers, deliberately.** A Run Flow block
+still pointing at it takes *failed* mid-conversation, and the next time you save that flow the
+save is refused with a sentence naming the flow. Both say the same thing: an agent flow is not
+a step.
+
+### Variables in message text
+
+`{{VARIABLE}}` is filled in from whatever the conversation has collected, in:
+
+- a **Send Message**,
+- an **End Flow** closing message,
+- an **Ask for Input** prompt, and a **Menu** or **Dropdown** prompt.
+
+Not in **option labels**, deliberately: a label is also stored as the visitor's answer and is
+the question an AI Fallback after it gets asked, so substituting there would change three
+things at once. Put the variable in the prompt above the buttons instead.
+
+Two rules worth knowing. **Names match exactly** — `{{email}}` and `{{EMAIL}}` are two
+different variables, because every block treats them that way. And **a name with no value is
+left on screen as you typed it** rather than blanked: a visible `{{ORDR_REF}}` tells you which
+name is misspelled, where an empty gap would just look like a value that failed to arrive.
+
+The value can come from anywhere that stores one — an Ask for Input answer, a Menu choice, an
+AI Fallback's answer, a Run Graph row count, or a value a Run Flow block brought back.
 
 ### The AI Fallback node, and its knowledge base
 
@@ -772,12 +922,74 @@ Two things follow from that. Give options labels that read as a subject on their
 appeared is not carried forward — that turn was spent showing the menu. If you need their
 own words, put an **Ask Input** node in front of the AI Fallback instead.
 
+**Write the block's Prompt / instructions as the question you want answered.** On a turn
+where the visitor only clicked, the AI Fallback block searches its knowledge base for those
+instructions *plus* the label, not the label alone — a label is written to be clicked, not
+to be searched for. A real example: an option labelled *"Email me the data"* pointed at a
+project proposal found that document's security and privacy section, and the answer was a
+polite refusal to share user data — correct, from the knowledge base, and about the wrong
+subject. Filling in *"give a detailed summary of the proposal in plain language"* found the
+scope, the deliverables and the costs instead.
+
+On a turn where the visitor typed a real question, their words are used on their own — so
+an instruction about tone or style there costs you nothing.
+
 Menu and Dropdown nodes also have an optional **Store choice in variable** field, the same
 one Ask Input has. Fill it in when a later **If/Else** needs to branch on what was picked;
 leave it blank when the connectors already say everything.
 
 An option with no connector attached simply re-asks the menu, so check every option is
 wired before publishing.
+
+### The Create File and Download File blocks — handing over a file
+
+Two blocks that work as a pair. **Create File** writes rows to a file; **Download File**
+hands that file to the visitor. They are separate because the file has to exist before it
+can be offered, and because plenty of flows want the first without the second — writing a
+file and mailing the link instead of showing a button.
+
+On a Create File block you choose **where the rows come from**:
+
+- a **Run Graph** block earlier in the flow — every row the pipeline returned. The
+  conversation only ever saw the first twenty; the file holds the lot;
+- an **AI Fallback** block — the table in its answer, when the answer had one. Real columns,
+  not the pipe-separated text the variable holds;
+- a **variable** holding a dataset. Rows stored as JSON become columns; anything else is
+  text, and only the **Text** format can write text — there is no honest way to turn an AI
+  answer's prose into a spreadsheet.
+
+Then a format — **CSV**, **Excel (XLSX)**, **Text** or **Parquet** — and a name. The
+extension is added for you, so a name can never promise a format the file is not, and
+`{{VARIABLE}}` works: `invoice-{{ORDER_REF}}` gives a file per visitor rather than one file
+everybody overwrites.
+
+A Download File block names the Create File block whose file it hands over — the block, not
+whatever happens to be wired into it, so you can put a Send Message in between. Then:
+
+- **Store the download link in** a variable, which is the whole point when there is no
+  button: `{{FILE_URL}}` in a Send Message block, or bound into a Send Email block;
+- **Show a download button**, off by default. Switch it on and you choose the **text** (which
+  takes `{{VARIABLE}}` too) and the **colour**. The visitor sees the button under whatever
+  the flow just said — it does not replace the message, and a Menu after it still shows its
+  options with the button underneath.
+
+Neither block says anything by itself, exactly as **Send Email** does not: a block that
+announced *"I have made your file"* would be putting words in your mouth. Write the sentence
+with a Send Message block.
+
+Three things worth knowing:
+
+- **The link belongs to one conversation and lasts a day.** It carries the widget's id and
+  that visitor's session, so it works for nobody else — pasting it into another browser
+  says the file could not be found. After a day it says it has expired, which is a different
+  sentence on purpose.
+- **Connect the `failed` port.** A block whose data holds no rows, a variable the
+  conversation never set, a Create File block a branch skipped — all of them take that port,
+  and with nothing drawn there the conversation signs off. A file block never carries on as
+  though it had worked.
+- **Nothing is ever trimmed to fit.** A result larger than 500,000 rows fails the block
+  rather than writing the first 500,000: a file that looks complete and is not would be
+  emailed on by somebody who had no way of knowing.
 
 ### Two current gaps, stated plainly
 
@@ -1121,6 +1333,8 @@ Every one of those is control flow, and control flow is a drawing.
 | **For each** | Loop over another box's result, with a ceiling |
 | **Do until** | Repeat until a condition holds, with a ceiling |
 | **Send an email** | A template, a server, who it goes to, and a value for each thing the template asks for |
+| **Create a file** | Which box's rows to write, in which format, called what |
+| **Download a file** | Which Create-a-file box's file to hand over, as a link on this box's output |
 | **Timer** | Start, pause, resume or stop a stopwatch |
 | **Wait** | Pause the run for a number of seconds |
 | **Success** | A message; records the run as having worked |
@@ -1137,10 +1351,19 @@ failed even if it goes on to do three more things successfully, so you cannot jo
 Success to "recover" — the canvas says so if you try. To recover from a failure, draw the
 `error` path out of the box that actually failed instead.
 
-Connect two boxes either by **dragging** from an output dot onto the target, or by
-**clicking** the output dot and then clicking the target. Both work, because users arrive
-expecting one or the other. While a connector is armed the cursor becomes a crosshair, so
-the mode is visible rather than remembered.
+Connect two boxes either by **dragging** from a box's exit dot or one of its labelled tags
+onto the target, or by **clicking** that dot or tag and then clicking the target. Both work,
+because users arrive expecting one or the other. While a connector is armed the cursor
+becomes a crosshair, so the mode is visible rather than remembered.
+
+**The canvas arranges itself**, exactly as Flow Builder's does: the run reads down the page,
+a box you add lands where its connectors put it, and each box shows a coloured circle, its
+name, its kind and one line of its settings. A box with a choice — a Branch's conditions, a
+loop's `each` and `done`, any box's `on error` — shows a labelled tag per way out, and that
+tag is what you connect from. Drag a box to place it yourself and the canvas stops arranging
+until you press **Tidy up**. A connector's **×** and its two end handles appear when you
+hover it. As with Flow Builder, a pipeline you laid out by hand is re-arranged the first
+time you open it, and **Reload** brings your stored layout back.
 
 ### What it refuses, and why each one matters
 
@@ -1150,7 +1373,7 @@ why none is left until execution:
 | Refused | Because |
 |---|---|
 | No start box, or two | A drawing with no reading order; two starts is two graphs |
-| Two connectors on one output | The run would take one of them, and which one would be arbitrary |
+| Two connectors on one way out | The run would take one of them, and which one would be arbitrary |
 | A cycle that no loop box sits on | It would run until the engine gave up, reported far from the two connectors that caused it |
 | A Value box whose JSON doesn't match its declared kind | An object where a list was promised feeds the next box something it can't use |
 | A SQL box with no statement, no datasource, or **no declared tables** | See below |
@@ -1201,6 +1424,27 @@ declared value is handed to the database separately and cannot change what your 
 does, whereas text pasted into a statement can. Use variables for the *shape* of a query
 and declared values for the *contents*.
 
+### Writing the result to a file, and emailing the link
+
+A pipeline can hand its result over as a file rather than a number.
+
+1. Draw the work as usual, ending in a **SQL** box whose rows you want.
+2. Add a **Create a file** box after it. Choose that SQL box under **Rows from**, pick a
+   format, and give it a name — `{{VARIABLE}}` works here, so `orders-{{RUN_DATE}}` gives a
+   file per run instead of one that is overwritten nightly.
+3. Add a **Download a file** box and choose the Create-a-file box in its **File** field.
+4. Add a **Send an email** box. For each thing your template asks for, choose *An earlier
+   node's output*, pick the Download box, and use the field `url` for the link (`file_name`
+   and `row_count` are there too).
+
+The link is **yours, not the world's**: it needs you to be signed in, so it belongs in an
+email to your own team rather than to a customer. It lasts a day. There is no download
+button in a pipeline — there is no chat for one to appear in, and the canvas says so if you
+try to set one.
+
+The file itself holds **every** row the box produced, and a result larger than 500,000 rows
+fails the box rather than writing the first 500,000.
+
 ### Timing part of a run, and saying so in an email
 
 This is the recipe for "how long did it take, and tell me".
@@ -1240,6 +1484,30 @@ run is stopped and does not carry on. That is why the ceiling is fifteen minutes
 hours — for anything longer, use an **Integration** with a schedule, which is designed to
 survive restarts. A longer wait is refused when you save rather than quietly shortened, so
 the drawing never says one thing while the run does another.
+
+### Moving several boxes, and routing a wire yourself
+
+| You want to | Do this |
+|---|---|
+| Select several boxes | Drag a box on empty canvas — anything it touches is selected |
+| Add or remove one | **Ctrl-click** it (**Cmd-click** on a Mac) |
+| Select everything | **Ctrl+A**, or the **Select all** button |
+| Clear the selection | **Escape**, or click empty canvas |
+| Move several boxes at once | Drag any selected box. They all move, wires following |
+| Move a box and the one it feeds | Select the **wire** between them, then drag either box |
+| Put a move back | **Escape** while you are still dragging |
+| Route a wire round something | Drag the line itself — it bends through where you drop it |
+| Straighten a wire | Double-click it, or drop the bend back onto the straight line |
+
+**Two different kinds of picking, and it is worth keeping them straight.**
+**Shift-click** picks boxes to *test* — that is the set **Test selection** runs, and the
+count next to that button is its count. **Ctrl-click** picks boxes to *move*. They are
+separate: you can have five boxes picked for a test run and two different ones selected to
+drag, and the canvas draws them differently on purpose.
+
+As on the conversation canvas, moving boxes or bending a wire stops the canvas arranging
+itself, and **Tidy up** hands the arranging back — asking first if you have routed any wires
+by hand, since tidying up straightens them.
 
 ### Testing part of one
 
@@ -1524,6 +1792,14 @@ drag from a step's output dot to another step to connect them.
 **A workflow that reads and then writes needs a Batch step between them.** Records travel a
 batch at a time — a sync of fifty thousand is a hundred passes of five hundred, not fifty
 thousand separate steps — and without one the write step gets nothing.
+
+**Tidying the drawing up.** As on the other two canvases: drag a box on empty canvas to
+select several steps, **Ctrl-click** to add and remove them one at a time, **Ctrl+A** or
+**Select all** for everything, **Escape** to clear. Drag any selected step and the whole
+selection moves with its connections following, and selecting a connection picks up the two
+steps it joins. Drag a connection itself to curve it round something in the way, and
+double-click it to let the canvas draw it again. This canvas does not arrange itself, so
+nothing here has an arrangement to hand back.
 
 ### The mapping grid
 
@@ -2509,6 +2785,8 @@ Each of the following goes deeper on one thing, with the reasoning and the measu
 **Drafting and drawing**
 - [SQL_ASSIST.md](SQL_ASSIST.md) — Ask AI, and Auto Create Tool
 - [GRAPH_DESIGNER.md](GRAPH_DESIGNER.md) — the writable canvas
+- [CANVAS_LAYOUT.md](CANVAS_LAYOUT.md) — what decides where the boxes go on both drawing
+  canvases, and what **Tidy up** actually does
 - [TOOL_GRAPHS.md](TOOL_GRAPHS.md) — the read-only diagrams
 
 **Moving records between systems**
@@ -2522,6 +2800,14 @@ Each of the following goes deeper on one thing, with the reasoning and the measu
   a workflow, and everything that checks it
 - [SECRETS_AND_KEY_ROTATION.md](SECRETS_AND_KEY_ROTATION.md) — how a stored credential is
   encrypted, and what rotating the key involves
+
+**Handing over a file**
+- [FILE_NODES.md](FILE_NODES.md) — the Create File and Download File blocks: where a file's
+  rows come from on each canvas and why every source is exact rather than a sample, why a
+  file's link belongs to one conversation and lasts a day, and why the download button is
+  attached to whatever the turn already said rather than replacing it
+- [DOWNLOADER_AGENTS.md](DOWNLOADER_AGENTS.md) — the other file path: an export a *data
+  agent* offers when an answer is too big to print
 
 **Telling someone**
 - [EMAIL_DISPATCH.md](EMAIL_DISPATCH.md) — the engine behind chapter 16: why the text is

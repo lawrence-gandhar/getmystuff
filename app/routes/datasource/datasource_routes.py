@@ -2,7 +2,7 @@ import asyncio
 import uuid
 from pathlib import Path
 
-from litestar import post, get, delete, Controller
+from litestar import post, get, Controller
 from litestar.response import Response, Template
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, exists, func

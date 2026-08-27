@@ -39,7 +39,7 @@ or imports a database or an HTTP library.
 
 import re
 from dataclasses import dataclass, field, replace
-from typing import Any, Dict, Mapping, Optional, Protocol, Sequence, Tuple
+from typing import Any, Dict, Mapping, Optional, Protocol, Tuple
 from urllib.parse import urlsplit
 
 from app.models.integrations import (

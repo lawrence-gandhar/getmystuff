@@ -36,10 +36,10 @@ from litestar.exceptions import HTTPException
 
 from app.models.graph_designer import (
     BINDING_MODE_IN_LIST,
-    BINDING_MODE_ONE,
-    BINDING_MODE_VALUES,
     NODE_BRANCH,
+    NODE_CREATE_FILE,
     NODE_DO_UNTIL,
+    NODE_DOWNLOAD_FILE,
     NODE_EMAIL,
     NODE_FAILURE,
     NODE_FOR_EACH,
@@ -272,8 +272,8 @@ def referenced_nodes(node: dict) -> Set[str]:
     """
     Every other node this node's settings read a value from.
 
-    Collected in one place because six node types do it in six different fields, and a
-    seventh would otherwise be able to introduce a reference that nothing checks. Public
+    Collected in one place because eight node types do it in eight different fields, and a
+    ninth would otherwise be able to introduce a reference that nothing checks. Public
     because the compiler needs the same answer when it decides what a selection covers.
     """
     from app.models.graph_designer import LOOP_NODE_TYPES
@@ -320,6 +320,21 @@ def referenced_nodes(node: dict) -> Set[str]:
         timer_node = str(data.get("timer_node") or "").strip()
         if timer_node:
             referenced.add(timer_node)
+
+    # The node whose rows a Create File node writes, and the Create File node a Download
+    # File node hands over. Both are references the docstring above is about: a selection
+    # covering only the file node would otherwise read nothing and fail inside the runner
+    # claiming the upstream produced no rows — which is the wrong thing to tell somebody
+    # who simply did not tick that box.
+    if node_type == NODE_CREATE_FILE:
+        source = str((data.get("data") or {}).get("source_node") or "").strip()
+        if source:
+            referenced.add(source)
+
+    if node_type == NODE_DOWNLOAD_FILE:
+        maker = str(data.get("create_file_node") or "").strip()
+        if maker:
+            referenced.add(maker)
 
     # Both variable maps: a node's own `variables`, and an Email node's
     # `variable_bindings`. The second was missing here, which made an Email node's
@@ -563,9 +578,8 @@ async def _run_sql_union(
     )
     from app.services.tool_configs.tool_config_service import (
         validated_tables,
-        validated_tool_sql,
     )
-    from app.utils.sql_guard import MAX_BUILT_SQL_LENGTH, suffixed_placeholders
+    from app.utils.sql_guard import MAX_BUILT_SQL_LENGTH
 
     data = node.get("data") or {}
     label = node_label(node)
@@ -1021,6 +1035,86 @@ async def _run_email(
     return {"outputs": {str(node.get("id")): queued}}
 
 
+async def _run_create_file(
+    node: dict,
+    state: Mapping[str, Any],
+    context: RunContext,
+) -> dict:
+    """
+    Write an earlier node's rows to a file, and put what was written in the outputs.
+
+    The implementation is in ``app/services/file_delivery/nodes/graph_designer_runner.py``
+    — a new module does not put its files inside another feature's folder — so what lives
+    here is the dispatch and the failure translation and nothing else. The same division
+    :func:`_run_email` makes, and the imports are function-scope for the same reason: that
+    module imports polars and pyarrow, and a module-scope import here would put both behind
+    every import of the graph runners, including in tests that never touch a file.
+
+    ``node_label_of`` is handed over so a refusal can say *the output of 'Read orders'*
+    rather than ``n4``. The labels are in ``context.nodes``, which the compiler set — a
+    runner cannot work them out from the state.
+    """
+    from app.services.file_delivery.nodes import graph_designer_runner
+
+    try:
+        written = await graph_designer_runner.run_create_file_node(
+            node,
+            state,
+            user_id=context.user_id,
+            run_ref=str(context.run_id),
+            node_label_of=lambda node_id: node_label(
+                (context.nodes or {}).get(node_id) or {"id": node_id},
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001 — translated into this module's own failure
+        raise NodeFailure(graph_designer_runner.wrap_failure(exc)) from exc
+
+    return {
+        "outputs": {str(node.get("id")): written},
+        "_message": f"{written['row_count']} row(s) written to {written['file_name']}.",
+    }
+
+
+async def _run_download_file(
+    node: dict,
+    state: Mapping[str, Any],
+    context: RunContext,
+) -> dict:
+    """
+    Turn a file this run wrote into a link, and put that link in the outputs.
+
+    **No button here.** A graph has no visitor and no chat, so there is nothing for one to
+    appear in; ``graph_service`` refuses the button fields on this canvas rather than
+    accepting and ignoring them. What a pipeline gets is the thing it can use: an
+    owner-only URL a later Email node can bind ``{{LINK}}`` to.
+
+    The file comes from the **named** Create File node's output, not from the wire. An
+    author may well put other nodes between the two, and a named reference survives that
+    while "the node wired into me" does not — the arrangement a Timer node's
+    ``timer_node`` already uses.
+    """
+    from app.services.file_delivery.nodes import graph_designer_runner
+
+    data = node.get("data") or {}
+    source_id = str(data.get("create_file_node") or "").strip()
+    written = ((state or {}).get("outputs") or {}).get(source_id) or {}
+
+    try:
+        offered = await graph_designer_runner.run_download_file_node(
+            node,
+            state,
+            user_id=context.user_id,
+            file_uuid=str(written.get("file_uuid") or ""),
+        )
+    except Exception as exc:  # noqa: BLE001 — translated into this module's own failure
+        raise NodeFailure(graph_designer_runner.wrap_failure(exc)) from exc
+
+    return {
+        "outputs": {str(node.get("id")): offered},
+        "_message": f"{offered['file_name']} is ready to download.",
+    }
+
+
 async def _run_timer(
     node: dict,
     state: Mapping[str, Any],
@@ -1232,6 +1326,8 @@ _RUNNERS: Dict[str, Callable] = {
     NODE_FOR_EACH: _run_for_each,
     NODE_DO_UNTIL: _run_do_until,
     NODE_EMAIL: _run_email,
+    NODE_CREATE_FILE: _run_create_file,
+    NODE_DOWNLOAD_FILE: _run_download_file,
     NODE_TIMER: _run_timer,
     NODE_WAIT: _run_wait,
     NODE_SUCCESS: _run_success,

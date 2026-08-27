@@ -39,9 +39,8 @@ canvas shows it in red and a person maps it.
 """
 
 import logging
-import uuid as uuid_pkg
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -53,7 +52,6 @@ from app.models.integrations import (
     NODE_CONNECTOR_READ,
     NODE_CONNECTOR_WRITE,
     NODE_SUCCESS,
-    NODE_TRANSFORM,
     NODE_TRIGGER,
     OPERATION_READ,
     OPERATION_WRITE,

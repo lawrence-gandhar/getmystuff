@@ -414,7 +414,7 @@ class TestTheLoopSurvives:
         fired.
         """
         first = await make_trigger(db, flow, due_at=NOON - timedelta(minutes=2))
-        second = await make_trigger(db, flow, due_at=NOON - timedelta(minutes=1))
+        await make_trigger(db, flow, due_at=NOON - timedelta(minutes=1))
 
         original = scheduler._fire
         calls: list = []

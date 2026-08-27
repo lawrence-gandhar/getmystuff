@@ -1137,10 +1137,35 @@ alternative for each, repaired once and then refused, with nothing written.
 
 `static/js/integrations.js` reuses [static/js/graph_canvas.js](../static/js/graph_canvas.js)
 unchanged and unforked — the Bezier geometry, the port anchoring, the id generator and the
-escaping trio. It is 242 stateless lines already serving two canvases; a third is what it is
-for. It must load first, because the module reads `window.GraphCanvas` at module scope. If the
-mapping grid needs a new primitive, that primitive goes in `integrations.js`; only something a
+escaping trio. It is stateless and already serving two canvases; a third is what it is for. It
+must load first, because the module reads `window.GraphCanvas` at module scope. If the mapping
+grid needs a new primitive, that primitive goes in `integrations.js`; only something a
 *fourth* canvas would also want earns a place in the shared file.
+
+**That test has since been applied to something bigger, and it passed.** Selecting several
+steps with a rubber band and moving them as one is wanted by all three canvases, and the
+gesture must not differ between them or a user learns three canvases. It could not go in
+`graph_canvas.js`, because a gesture *is* state and that file promises to hold none — so it
+went into a second shared module, `static/js/graph_selection.js`, which loads between
+`graph_canvas.js` and this one. The rule the two files now split on is: **the geometry and the
+gesture are shared; what a selection means is not.** What a selection means here is still
+local, and it means less than it does on the other two: there is no auto-layout to switch off,
+so a group move is simply an unsaved change.
+
+This canvas needed one thing the others did not before it could adopt any of that. Its node
+drag kept its state in closures inside `startNodeDrag`, which an animation frame cannot reach
+and a delete cannot call off, so it moved to module scope. That was worth doing on its own
+merits: the drag called `renderEdges()` on every `pointermove`, rebuilding **every** connector
+on the canvas — path, delete circle, ✕ and port label — many times a second. Connectors are
+now grouped per edge and updated in place, and ports are measured once per gesture rather than
+once per frame. See [CANVAS_SELECTION.md](CANVAS_SELECTION.md).
+
+**A connection can also be routed by hand**, and here that means one bend rather than four:
+these connectors are single cubic curves with a single control point, so one is what the
+geometry has rather than a cap that was chosen. `GC.geometryWithBend` puts both control points
+at the same place — making the cubic behave as a quadratic — and then solves for the control
+that puts the curve's midpoint exactly on the dragged point. Exactly, not near: the handle has
+to end up under the cursor, and a curve that merely leans toward it reads as a bug.
 
 Copied from `graph_designer.js`: the gesture model — drag-from-port *and* click-then-click,
 with a 4px threshold so a click is not a tiny drag — the midpoint delete buttons, the endpoint
@@ -1172,6 +1197,11 @@ Each of these is a decision, not an oversight.
   project does not have.
 * **No dead-letter table.** `run_records` where the outcome is a retryable failure already
   holds the full payload; a second table would be a copy that can disagree.
+* **No auto-layout, and so nothing to hand back.** The other two canvases arrange themselves
+  and record whether somebody has overridden that; this one has always kept exactly what was
+  dragged. A group move here therefore marks the drawing unsaved and nothing more — there is
+  no `layout` field and no **Tidy up** button, and the absence is why the shared selection
+  module's commit callback does less on this canvas than on the other two.
 * **No JSONPath and no JSON Schema.** A restricted path grammar and the operation's declared
   field list, respectively — see §Mapping and validation.
 * **No inline webhook execution.** Fast-ack then queue, always — see §Webhooks.

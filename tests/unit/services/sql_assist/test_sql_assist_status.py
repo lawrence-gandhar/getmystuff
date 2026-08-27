@@ -20,7 +20,6 @@ from litestar.exceptions import HTTPException
 
 from app.services.sql_assist import sql_assist_service as svc
 from tests.unit.services.sql_assist.conftest import (
-    CUSTOMERS,
     ORDERS,
     configuration as _configuration,
 )

@@ -34,9 +34,11 @@
 
     <p class="text-muted small mb-3">
         Design guided conversation flows — a Start trigger, branching logic, menus, and
-        prompts. A flow is built here and then attached to one agent from that agent's
-        settings; only <strong>Active</strong> flows that aren't attached elsewhere can be
-        picked. Making an attached flow a draft leaves it attached but stops the agent
+        prompts. An <strong>Agent</strong> flow is built here and then attached to one agent
+        from that agent's settings; only Active agent flows that aren't attached elsewhere can
+        be picked. A <strong>Generic</strong> flow is never attached to an agent: it is a child
+        another flow runs with a <em>Run Flow</em> block, so a step you need in three places is
+        drawn once. Making an attached flow a draft leaves it attached but stops the agent
         running it.
     </p>
 
@@ -83,6 +85,21 @@
                         required
                         autocomplete="off"
                     >
+
+                    <label for="newFlowKind" class="form-label fw-semibold mt-3">
+                        What is it for?
+                    </label>
+                    <select id="newFlowKind" name="kind" class="form-select">
+                        <option value="agent" selected>Agent flow — a chatbot's own conversation</option>
+                        <option value="generic">Generic flow — a child another flow can run</option>
+                    </select>
+                    <p class="form-text mb-0">
+                        An <strong>agent flow</strong> is attached to one agent and drives its
+                        conversation. A <strong>generic flow</strong> is never attached to an
+                        agent — it exists to be run by another flow's <em>Run Flow</em> block,
+                        which is how you build a step once and use it in several places. You can
+                        change this later.
+                    </p>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>

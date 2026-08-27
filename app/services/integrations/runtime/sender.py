@@ -34,7 +34,7 @@ operation than papered over on every call.
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Callable, Mapping, Optional
+from typing import Any, Callable, Optional
 
 import httpx
 

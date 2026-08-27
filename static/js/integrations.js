@@ -43,6 +43,15 @@ var IntegrationsCanvas = (function () {
      *  canvas uses, for the same reason. */
     var DRAG_THRESHOLD_PX = 4;
 
+    /** How many bends a connection can be routed through by hand. One, here, and unlike the
+     *  two top-down canvases that is a property of the geometry rather than a chosen cap:
+     *  these connectors are curves, and one control point is what a single curve has. A
+     *  second bend would mean splitting it into two curves, which is a different drawing. */
+    var MAX_EDGE_WAYPOINTS = 1;
+
+    /** How near a line-up a dragged bend snaps. */
+    var WAYPOINT_SNAP_PX = 6;
+
     /** Where a new step lands when the palette adds one. Stepped so several added in a
      *  row do not stack exactly on top of each other and look like one. */
     var DROP_ORIGIN = { x: 160, y: 120 };
@@ -69,6 +78,13 @@ var IntegrationsCanvas = (function () {
         connections: [],
         triggers: [],
         selectedId: null,
+        // The move selection: which steps and connectors the next drag carries, and what a
+        // box, Ctrl-click, Ctrl+A and Select all add to. Objects used as sets.
+        //
+        // Separate from `selectedId`, which is the one step whose settings panel is open —
+        // at most one, ever. This is a different question with a different answer count.
+        // Never saved: the graph payload does not include it.
+        selection: { nodes: {}, edges: {} },
         dirty: false,
         dropCount: 0,
         genId: GC.makeIdGenerator(),
@@ -81,6 +97,10 @@ var IntegrationsCanvas = (function () {
     };
 
     var el = {};
+
+    // The shared selection controller — the box, the multi-selection and the group move.
+    // Built in `init`, because it needs the canvas elements.
+    var selection = null;
 
     // =====================================================================
     // BOOT
@@ -118,7 +138,54 @@ var IntegrationsCanvas = (function () {
 
         var graph = readJson("intGraphData", { nodes: [], edges: [] });
         state.nodes = Array.isArray(graph.nodes) ? graph.nodes : [];
-        state.edges = Array.isArray(graph.edges) ? graph.edges : [];
+        state.edges = (Array.isArray(graph.edges) ? graph.edges : []).map(function (edge) {
+            var bends = readWaypoints(edge.waypoints);
+            if (bends.length) { edge.waypoints = bends; } else { delete edge.waypoints; }
+            return edge;
+        });
+
+        // Before `render`, which paints the selection as part of drawing each step.
+        selection = window.GraphSelection.create({
+            wrapperEl: el.wrap,
+            // The node layer, not the wrapper. On this canvas it is also the origin every
+            // anchor is measured against (`GC.portAnchor(el.nodes, …)`), so a box placed at
+            // these coordinates lands exactly on the steps it is selecting — and, unlike
+            // the other two canvases, this layer does not scroll, which is precisely why
+            // measuring the layer rather than the wrapper is the rule that works for all
+            // three.
+            layerEl: el.nodes,
+            edgesEl: el.edges,
+            nodeElementId: function (id) { return "int-node-" + id; },
+            edgeElementId: function (id) { return "int-edge-group-" + id; },
+            selection: state.selection,
+            getNodes: function () { return state.nodes; },
+            getSelectableEdges: function () { return state.edges; },
+            // Sampled rather than exact: these connectors are cubic curves, not runs of
+            // corner points, so nine points along one is what the box is tested against.
+            // For a curve whose control reach is floored at 40px that is well inside the
+            // tolerance a box has anyway.
+            edgeRoute: function (edge) {
+                var from = portAnchorFor(edge.source, sourcePortOf(edge));
+                var to = targetAnchorFor(edge.target);
+                if (!from || !to) { return null; }
+                var g = GC.geometry(from, to);
+                var points = [];
+                for (var i = 0; i <= 8; i += 1) { points.push(GC.pointAt(g, i / 8)); }
+                return points;
+            },
+            nodeWidth: function () { return 210; },
+            threshold: DRAG_THRESHOLD_PX,
+            // No box while a port is armed for click-then-click connecting: a click on the
+            // background is the way out of that, and turning the press into a box would
+            // strand the user there.
+            isBusy: function () { return !!(state.armedPort || nodeDrag); },
+            classes: { node: "int-node-multi", edge: "int-edge-multi" },
+            onSelectionChange: updateSelectAllButton,
+            onGroupMoveBegin: onGroupMoveBegin,
+            onGroupMoveFrame: onGroupMoveFrame,
+            onGroupMoveEnd: onGroupMoveEnd,
+        });
+        selection.attach();
 
         buildPalette();
         buildSchedule();
@@ -247,7 +314,13 @@ var IntegrationsCanvas = (function () {
         }).join("");
 
         return (
-            '<div class="int-node' + (state.selectedId === node.id ? " int-selected" : "") + '" ' +
+            '<div class="int-node' +
+            (state.selectedId === node.id ? " int-selected" : "") +
+            // Read from state, never only set on the element at gesture time: this layer is
+            // rebuilt from strings by `renderNodes`, so a class applied by a click would
+            // vanish the next time anything re-rendered — including on every run frame,
+            // which repaints the statuses.
+            (selection && selection.marksNode(node.id) ? " int-node-multi" : "") + '" ' +
             'id="int-node-' + GC.escapeAttr(node.id) + '" ' +
             'data-int-node="' + GC.escapeAttr(node.id) + '" ' +
             'style="left:' + (node.position && node.position.x || 0) + "px;top:" +
@@ -302,52 +375,179 @@ var IntegrationsCanvas = (function () {
 
     function renderEdges() {
         while (el.edges.firstChild) { el.edges.removeChild(el.edges.firstChild); }
+        state.edges.forEach(renderEdge);
+    }
 
-        state.edges.forEach(function (edge) {
-            var from = portAnchorFor(edge.source, sourcePortOf(edge));
-            var to = targetAnchorFor(edge.target);
-            if (!from || !to) { return; }
+    /** One connector: its curve, its delete control and its port label, in a group.
+     *
+     *  Grouped, and each child given a class, so a drag can move an existing connector by
+     *  writing four attributes instead of rebuilding the whole layer. It used to redraw
+     *  **every** edge on the canvas on every pointermove — see `runNodeDragFrame`. */
+    function renderEdge(edge) {
+        var g = GC.svg("g");
+        g.setAttribute("id", "int-edge-group-" + edge.id);
+        g.setAttribute("class", "int-edge-group" +
+            (selection && selection.marksEdge(edge.id) ? " int-edge-multi" : ""));
 
-            var g = GC.geometry(from, to);
-            var path = GC.svg("path");
-            path.setAttribute("d", GC.pathD(g));
-            path.setAttribute("class", edgeClass(edge));
-            el.edges.appendChild(path);
-
-            // The delete control sits at the curve's midpoint, which is where somebody
-            // looking to remove a connection points. A whole-path click target would
-            // fight with dragging a step that happens to sit under the curve.
-            var mid = GC.pointAt(g, 0.5);
-            var circle = GC.svg("circle");
-            circle.setAttribute("cx", mid.x);
-            circle.setAttribute("cy", mid.y);
-            circle.setAttribute("r", 8);
-            circle.setAttribute("class", "int-edge-delete");
-            circle.addEventListener("click", function () { removeEdge(edge.id); });
-            el.edges.appendChild(circle);
-
-            var cross = GC.svg("text");
-            cross.setAttribute("x", mid.x);
-            cross.setAttribute("y", mid.y + 4);
-            cross.setAttribute("text-anchor", "middle");
-            cross.setAttribute("class", "int-edge-delete-x");
-            cross.textContent = "×";
-            el.edges.appendChild(cross);
-
-            // The port's name, when it is not the plain one. Which branch a connector
-            // leaves by is the whole meaning of a validate or a branch step, and reading
-            // it off the drawing beats opening two panels to find out.
-            var port = sourcePortOf(edge);
-            if (port && port !== "default") {
-                var label = GC.svg("text");
-                label.setAttribute("x", mid.x);
-                label.setAttribute("y", mid.y - 12);
-                label.setAttribute("text-anchor", "middle");
-                label.setAttribute("class", "int-edge-label");
-                label.textContent = port;
-                el.edges.appendChild(label);
-            }
+        // An invisible fat twin of the curve, and the only part of it wide enough to grab.
+        // The line is 2px; dragging it to bend it would otherwise mean landing the cursor
+        // inside two pixels.
+        var hit = GC.svg("path");
+        hit.setAttribute("class", "int-edge-hit");
+        hit.addEventListener("pointerdown", function (event) { startBend(edge.id, event); });
+        hit.addEventListener("dblclick", function (event) {
+            event.stopPropagation();
+            straightenEdge(edge.id);
         });
+        g.appendChild(hit);
+
+        var path = GC.svg("path");
+        path.setAttribute("class", "int-edge-path " + edgeClass(edge));
+        g.appendChild(path);
+
+        // The bend handle, when there is one.
+        if (waypointsOf(edge).length) {
+            var handle = GC.svg("circle");
+            handle.setAttribute("class", "int-edge-waypoint");
+            handle.setAttribute("r", 4);
+            g.appendChild(handle);
+        }
+
+        // The delete control sits at the curve's midpoint, which is where somebody
+        // looking to remove a connection points. A whole-path click target would
+        // fight with dragging a step that happens to sit under the curve.
+        var circle = GC.svg("circle");
+        circle.setAttribute("r", 8);
+        circle.setAttribute("class", "int-edge-delete");
+        circle.addEventListener("click", function () { removeEdge(edge.id); });
+        g.appendChild(circle);
+
+        var cross = GC.svg("text");
+        cross.setAttribute("text-anchor", "middle");
+        cross.setAttribute("class", "int-edge-delete-x");
+        cross.textContent = "×";
+        g.appendChild(cross);
+
+        // The port's name, when it is not the plain one. Which branch a connector
+        // leaves by is the whole meaning of a validate or a branch step, and reading
+        // it off the drawing beats opening two panels to find out.
+        var port = sourcePortOf(edge);
+        if (port && port !== "default") {
+            var label = GC.svg("text");
+            label.setAttribute("text-anchor", "middle");
+            label.setAttribute("class", "int-edge-label");
+            label.textContent = port;
+            g.appendChild(label);
+        }
+
+        el.edges.appendChild(g);
+        updateEdgeGeometry(edgeChrome(edge));
+    }
+
+    /** The elements one connector's geometry is written to, resolved once. */
+    function resolveEdgeChrome(record) {
+        var group = document.getElementById("int-edge-group-" + record.edge.id);
+        record.group = group;
+        record.path = group ? group.querySelector(".int-edge-path") : null;
+        record.hit = group ? group.querySelector(".int-edge-hit") : null;
+        record.waypointHandle = group ? group.querySelector(".int-edge-waypoint") : null;
+        record.deleteBtn = group ? group.querySelector(".int-edge-delete") : null;
+        record.deleteCross = group ? group.querySelector(".int-edge-delete-x") : null;
+        record.label = group ? group.querySelector(".int-edge-label") : null;
+        return record;
+    }
+
+    function edgeChrome(edge) {
+        return resolveEdgeChrome({ edge: edge });
+    }
+
+    /** Move an already-drawn connector onto where its steps are now.
+     *
+     *  A connector with an end that cannot be measured is emptied rather than removed, so
+     *  its group and its listeners survive until the step comes back. */
+    function updateEdgeGeometry(record) {
+        if (!record.group) { return; }
+
+        var from = portAnchorFor(record.edge.source, sourcePortOf(record.edge));
+        var to = targetAnchorFor(record.edge.target);
+
+        if (!from || !to) {
+            record.group.setAttribute("visibility", "hidden");
+            return;
+        }
+        record.group.removeAttribute("visibility");
+
+        var g = GC.geometryWithBend(from, to, waypointsOf(record.edge)[0]);
+        var mid = GC.pointAt(g, 0.5);
+        var d = GC.pathD(g);
+
+        if (record.path) { record.path.setAttribute("d", d); }
+        if (record.hit) { record.hit.setAttribute("d", d); }
+        // Drawn at the stored point, which for these curves is also exactly the midpoint —
+        // `geometryWithBend` puts the curve through it.
+        if (record.waypointHandle) {
+            var bend = waypointsOf(record.edge)[0];
+            if (bend) {
+                record.waypointHandle.setAttribute("cx", bend.x);
+                record.waypointHandle.setAttribute("cy", bend.y);
+            }
+        }
+        if (record.deleteBtn) {
+            record.deleteBtn.setAttribute("cx", mid.x);
+            record.deleteBtn.setAttribute("cy", mid.y);
+        }
+        if (record.deleteCross) {
+            record.deleteCross.setAttribute("x", mid.x);
+            record.deleteCross.setAttribute("y", mid.y + 4);
+        }
+        if (record.label) {
+            record.label.setAttribute("x", mid.x);
+            record.label.setAttribute("y", mid.y - 12);
+        }
+    }
+
+    /** The connectors a move of these steps will disturb, resolved ready to repaint. */
+    function chromeForMovingNodes(movingIds) {
+        var moving = {};
+        movingIds.forEach(function (id) { moving[id] = true; });
+
+        return state.edges
+            .filter(function (edge) { return moving[edge.source] || moving[edge.target]; })
+            .map(edgeChrome);
+    }
+
+    /** A connection's hand-placed bends. */
+    function waypointsOf(edge) {
+        if (!edge) { return []; }
+        return Array.isArray(edge.waypoints) ? edge.waypoints : [];
+    }
+
+    /** Bends read off a stored drawing, keeping only the ones that are usable.
+     *
+     *  The save schema takes this drawing as an opaque object, which is what let `waypoints`
+     *  be added without a schema change — and means this is where a hand-edited or older
+     *  document is made safe. A bend that is not two finite numbers is dropped rather than
+     *  drawn: `NaN` in a coordinate fails silently in the SVG and then again at the
+     *  database, which refuses it as JSON. */
+    function readWaypoints(raw) {
+        if (!Array.isArray(raw)) { return []; }
+
+        return raw
+            .filter(function (point) {
+                return point && isFinite(point.x) && isFinite(point.y);
+            })
+            .slice(0, MAX_EDGE_WAYPOINTS)
+            .map(function (point) {
+                return { x: Math.max(0, Number(point.x)), y: Math.max(0, Number(point.y)) };
+            });
+    }
+
+    /** The curve one connection runs along, hand-routed or not. */
+    function edgeGeometry(edge) {
+        var from = portAnchorFor(edge.source, sourcePortOf(edge));
+        var to = targetAnchorFor(edge.target);
+        if (!from || !to) { return null; }
+        return GC.geometryWithBend(from, to, waypointsOf(edge)[0]);
     }
 
     function edgeClass(edge) {
@@ -364,17 +564,68 @@ var IntegrationsCanvas = (function () {
         return edge.source_port || edge.sourcePort || "default";
     }
 
-    function portAnchorFor(nodeId, port) {
+    // A drag measures each port it needs once and then keeps the result as an offset from
+    // its step's stored position. Measuring per frame means a `getBoundingClientRect` after
+    // the frame has already written `style.left`, which forces the browser to lay the whole
+    // canvas out again — once per port, per connector, per pointermove. Taking the offset
+    // as `anchor - node.position`, both sampled at the same instant, keeps it exact: the
+    // ports' half-pixel placement lands inside the offset rather than being rounded away.
+    var dragAnchors = null;
+
+    function measuredAnchor(nodeId, selector) {
         var nodeEl = document.getElementById("int-node-" + nodeId);
         if (!nodeEl) { return null; }
-        var selector = '[data-int-port="' + GC.cssEscape(port) + '"]';
         return GC.portAnchor(el.nodes, nodeEl, selector);
     }
 
+    function cachedAnchor(nodeId, selector) {
+        if (!dragAnchors) { return measuredAnchor(nodeId, selector); }
+
+        var key = nodeId + "|" + selector;
+
+        if (!dragAnchors.moving[nodeId]) {
+            if (!(key in dragAnchors.frozen)) {
+                dragAnchors.frozen[key] = measuredAnchor(nodeId, selector);
+            }
+            return dragAnchors.frozen[key];
+        }
+
+        var node = findNode(nodeId);
+        if (!node) { return null; }
+        var x = (node.position && node.position.x) || 0;
+        var y = (node.position && node.position.y) || 0;
+
+        if (!(key in dragAnchors.offsets)) {
+            var measured = measuredAnchor(nodeId, selector);
+            dragAnchors.offsets[key] = measured
+                ? { dx: measured.x - x, dy: measured.y - y }
+                : null;
+        }
+
+        var offset = dragAnchors.offsets[key];
+        return offset ? { x: x + offset.dx, y: y + offset.dy } : null;
+    }
+
+    /** Open the anchor cache for a drag, and warm it while the canvas is still settled. */
+    function beginDragAnchors(movingIds, chrome) {
+        dragAnchors = { moving: {}, offsets: {}, frozen: {} };
+        movingIds.forEach(function (id) { dragAnchors.moving[id] = true; });
+        chrome.forEach(function (record) {
+            portAnchorFor(record.edge.source, sourcePortOf(record.edge));
+            targetAnchorFor(record.edge.target);
+        });
+    }
+
+    function endDragAnchors() {
+        dragAnchors = null;
+    }
+
+    function portAnchorFor(nodeId, port) {
+        return cachedAnchor(nodeId, '[data-int-port="' + GC.cssEscape(port) + '"]');
+    }
+
     function targetAnchorFor(nodeId) {
-        var nodeEl = document.getElementById("int-node-" + nodeId);
-        if (!nodeEl) { return null; }
-        return GC.portAnchor(el.nodes, nodeEl, ".int-target");
+        return cachedAnchor(nodeId, ".int-target");
     }
 
     // =====================================================================
@@ -387,6 +638,10 @@ var IntegrationsCanvas = (function () {
     }
 
     function onCanvasClick(event) {
+        // The click that trails a box or a group move must not be read as a click on the
+        // canvas, or the gesture would undo itself.
+        if (selection && selection.swallowedClick()) { return; }
+
         var portEl = event.target.closest("[data-int-port]");
         if (portEl) {
             armPort(portEl.getAttribute("data-int-node"), portEl.getAttribute("data-int-port"));
@@ -436,41 +691,314 @@ var IntegrationsCanvas = (function () {
         }
 
         var nodeEl = event.target.closest("[data-int-node]");
-        if (nodeEl) { startNodeDrag(event, nodeEl); }
+        if (!nodeEl) { return; }
+
+        // Offered to the selection first. It takes the press only for a Ctrl-click or a
+        // real group move; anything else falls through to the drag this canvas has always
+        // done.
+        var nodeId = nodeEl.getAttribute("data-int-node");
+        if (selection && selection.beginNodePress(nodeId, event)) { return; }
+        startNodeDrag(event, nodeEl);
     }
+
+    // The drag in progress, and its pending repaint. Held here rather than in closures
+    // inside `startNodeDrag` for two reasons: one animation frame has to be able to find
+    // the drag that scheduled it, and a step deleted mid-drag has to be able to call the
+    // gesture off.
+    var nodeDrag = null;
+    var nodeDragFrame = null;
 
     function startNodeDrag(event, nodeEl) {
         var nodeId = nodeEl.getAttribute("data-int-node");
         var node = findNode(nodeId);
         if (!node) { return; }
 
-        var startX = event.clientX;
-        var startY = event.clientY;
-        var originX = (node.position && node.position.x) || 0;
-        var originY = (node.position && node.position.y) || 0;
-        var moved = false;
+        nodeDrag = {
+            nodeId: nodeId,
+            nodeEl: nodeEl,
+            startX: event.clientX,
+            startY: event.clientY,
+            clientX: event.clientX,
+            clientY: event.clientY,
+            originX: (node.position && node.position.x) || 0,
+            originY: (node.position && node.position.y) || 0,
+            moved: false,
+            // The connectors this move disturbs, resolved now while the canvas is settled.
+            chrome: chromeForMovingNodes([nodeId])
+        };
+        beginDragAnchors([nodeId], nodeDrag.chrome);
 
-        function onMove(moveEvent) {
-            var dx = moveEvent.clientX - startX;
-            var dy = moveEvent.clientY - startY;
+        document.addEventListener("pointermove", onNodeDragMove);
+        document.addEventListener("pointerup", onNodeDragEnd);
+    }
 
-            if (!moved && Math.abs(dx) + Math.abs(dy) < DRAG_THRESHOLD_PX) { return; }
-            moved = true;
+    /** A pointermove during a step drag: record where the pointer is, and ask for a frame.
+     *
+     *  Nothing is drawn here. pointermove fires faster than the screen updates, so most of
+     *  the work done inline was thrown away unseen — and what it threw away was a redraw
+     *  of every connector on the canvas, not just the ones that had moved. */
+    function onNodeDragMove(event) {
+        if (!nodeDrag) { return; }
 
-            node.position = { x: Math.max(0, originX + dx), y: Math.max(0, originY + dy) };
-            nodeEl.style.left = node.position.x + "px";
-            nodeEl.style.top = node.position.y + "px";
-            renderEdges();
+        if (!nodeDrag.moved) {
+            var travelled = Math.abs(event.clientX - nodeDrag.startX) +
+                Math.abs(event.clientY - nodeDrag.startY);
+            if (travelled < DRAG_THRESHOLD_PX) { return; }
+            nodeDrag.moved = true;
         }
 
-        function onUp() {
-            document.removeEventListener("pointermove", onMove);
-            document.removeEventListener("pointerup", onUp);
-            if (moved) { markDirty(); }
+        nodeDrag.clientX = event.clientX;
+        nodeDrag.clientY = event.clientY;
+
+        if (nodeDragFrame === null) {
+            nodeDragFrame = window.requestAnimationFrame(runNodeDragFrame);
+        }
+    }
+
+    function runNodeDragFrame() {
+        nodeDragFrame = null;
+        if (!nodeDrag || !nodeDrag.moved) { return; }
+
+        var node = findNode(nodeDrag.nodeId);
+        if (!node) { return; }
+
+        var dx = nodeDrag.clientX - nodeDrag.startX;
+        var dy = nodeDrag.clientY - nodeDrag.startY;
+        node.position = {
+            x: Math.max(0, nodeDrag.originX + dx),
+            y: Math.max(0, nodeDrag.originY + dy)
+        };
+        nodeDrag.nodeEl.style.left = node.position.x + "px";
+        nodeDrag.nodeEl.style.top = node.position.y + "px";
+
+        nodeDrag.chrome.forEach(updateEdgeGeometry);
+    }
+
+    function onNodeDragEnd() {
+        var moved = nodeDrag && nodeDrag.moved;
+        endNodeDrag();
+        if (moved) { markDirty(); }
+    }
+
+    /** Tear the drag down without committing it. Also called from the deletion paths: the
+     *  drag holds resolved elements for the connectors it repaints, and removing a step or
+     *  a connector detaches some of them. */
+    function endNodeDrag() {
+        if (nodeDragFrame !== null) {
+            window.cancelAnimationFrame(nodeDragFrame);
+            nodeDragFrame = null;
+        }
+        nodeDrag = null;
+        endDragAnchors();
+        document.removeEventListener("pointermove", onNodeDragMove);
+        document.removeEventListener("pointerup", onNodeDragEnd);
+    }
+
+    // =====================================================================
+    // BENDING A CONNECTION
+    //
+    // Dragging a connection routes it by hand: the curve passes through the point it was
+    // dragged to. One bend, because one curve has one control point — see
+    // `GC.geometryWithBend`, which is where the arithmetic lives.
+    //
+    // The bend is stored on the connection as `waypoints`, in canvas coordinates, the same
+    // key and the same shape the other two canvases use. Absolute rather than relative to
+    // the two ends, because a bend exists to dodge something on the canvas.
+    // =====================================================================
+
+    var bending = null;
+    var bendFrame = null;
+    var suppressEdgeClick = false;
+
+    /** Whether a press on a connection is a bend, a group move, or nothing. */
+    function edgeGrabIntent(edgeId, event) {
+        if (event.button !== 0) { return "ignore"; }
+        // Modifiers belong to the selection: the click that follows extends it.
+        if (event.shiftKey || event.ctrlKey || event.metaKey) { return "ignore"; }
+        if (nodeDrag || state.armedPort) { return "ignore"; }
+        if (selection && selection.isMulti() && selection.hasEdge(edgeId)) { return "group"; }
+        return "bend";
+    }
+
+    function startBend(edgeId, event) {
+        var intent = edgeGrabIntent(edgeId, event);
+        if (intent === "ignore") { return; }
+
+        var edge = findEdge(edgeId);
+        if (!edge) { return; }
+
+        if (intent === "group") {
+            // The selection owns this press. It needs a step to hang the move on, and either
+            // end will do — the connection being in the selection brings both along.
+            selection.beginNodePress(edge.source, event);
+            return;
         }
 
-        document.addEventListener("pointermove", onMove);
-        document.addEventListener("pointerup", onUp);
+        event.preventDefault();
+        event.stopPropagation();
+
+        // Starting from where the curve already is, so it does not jump when taken hold of.
+        var geometry = edgeGeometry(edge);
+        if (!geometry) { return; }
+        // Read before the bend is written, not after: this is what decides whether a press
+        // that turns out to be a click leaves a bend behind on a connection that never had
+        // one.
+        var hadBend = waypointsOf(edge).length > 0;
+        var start = waypointsOf(edge)[0] || GC.pointAt(geometry, 0.5);
+
+        edge.waypoints = [{ x: start.x, y: start.y }];
+        renderEdges();
+
+        bending = {
+            edgeId: edgeId,
+            hadBend: hadBend,
+            startX: event.clientX,
+            startY: event.clientY,
+            clientX: event.clientX,
+            clientY: event.clientY,
+            moved: false,
+            chrome: edgeChrome(edge)
+        };
+        // Both ends are still, so the anchor cache freezes them and the gesture reads nothing.
+        beginDragAnchors([], [bending.chrome]);
+
+        document.addEventListener("pointermove", onBendMove);
+        document.addEventListener("pointerup", onBendEnd);
+    }
+
+    function onBendMove(event) {
+        if (!bending) { return; }
+
+        if (!bending.moved) {
+            var travelled = Math.abs(event.clientX - bending.startX) +
+                Math.abs(event.clientY - bending.startY);
+            if (travelled < DRAG_THRESHOLD_PX) { return; }
+            bending.moved = true;
+        }
+
+        bending.clientX = event.clientX;
+        bending.clientY = event.clientY;
+
+        if (bendFrame === null) {
+            bendFrame = window.requestAnimationFrame(runBendFrame);
+        }
+    }
+
+    function runBendFrame() {
+        bendFrame = null;
+        if (!bending || !bending.moved) { return; }
+
+        var edge = findEdge(bending.edgeId);
+        if (!edge) { return; }
+
+        var at = canvasPoint(bending.clientX, bending.clientY);
+        var from = portAnchorFor(edge.source, sourcePortOf(edge));
+        var to = targetAnchorFor(edge.target);
+        var xs = [];
+        var ys = [];
+        if (from) { xs.push(from.x); ys.push(from.y); }
+        if (to) { xs.push(to.x); ys.push(to.y); }
+
+        edge.waypoints = [{
+            x: Math.max(0, GC.snapToAny(at.x, xs, WAYPOINT_SNAP_PX)),
+            y: Math.max(0, GC.snapToAny(at.y, ys, WAYPOINT_SNAP_PX))
+        }];
+        updateEdgeGeometry(bending.chrome);
+    }
+
+    function onBendEnd() {
+        var gesture = bending;
+        if (bendFrame !== null) {
+            window.cancelAnimationFrame(bendFrame);
+            bendFrame = null;
+        }
+        bending = null;
+        endDragAnchors();
+        document.removeEventListener("pointermove", onBendMove);
+        document.removeEventListener("pointerup", onBendEnd);
+
+        if (!gesture) { return; }
+
+        var edge = findEdge(gesture.edgeId);
+        if (!edge) { return; }
+
+        // A press that never moved is a click. The bend that was put in for it comes back
+        // out, unless the connection already had one.
+        if (!gesture.moved) {
+            if (!gesture.hadBend) {
+                delete edge.waypoints;
+                renderEdges();
+            }
+            return;
+        }
+
+        markDirty();
+        renderEdges();
+
+        suppressEdgeClick = true;
+        window.setTimeout(function () { suppressEdgeClick = false; }, 0);
+    }
+
+    /** Throw the bend away, so the connection is drawn for you again. */
+    function straightenEdge(edgeId) {
+        var edge = findEdge(edgeId);
+        if (!edge || !waypointsOf(edge).length) { return; }
+
+        delete edge.waypoints;
+        markDirty();
+        renderEdges();
+    }
+
+    /** Where a client point is, in the coordinates the steps and the bends are stored in.
+     *
+     *  This layer does not scroll — unlike the other two canvases — so there is no scroll
+     *  offset to add. Measuring the layer rather than the wrapper is what makes one rule
+     *  work for all three. */
+    function canvasPoint(clientX, clientY) {
+        var rect = el.nodes.getBoundingClientRect();
+        return { x: clientX - rect.left, y: clientY - rect.top };
+    }
+
+    // =====================================================================
+    // MOVING SEVERAL STEPS AT ONCE
+    //
+    // The gesture is in static/js/graph_selection.js, shared with the Graph Designer and
+    // the Flow Builder. What is here is only what a group move means on this canvas.
+    // =====================================================================
+
+    var groupChrome = null;
+
+    function onGroupMoveBegin(ids) {
+        groupChrome = chromeForMovingNodes(ids);
+        beginDragAnchors(ids, groupChrome);
+    }
+
+    function onGroupMoveFrame() {
+        if (groupChrome) { groupChrome.forEach(updateEdgeGeometry); }
+    }
+
+    function onGroupMoveEnd(ids, committed) {
+        endDragAnchors();
+        groupChrome = null;
+        // No auto-layout on this canvas, so there is no "manual" to switch to — a move is
+        // simply an unsaved change.
+        if (committed) { markDirty(); }
+    }
+
+    /** The Select all button doubles as Clear, and says which it is. */
+    function updateSelectAllButton() {
+        var btn = document.getElementById("intSelectAllBtn");
+        if (!btn) { return; }
+
+        var count = selection.count();
+        btn.classList.toggle("btn-outline-primary", count > 0);
+        btn.classList.toggle("btn-outline-secondary", count === 0);
+        btn.innerHTML = count > 0
+            ? '<i class="las la-times-circle"></i> Clear (' + count + ")"
+            : '<i class="las la-object-group"></i> Select all';
+        btn.title = count > 0
+            ? "Clear the move selection"
+            : "Select every step and connection, so they can be moved together";
     }
 
     function startConnectorDrag(event, portEl) {
@@ -566,9 +1094,19 @@ var IntegrationsCanvas = (function () {
     }
 
     function removeEdge(edgeId) {
+        endNodeDrag();
+        if (selection) { selection.abandon(); }
         state.edges = state.edges.filter(function (edge) { return edge.id !== edgeId; });
+        if (selection) { selection.prune(); }
         markDirty();
         render();
+    }
+
+    function findEdge(edgeId) {
+        for (var i = 0; i < state.edges.length; i += 1) {
+            if (state.edges[i].id === edgeId) { return state.edges[i]; }
+        }
+        return null;
     }
 
     function findNode(nodeId) {
@@ -823,6 +1361,8 @@ var IntegrationsCanvas = (function () {
     }
 
     function deleteNode(nodeId) {
+        endNodeDrag();
+        if (selection) { selection.abandon(); }
         state.nodes = state.nodes.filter(function (n) { return n.id !== nodeId; });
         // Edges to or from a deleted step go with it. Left behind they would be edges
         // naming a missing step, which the validator refuses — so the drawing would become
@@ -832,6 +1372,9 @@ var IntegrationsCanvas = (function () {
         });
 
         state.selectedId = null;
+        // Re-derived rather than one key deleted: a step takes its connectors with it, so a
+        // stale connector id can outlive the step deletion that caused it.
+        if (selection) { selection.prune(); }
         markDirty();
         render();
         bootstrap.Offcanvas.getOrCreateInstance(document.getElementById("intProperties")).hide();
@@ -990,6 +1533,13 @@ var IntegrationsCanvas = (function () {
         document.getElementById("intPublishBtn").addEventListener("click", publish);
         document.getElementById("intRunBtn").addEventListener("click", function () { run("live"); });
         document.getElementById("intDryRunBtn").addEventListener("click", function () { run("dry_run"); });
+        document.getElementById("intSelectAllBtn").addEventListener("click", function () {
+            if (selection.count()) { selection.clear(); } else { selection.selectAll(); }
+            // The canvas has to hold focus for Ctrl+A and Escape to reach it, and somebody
+            // who has just pressed this button is about to want both.
+            el.wrap.focus();
+        });
+        updateSelectAllButton();
         el.stopBtn.addEventListener("click", stop);
     }
 

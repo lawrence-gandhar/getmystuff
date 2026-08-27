@@ -107,4 +107,18 @@ psycopg[binary,pool]
 # --------------------------------------------------------------------------
 polars
 
+# --------------------------------------------------------------------------
+# File nodes — app/services/file_delivery/
+#
+# polars' engine for .xlsx, the same relationship openpyxl has to pandas above:
+# `DataFrame.write_excel` raises ModuleNotFoundError without it, and it is not a
+# transitive dependency of polars. openpyxl being installed does not cover this —
+# polars writes Excel through xlsxwriter only.
+#
+# Pure Python and small, so it costs the image almost nothing. See
+# documentations/FILE_NODES.md for why the file nodes write through polars rather
+# than through downloader_agents' stdlib-csv and openpyxl writers.
+# --------------------------------------------------------------------------
+xlsxwriter
+
 

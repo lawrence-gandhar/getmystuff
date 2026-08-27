@@ -40,13 +40,12 @@ be saved.
 import asyncio
 import logging
 import uuid as uuid_pkg
-from typing import Any, AsyncIterator, Dict, List, Mapping, Optional, Sequence, Set
+from typing import Any, AsyncIterator, Dict, List, Mapping, Optional, Sequence
 
 from litestar.exceptions import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.graph_designer import (
-    NODE_HUMAN,
     NODE_SQL,
     NODE_SQL_UNION,
     NODE_TOOL_CONFIG,

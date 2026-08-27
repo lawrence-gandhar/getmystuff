@@ -10,7 +10,7 @@ true quietly.
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict
 
 import pytest
 

@@ -20,7 +20,6 @@ populates once at creation and rotation and never again. A test pins that
 ``TriggerView`` has no field named for the ciphertext column.
 """
 
-from typing import Optional
 
 from pydantic import Field
 

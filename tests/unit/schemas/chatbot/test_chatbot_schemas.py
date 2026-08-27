@@ -68,6 +68,7 @@ class _Turn:
         self.message = ""
         self.response_time_ms = 0
         self.download = None
+        self.file_download = None
         self.__dict__.update(kwargs)
 
 
@@ -500,6 +501,69 @@ class TestTurnResponse:
         assert ChatbotTurnResponse.from_turn(
             _Turn(status="error", message="x", response_time_ms=99)
         ).payload()["response_time_ms"] == 99
+
+
+class TestTheDownloadButtonPayload:
+    """
+    The button a Download File block offers, on its way to the widget.
+
+    The colour is what these are really about. It lands in an inline ``style`` attribute on
+    a page this application does not own, so ``_validated_button`` is the third gate on it —
+    the canvas validator refuses a bad one at save, the runner re-checks it at run time, and
+    this one cannot be bypassed, because every turn goes through it.
+    """
+
+    BUTTON = {
+        "url": "/public/generated_files/abc?key=k&session_token=t",
+        "label": "Download my orders",
+        "colour": "#198754",
+        "file_name": "orders.csv",
+        "file_format": "csv",
+        "byte_size": 340,
+    }
+
+    def test_most_turns_carry_no_button(self) -> None:
+        assert ChatbotTurnResponse.from_turn(_Turn(summary="hello")).payload()[
+            "file_download"
+        ] is None
+
+    def test_a_valid_button_travels_whole(self) -> None:
+        payload = ChatbotTurnResponse.from_turn(
+            _Turn(summary="Your file is ready.", file_download=dict(self.BUTTON))
+        ).payload()
+
+        assert payload["file_download"] == self.BUTTON
+
+    @pytest.mark.parametrize(
+        "colour", ["red", "#fff", "javascript:alert(1)", "#0d6efd;background:url(x)"],
+    )
+    def test_a_colour_that_is_not_a_hex_colour_drops_the_button(self, colour: str) -> None:
+        """
+        Dropped, not raised: the answer the visitor is waiting for is fine, and losing a
+        button is a far better outcome than losing the turn.
+        """
+        payload = ChatbotTurnResponse.from_turn(
+            _Turn(summary="Your file is ready.",
+                  file_download={**self.BUTTON, "colour": colour})
+        ).payload()
+
+        assert payload["file_download"] is None
+        assert payload["summary"] == "Your file is ready."
+
+    def test_an_unknown_format_drops_the_button(self) -> None:
+        payload = ChatbotTurnResponse.from_turn(
+            _Turn(file_download={**self.BUTTON, "file_format": "exe"})
+        ).payload()
+
+        assert payload["file_download"] is None
+
+    def test_an_error_turn_carries_no_button_at_all(self) -> None:
+        payload = ChatbotTurnResponse.from_turn(
+            _Turn(status="error", message="Something went wrong",
+                  file_download=dict(self.BUTTON))
+        ).payload()
+
+        assert "file_download" not in payload
 
 
 class TestWidgetAppearance:

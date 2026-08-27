@@ -1,4 +1,5 @@
 from app.schemas.flow_builder.flow_schemas import (  # noqa: F401
+    FLOW_KINDS,
     MAX_GRAPH_EDGES,
     MAX_GRAPH_NODES,
     MAX_MANUAL_TEXT_LENGTH,
@@ -6,6 +7,7 @@ from app.schemas.flow_builder.flow_schemas import (  # noqa: F401
     FlowGraphSaveRequest,
     FlowRenameRequest,
     FlowSetActiveRequest,
+    FlowSetKindRequest,
     FlowView,
     KnowledgeBaseDocumentView,
     KnowledgeBaseManualTextRequest,

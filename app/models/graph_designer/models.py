@@ -98,6 +98,12 @@ NODE_BRANCH = "branch"
 NODE_FOR_EACH = "for_each"
 NODE_DO_UNTIL = "do_until"
 NODE_EMAIL = "email"
+# Writes a node's rows to a file, and hands that file over as an owner-only link. Two node
+# types rather than one with a mode, for the reason `sql`/`sql_union` are two: they differ in
+# *when* they run and what they need, not in what they hold — a file cannot be offered until
+# it has been written, and an author who has drawn both boxes can see that.
+NODE_CREATE_FILE = "create_file"
+NODE_DOWNLOAD_FILE = "download_file"
 NODE_TIMER = "timer"
 NODE_WAIT = "wait"
 NODE_SUCCESS = "success"
@@ -114,6 +120,8 @@ NODE_TYPES = (
     (NODE_FOR_EACH, "For each"),
     (NODE_DO_UNTIL, "Do until"),
     (NODE_EMAIL, "Send an email"),
+    (NODE_CREATE_FILE, "Create a file"),
+    (NODE_DOWNLOAD_FILE, "Download a file"),
     (NODE_TIMER, "Timer"),
     (NODE_WAIT, "Wait"),
     (NODE_SUCCESS, "Success"),

@@ -95,7 +95,6 @@ from app.services.graph_designer.graph_service import (
     PORT_BODY,
     PORT_DEFAULT,
     PORT_DONE,
-    PORT_ELSE,
     PORT_ERROR,
     PORT_EXECUTE,
     node_label,
