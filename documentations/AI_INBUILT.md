@@ -89,7 +89,7 @@ never benefits from.
 | `OLLAMA_CHAT_MODEL` | `qwen3:1.7b` | **2.2× faster than `qwen3:4b`** on the real 8-chunk prompt — 21.8s vs 47.4s per answer — while matching it on both acceptance checks (valid `AnalyticsResult` JSON, and recovering facts planted at each end of the retrieved context) across 8 trials. Caveat: that is a fact-extraction task both models passed perfectly, so it demonstrates no quality gap rather than proving none exists on harder reasoning. Swap to `qwen3:4b` here if answer quality on real flows disappoints. |
 | `OLLAMA_KEEP_ALIVE` | `-1` | Never unload. Sent as a JSON **number** — the API rejects the string `"-1"` with `time: missing unit in duration "-1"` (see `_parse_keep_alive`). |
 | `OLLAMA_NUM_THREAD` | `6` | Physical cores. Ollama has **no** `OLLAMA_NUM_THREADS` env var; thread count is the per-request `options.num_thread`. Measured: 4 → 6.0, 6 → 6.0, 8 → 5.9, **12 → 2.0 tok/s**. Using all 12 hyperthreads is 3× *slower* — the siblings contend for the same 6 cores. |
-| `OLLAMA_NUM_CTX` | `2048` | **Not a speed knob** — 2048 vs 4096 on an identical prompt measured 4.6 vs 4.5 tok/s, because Ollama sizes the KV cache from this but only evaluates the tokens actually sent. What it controls is truncation, and getting it wrong is silent: at `1024` an 8-chunk prompt was clipped from 1257 to 514 tokens and returned **invalid JSON on every trial**, surfacing to the visitor as *"The local AI model returned an unreadable response."* 2048 fits the measured ~1270-token worst case with headroom. |
+| `OLLAMA_NUM_CTX` | `4096` | **Not a speed knob** — 2048 vs 4096 on an identical prompt measured 4.6 vs 4.5 tok/s, because Ollama sizes the KV cache from this but only evaluates the tokens actually sent. What it controls is truncation, and getting it wrong is silent: at `1024` an 8-chunk prompt was clipped from 1257 to 514 tokens and returned **invalid JSON on every trial**, surfacing to the visitor as *"The local AI model returned an unreadable response."* 2048 covered the plain KB-only prompt but not an AI Fallback node's **composed** context (KB text plus live pipeline/tool config text — see `ai_fallback_service._MAX_KB_CONTEXT_CHARS`), which reached ~5500 real tokens in production and hit the same failure. Raised to 4096, alongside lowering `_MAX_CONTEXT_CHUNKS`/`_MAX_CONTEXT_CHARS`/`_MAX_KB_CONTEXT_CHARS` below so the composed worst case now fits with headroom. |
 | `OLLAMA_NUM_PREDICT` | `512` | Caps generation length. Generation runs ~9.3 tok/s on `qwen3:1.7b`, so each permitted token is ~0.1s of worst-case latency. |
 
 Also in the request payload: `stream: false`, `think: false` (suppresses qwen3's reasoning
@@ -109,21 +109,29 @@ can never reveal the loss — the 8-chunk prompt above reported 514 tokens at `n
 against 1257 at 2048, with no post-hoc signal that 743 tokens had been dropped. Any check
 written against the response would have stayed silent through it.
 
-### Retrieval breadth — why `_MAX_CONTEXT_CHUNKS` stays at 8
+### Retrieval breadth — `_MAX_CONTEXT_CHUNKS` lowered from 8 to 5
 
 Chunk count is the largest remaining latency lever, since prompt evaluation is ~9.7s of the
-~17.4s answer. It was measured and deliberately left alone:
+~17.4s answer. It was measured against a plain KB-only prompt and originally left at 8:
 
 | `_MAX_CONTEXT_CHUNKS` | prompt eval | total | vs 8 |
 |---|---|---|---|
 | 4 | 4.7s | 11.3s | 35% faster |
+| **5** (current) | not separately measured | not separately measured | between the 4 and 6 rows |
 | 6 | 7.1s | 14.1s | 19% faster |
-| **8** (current) | 9.7s | **17.4s** | — |
+| 8 (previous) | 9.7s | 17.4s | — |
 
-Lowering it would be a pure loss of recall, not a trim of waste: a fact planted at *every*
-rank from 1 to 8 was recovered **8/8** times, so there is no "lost in the middle" effect and
-the 5th–8th chunks are genuinely used. Trading half the retrieval depth for 6s is a bad deal
-— particularly as the model choice already cut the same answer from 47.4s to 17.4s.
+At the time, lowering it looked like a pure loss of recall: a fact planted at *every* rank
+from 1 to 8 was recovered **8/8** times against the plain KB-only prompt, so there was no
+"lost in the middle" effect there. That measurement did not account for an AI Fallback node's
+**composed** context (KB text plus live pipeline/tool config text on top — see
+`ai_fallback_service._MAX_KB_CONTEXT_CHARS`), which in production reached ~5500 real tokens
+and blew past `OLLAMA_NUM_CTX=2048`, truncating the context and returning an unreadable
+response. `_MAX_CONTEXT_CHUNKS` was lowered to 5 (and `_MAX_CONTEXT_CHARS` from 6000 to 4000,
+`_MAX_KB_CONTEXT_CHARS` from 12000 to 7000) alongside raising `OLLAMA_NUM_CTX` to 4096, so the
+composed worst case fits within budget instead of relying on a single knob for either. The
+recall tradeoff above still applies — retest 5-vs-8 recall on the composed path if answer
+quality regresses.
 
 ### Server-side config (systemd, needs root)
 

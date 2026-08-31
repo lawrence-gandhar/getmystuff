@@ -153,9 +153,11 @@ class TestTheCanvasScripts:
 
         canvas_tag = body.index('src="/static/js/graph_canvas.js"')
         selection_tag = body.index('src="/static/js/graph_selection.js"')
+        insert_tag = body.index('src="/static/js/graph_insert.js"')
         integrations_tag = body.index('src="/static/js/integrations.js"')
 
         assert canvas_tag < selection_tag < integrations_tag
+        assert canvas_tag < insert_tag < integrations_tag
 
     async def test_the_selection_stylesheet_is_linked(
         self, client, user, make_flow
@@ -165,6 +167,20 @@ class TestTheCanvasScripts:
         body = client.get(f"/integrations/{flow.uuid}/canvas").text
 
         assert "/static/css/graph_selection.css" in body
+
+    async def test_the_insert_stylesheet_is_linked(
+        self, client, user, make_flow
+    ) -> None:
+        """
+        The "+" menu is parented to `document.body`, so it is styled from a shared sheet
+        rather than from the canvas's own. Without the link it still opens — as unstyled
+        buttons in the top-left corner of the page, nowhere near the connection.
+        """
+        flow = await make_flow(user, name="Insertable")
+
+        body = client.get(f"/integrations/{flow.uuid}/canvas").text
+
+        assert "/static/css/graph_insert.css" in body
 
 
 class TestSaving:

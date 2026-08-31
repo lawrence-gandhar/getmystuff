@@ -196,6 +196,9 @@ class TestWhatTheBlocksRecord:
         The *path* in the variable, and the file itself in ``node_results`` keyed by node
         id. The link is the other block's business: a path is a fact about this server and
         is no use to a visitor.
+
+        ``sequence`` is the first file this session has written, so it is ``1`` — see
+        ``TestSeveralSources`` for why a Download File block needs it at all.
         """
         session = _session()
 
@@ -203,7 +206,7 @@ class TestWhatTheBlocksRecord:
 
         assert session.variables["FILE_PATH"] == WRITTEN["file_path"]
         assert session.node_results[MAKE_ID] == {
-            "kind": "file", "file_uuid": WRITTEN["file_uuid"],
+            "kind": "file", "file_uuid": WRITTEN["file_uuid"], "sequence": 1,
         }
 
     async def test_download_file_stores_the_link(self, runner) -> None:  # noqa: ANN001
@@ -367,3 +370,73 @@ class TestFailures:
 
         assert result.text == "That did not work."
         assert [call[0] for call in runner["calls"]] == []
+
+
+OTHER_MAKE_ID = "make_2"
+OTHER_UUID = "8f2c0a1e-0000-4000-8000-000000000002"
+
+
+class TestSeveralSources:
+    """
+    A Download File block may name more than one Create File block — a menu offering CSV /
+    XLSX / Parquet, each option running its own Create File block, can share one hand-over
+    block rather than needing one per branch. See ``downloadFileFieldsHtml`` in
+    ``flow_builder.js`` for the authoring side.
+    """
+
+    async def test_offers_whichever_named_block_ran_most_recently(
+        self, runner,  # noqa: ANN001
+    ) -> None:
+        session = _session(
+            node_id=OFFER_ID,
+            node_results={
+                MAKE_ID: {"kind": "file", "file_uuid": WRITTEN["file_uuid"], "sequence": 1},
+                OTHER_MAKE_ID: {"kind": "file", "file_uuid": OTHER_UUID, "sequence": 2},
+            },
+        )
+        graph = _graph(offer_data={"create_file_node_id": [MAKE_ID, OTHER_MAKE_ID]})
+
+        await _turn(_flow(graph), session)
+
+        download_call = [c for c in runner["calls"] if c[0] == "download"][0]
+        assert download_call[2] == OTHER_UUID, (
+            "the block written later must win, regardless of dict order"
+        )
+
+    async def test_order_in_node_results_does_not_decide_it(self, runner) -> None:  # noqa: ANN001
+        """The same as above with the dict built in the opposite order — `sequence` is what
+        decides it, not insertion order, which a JSONB round trip does not preserve."""
+        session = _session(
+            node_id=OFFER_ID,
+            node_results={
+                OTHER_MAKE_ID: {"kind": "file", "file_uuid": OTHER_UUID, "sequence": 1},
+                MAKE_ID: {"kind": "file", "file_uuid": WRITTEN["file_uuid"], "sequence": 2},
+            },
+        )
+        graph = _graph(offer_data={"create_file_node_id": [MAKE_ID, OTHER_MAKE_ID]})
+
+        await _turn(_flow(graph), session)
+
+        download_call = [c for c in runner["calls"] if c[0] == "download"][0]
+        assert download_call[2] == WRITTEN["file_uuid"]
+
+    async def test_fails_when_none_of_the_named_blocks_have_run(
+        self, runner,  # noqa: ANN001
+    ) -> None:
+        session = _session(node_id=OFFER_ID, node_results={})
+        graph = _graph(offer_data={"create_file_node_id": [MAKE_ID, OTHER_MAKE_ID]})
+
+        result = await _turn(_flow(graph), session)
+
+        assert result.text == "That did not work."
+        assert [call[0] for call in runner["calls"]] == []
+
+    async def test_the_legacy_single_string_shape_still_works(self, runner) -> None:  # noqa: ANN001
+        """Every other test in this file already saves as a plain string; this one names
+        it, so a reader does not have to infer backward compatibility from the rest."""
+        session = _session()
+        graph = _graph(offer_data={"create_file_node_id": MAKE_ID})
+
+        result = await _turn(_flow(graph), session)
+
+        assert result.text == "Your file is ready."

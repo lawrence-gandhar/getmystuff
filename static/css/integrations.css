@@ -94,7 +94,7 @@
     stroke: transparent;
     stroke-width: 16;
     pointer-events: stroke;
-    cursor: pointer;
+    cursor: grab;   /* a drag bends it; a click selects it */
 }
 
 /* The hand-placed bend. For these curves the stored point *is* the midpoint — see
@@ -123,6 +123,28 @@
     pointer-events: none;
     user-select: none;
 }
+
+/* The + beside the ✕. Blue because it is the ordinary, safe half of the pair, and the two
+   sit close enough together that colour is what separates them at a glance rather than
+   position. The glyph never takes the press — the circle under it does, so a click landing
+   between the two strokes of the + still opens the menu. */
+.int-edge-insert {
+    fill: #fff;
+    stroke: #0d6efd;
+    stroke-width: 1.5;
+    cursor: pointer;
+    pointer-events: all;
+}
+
+.int-edge-insert-x {
+    fill: #0d6efd;
+    font-size: 13px;
+    font-weight: 700;
+    pointer-events: none;
+    user-select: none;
+}
+
+.int-edge-insert:hover { fill: #0d6efd; }
 
 .int-edge-label {
     fill: #6c757d;

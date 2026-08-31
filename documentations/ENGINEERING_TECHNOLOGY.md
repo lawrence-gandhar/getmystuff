@@ -3355,8 +3355,8 @@ elsewhere, and **detaches whatever the agent currently runs** before claiming th
 |---|---|
 | `flow_service` | Builder CRUD, ownership, publishing, attaching |
 | `engine_service` | Runtime graph interpretation — given a saved flow and one visitor session, what to send back this turn |
-| `ai_fallback_service` | One AI Fallback node's answer orchestration: its guardrails and prompt, its context source, and its LLM choice |
-| `knowledge_base_service` | Upload, train (extract → chunk → embed → store vectors), retrieve by similarity |
+| `ai_fallback_service` | One AI Fallback node's answer orchestration: its guardrails and prompt, its context source, and its LLM choice. Also composes the knowledge base's two *live* source kinds — attached pipelines and tool configs — into plain text alongside `knowledge_base_service`'s retrieved document context |
+| `knowledge_base_service` | Upload, train (extract → chunk → embed → store vectors), retrieve by similarity. Documents only — the live pipeline/tool-config sources bypass this module entirely and never reach pgvector |
 
 The AI Fallback node layers its guardrails on top of the chatbot's own configured system prompt as
 the base persona, and the chatbot's actions can still run for the turn — but **the node's LLM choice
@@ -3433,6 +3433,127 @@ needs no special case, the variable being on the session row rather than in memo
 Fixed alongside it: `engine_service` used a module-level `logger` it never defined, so the
 `except` branch in `_step_send_email` raised `NameError` instead of routing an email failure to the
 `error` port — a handler that failed only when it was needed.
+
+### A knowledge base that reads live, without touching pgvector
+
+An AI Fallback node's knowledge base could only ever hold what had been trained ahead of time —
+fine for a document, wrong for "how many orders today," which is stale the moment it is embedded.
+`data.kb_pipeline_ids` / `data.kb_tool_config_ids` are two more lists on the same node, letting the
+panel attach published Graph Designer pipelines and tool configs as sources that run **fresh on
+every visitor message** rather than once at train time — and whose output is composed into the
+prompt as plain text, never written to `KnowledgeChunk`. No migration was needed for either list:
+`graph_data` is JSONB with `extra="allow"` throughout this feature, the same load-bearing pattern
+`create_file_node_id`'s multi-source change already relies on.
+
+**Composition lives in `ai_fallback_service`, not `knowledge_base_service`.** The latter is
+deliberately a vector-search-only function keyed by `(flow_id, node_id)` — no `user_id`, no
+`node_data` in scope — and its failure mode (`HTTPException(503)` on an embedding-service outage,
+aborting the whole answer) is intentionally different from what the two new sources need: one flaky
+pipeline must never sour an otherwise-fine document-retrieval answer, so each is skip-and-log on its
+own, not a shared abort.
+
+**Pipelines run concurrently; tool configs run one at a time — and that split is forced, not a
+preference.** `graph_runner.run_graph` opens its own database session per call, so several attached
+pipelines can safely `asyncio.gather`, and matters doing so: each may wait up to
+`graph_runner.WAIT_SECONDS` (90s), so running them in sequence could turn one chat answer into
+minutes. A tool config's query, by contrast, shares the caller's single `AsyncSession` — only one
+coroutine may use it at a time — so `_tool_config_context_texts` runs its list in an ordinary
+sequential loop instead.
+
+**A pause is treated as a failure here, unlike everywhere else `graph_runner` is called from.** The
+five-consumer table in `GRAPH_DESIGNER.md` documents "a pause is an outcome, not an error" for a
+data agent, a workspace, a nested tool config, and a Run Flow's `run_graph` node — each of them can
+hand the question to somebody and wait. An AI Fallback answer cannot: there is no second visitor
+turn to resume on mid-answer, so `_one_pipeline_text` folds `outcome.kind == "question"` into the
+same `omit and log a warning` branch as a failed or still-running pipeline, rather than surfacing it.
+
+**A required tool-config parameter with no matching flow variable is not blocked at save time.**
+`_one_tool_config_text` passes the conversation's `session.variables` straight through as
+`agent_values` — the same map a real agent's declared parameter would resolve against — and lets
+`execute_tool_query`'s own validation raise `ToolQueryError` when one is missing. That is caught and
+logged like any other failed query, deliberately: whether a given variable exists by the time this
+node runs is path-dependent, so a save-time gate would refuse configurations that are simply
+waiting on a variable a different flow branch hasn't collected yet on *this* turn.
+
+**Ownership is still checked at save time**, in `flow_service._assert_ai_fallback_kb_sources` —
+the same doctrine `_assert_run_flow_targets` documents: a foreign pipeline or tool config id is
+refused with a readable sentence naming the block, while the run-time lookups (`graph_service.get_graph`,
+`tool_config_service.get_tool_config`) are the defense-in-depth for one deleted or reassigned after
+the flow was saved, degrading to skip-and-log rather than a broken turn.
+
+### A dead-end AI Fallback keeps answering, instead of handing off
+
+A flow may deliberately draw no outgoing edge from an AI Fallback node — the operator's
+way of saying "this block is the last thing the visitor talks to." Before this, that read
+exactly like every other terminal point: `session.status` became `"completed"`, and the
+visitor's next message got `AI_HANDOFF` — generic off-flow AI answering if the chatbot could
+provide it, or `_FLOW_ONLY_MESSAGE` if not, either way losing the node's own guardrails,
+knowledge base and model choice, and any memory of what it had just said.
+
+**The fix lives at the one place a "completed" session is checked, not inside
+`_step_ai_fallback` itself.** `advance_flow_session`'s `session.status == "completed"` branch
+now tries `_continue_dead_end_ai_fallback` first: if `session.current_node_id` names an
+`ai_fallback` node with no outgoing edge, that node runs again — via the same
+`_step_ai_fallback` an ordinary turn uses — instead of falling through to `AI_HANDOFF`. Every
+other terminal point (an explicit End node, a dead end on any other block type) is
+unaffected, because the helper returns `None` for anything that isn't exactly this shape.
+
+**Why this is safe to gate on `session.current_node_id` alone, with no separate "does this
+edge exist" check:** `_advance_or_complete` only ever leaves `current_node_id` pointing at
+the node *itself* when there was no edge to follow — an edge always moves it onward. So a
+`"completed"` session parked on an `ai_fallback` node's own id **is** the dead-end case, by
+construction; nothing else can produce that state.
+
+**Why this only ever fires at the root, never mid-call.** A dead end reached *inside* a Run
+Flow call was already special-cased before this change: `_hop_until_the_turn_ends`'s subflow-
+unwind branch treats it as the call returning, not the conversation ending, and flips
+`status` back to `"active"` before `advance_flow_session`'s top-level check can ever see it.
+The one gap — the `_MAX_INTERNAL_HOPS` bailout sets `status = "completed"` directly, bypassing
+that unwind, so a 25-hop runaway mid-call could in theory leave a stale non-empty
+`call_stack` behind — is guarded explicitly with `subflow_service.in_subflow(session)` in the
+new helper, rather than resting entirely on the invariant holding.
+
+**A rolling one-answer memory, in a column of its own.** `ChatbotFlowSession
+.dead_end_ai_context` (`{"<node id>": "<last answer, as text>"}`) was added rather than
+reusing `node_results` or `variables`. `variables` was ruled out on the same explicit,
+repeated precedent `awaiting_graph_run`/`call_stack`/`node_results` all state: it's the
+visitor's own interpolated namespace, and an application-reserved key there is a name an
+operator can collide with. `node_results[node_id]` was ruled out not on a schema-collision
+risk (`row_source._from_table` ignores keys it doesn't recognise) but on a modeling mismatch:
+that slot means "what this block produced, for a Create File block to read," written only
+when there's a table, while conversational memory has to persist even when there isn't one —
+conflating the two would let a Create File block naming this node see (or be confused by)
+context that was never data. `_persist_session`/`_load_or_create_session` thread it through
+exactly where `node_results` already is, including clearing it on restart for the same reason.
+
+**The previous answer is context, not a guardrail — a distinction that cost one correction
+during design.** The first sketch routed `previous_answer` through `extra_instructions`,
+the existing channel for an AI Fallback node's guardrails/prompt. Tracing it all the way
+through `chatbot_service.answer_message` → `run_grounded_prompt` → `_build_prompts` shows why
+that's wrong: `extra_instructions` is rendered into the **system prompt** as `"Always follow
+the owner's guardrails: {...}"` — telling the model to treat its own prior answer as a rule
+to obey, not something it already said. `action_context` — already the channel a webhook
+action's result uses, already folded into **user content** on both the `datasource` and
+`knowledge_base`/`prompt` branches — is the correct, and smaller, fix: `run_ai_fallback`
+prepends a labeled block onto whatever `action_context` already held, needing no change to
+`_combine_instructions`, `_build_user_content`, or `run_grounded_prompt` itself.
+
+**A second correction, found in production within the hour.** The first wording — `"Your
+previous answer in this conversation was:\n{previous_answer}"` — was itself a live bug: a
+real dead-end node (guardrails "Do not answer from outside the source", prompt "Fetch the
+list and show the data", `llm_mode: in_built` — a small local model) kept re-describing its
+first answer regardless of what the visitor asked next, confirmed by reading the session row
+straight out of `chatbot_flow_sessions.dead_end_ai_context` and finding it matched almost
+verbatim. A small model reading "your previous answer was: X" right next to a new question,
+with a node prompt that already says "show the data," reads that as "keep saying X" rather
+than "here is what you already told them; now answer what they're asking *now*." The fix is
+explicit rather than assumed: the block now opens with `"For background only — do not repeat
+this verbatim, and do not treat it as the answer to give again"` and closes with `"Now answer
+the visitor's new message below on its own terms. If it asks for something narrower,
+different, or additional compared to your previous answer, give exactly that — do not just
+restate what you said before."` A node's own guardrails/prompt are good instructions for the
+*first* turn and are left exactly as the operator wrote them; this is only about how the
+second and later turns are told to relate to the first one.
 
 ### One flow calling another: a call stack on the session row
 
@@ -3571,20 +3692,27 @@ configured embed model, re-embed everything if that model changed.
 
 Indexed with an HNSW cosine-distance index (`m=16, ef_construction=64`).
 
-### Retrieval breadth was measured, then left alone
+### Retrieval breadth — `_MAX_CONTEXT_CHUNKS` lowered from 8 to 5
 
 Chunk count is the largest remaining latency lever — prompt evaluation is ~9.7s of the ~17.4s answer:
 
 | `_MAX_CONTEXT_CHUNKS` | Prompt eval | Total | vs 8 |
 |---|---|---|---|
 | 4 | 4.7s | 11.3s | 35% faster |
+| **5** (current) | not separately measured | not separately measured | between the 4 and 6 rows |
 | 6 | 7.1s | 14.1s | 19% faster |
-| **8** (current) | 9.7s | **17.4s** | — |
+| 8 (previous) | 9.7s | 17.4s | — |
 
-**Lowering it would be a pure loss of recall, not a trim of waste:** a fact planted at *every* rank
-from 1 to 8 was recovered **8/8** times, so there is no "lost in the middle" effect and the 5th–8th
-chunks are genuinely used. Trading half the retrieval depth for 6s is a bad deal — particularly as
-the model choice already cut the same answer from 47.4s to 17.4s.
+**At the time, lowering it looked like a pure loss of recall, not a trim of waste:** a fact planted
+at *every* rank from 1 to 8 was recovered **8/8** times against a plain KB-only prompt, so there was
+no "lost in the middle" effect there. That measurement did not account for an AI Fallback node's
+**composed** context — KB text plus live pipeline/tool config text on top, see
+`ai_fallback_service._MAX_KB_CONTEXT_CHARS` — which in production reached ~5500 real tokens and blew
+past `OLLAMA_NUM_CTX=2048`, truncating the context and returning an unreadable response.
+`_MAX_CONTEXT_CHUNKS` was lowered to 5 (`_MAX_CONTEXT_CHARS` 6000→4000, `_MAX_KB_CONTEXT_CHARS`
+12000→7000) alongside raising `OLLAMA_NUM_CTX` to 4096, so the composed worst case fits within
+budget instead of leaning on one knob. Retest 5-vs-8 recall on the composed path if answer quality
+regresses.
 
 ### The file blocks, and the three decisions worth restating here
 
@@ -3695,7 +3823,7 @@ roughly halves the apparent latency, which real chatbot traffic never benefits f
 |---|---|---|
 | `OLLAMA_KEEP_ALIVE` | `-1` | Never unload. Sent as a JSON **number** — the API rejects the string `"-1"` with `time: missing unit in duration "-1"` |
 | `OLLAMA_NUM_THREAD` | `6` | Physical cores. Ollama has **no** `OLLAMA_NUM_THREADS` env var; thread count is the per-request `options.num_thread`. Measured: 4 → 6.0, 6 → 6.0, 8 → 5.9, **12 → 2.0 tok/s** — using all 12 hyperthreads is **3× slower**, because the siblings contend for the same 6 cores |
-| `OLLAMA_NUM_CTX` | `2048` | **Not a speed knob** — 2048 vs 4096 on an identical prompt measured 4.6 vs 4.5 tok/s, because Ollama sizes the KV cache from this but only evaluates the tokens actually sent. What it controls is **truncation**, and getting it wrong is silent — see below |
+| `OLLAMA_NUM_CTX` | `4096` | **Not a speed knob** — 2048 vs 4096 on an identical prompt measured 4.6 vs 4.5 tok/s, because Ollama sizes the KV cache from this but only evaluates the tokens actually sent. What it controls is **truncation**, and getting it wrong is silent — see below. Raised from 2048 after an AI Fallback node's composed context (KB text + live pipeline/tool config text) reached ~5500 real tokens in production and got silently truncated, returning an unreadable response — see the retrieval-breadth note above |
 | `OLLAMA_NUM_PREDICT` | `512` | Caps generation. ~9.3 tok/s on `qwen3:1.7b`, so each permitted token is ~0.1s of worst-case latency |
 
 Also in the payload: `stream: false`, `think: false` (suppresses qwen3's reasoning block, which would
@@ -3720,7 +3848,7 @@ through it** — and the visible symptom was invalid JSON on every trial, surfac
 
 | Setting | `.env` | Agent floor | Why the floor |
 |---|---|---|---|
-| `num_ctx` | 2048 | **8192** | An over-long prompt is silently cut. A truncated tool **result** is a wrong answer, not an error |
+| `num_ctx` | 4096 | **8192** | An over-long prompt is silently cut. A truncated tool **result** is a wrong answer, not an error |
 | `num_predict` | 512 | **1024** | A truncated tool **call** arrives as malformed JSON — the graph sees a broken call rather than a cut-off answer |
 
 Both `.env` values are correctly sized for the short single-shot prompts they were tuned for; a Deep
@@ -4194,8 +4322,8 @@ has been holding — and a failed turn can re-render it unchanged instead of dis
 
 ### A stateful shared module, instantiated with a config
 
-The sixth pattern, and the newest — it has one instance in `static/js/` and it is worth naming
-because everything else in that directory is a self-contained IIFE owning one page.
+The sixth pattern, and the newest — it now has **three** instances in `static/js/` and it is
+worth naming because everything else in that directory is a self-contained IIFE owning one page.
 
 `static/js/graph_selection.js` holds a gesture — the rubber-band selection and the group move — that
 three canvases need to behave identically, and a gesture is state: where the press began, what was
@@ -4208,6 +4336,50 @@ than something to apologise for: every key is a place the three canvases genuine
 wrapper, the node layer, how an element id is built from a model id, which classes to paint, how to
 reach the model, and six callbacks for what a selection *means* here. A smaller surface would have
 meant pretending two canvases are the same in a way they are not.
+
+`static/js/graph_insert.js` is the second instance and follows the same shape:
+`window.GraphInsert.create(config)`, four keys, and it owns the **menu** a connector's "+" opens —
+where it appears, how it is dismissed, arrow-key navigation, what an empty catalogue says. It owns
+nothing about blocks, because the three canvases disagree about those: a Flow Builder block's ports
+come from a local registry, a Graph Designer node's from a server vocabulary, an Integrations step's
+from a spec whose ports are bare strings. Each canvas supplies its own list and performs its own
+splice.
+
+`static/js/graph_edges.js` is the third and the largest, and it came from measurement rather
+than from taste. Comparing every same-named function across the three canvas files — bodies
+normalised for whitespace, then for naming prefixes — found 29 defined in all three and 42 in
+exactly two, twelve of them byte-identical. Pairwise similarity showed the shape of it: the Flow
+Builder and the Graph Designer are near-twins (`startBend` 99%, `onBendEnd` 100%,
+`updateEdgeGeometry` 93%, `runDragFrame` 95%) while Integrations, drawing curves between
+side-by-side steps, sat at 19–40% on the same functions. So this module is shared by two of the
+three, deliberately: forcing the third in would mean abstracting elbow-versus-curve behind a
+flag, which is how a shared module becomes a worse copy of two working ones.
+
+It owns the connector layer — the anchor cache, the animation frame, the edge-chrome repaint,
+the bend gesture and the group-move callbacks — and with them the five pieces of mutable state
+that used to sit in both files. That state is why it could not simply be more of
+`graph_canvas.js`: that file promises at the top that it holds nothing stateful, and the promise
+is worth more than the convenience.
+
+**Every difference between the two canvases became a named config key rather than a winner.**
+The extraction had to be behaviour-neutral on two canvases already verified by hand, so where
+they disagreed — a 10px chrome offset, an extra `state.connecting` check, a derived-edge guard,
+an anchor fallback, and two genuinely different drag-threshold metrics (Chebyshev on one canvas,
+Manhattan on the other) — the difference was preserved and documented instead of reconciled. The
+threshold mismatch is worth fixing one day; doing it inside a refactor would have hidden a
+behaviour change inside a no-op change.
+
+It also bought the first executable coverage this code has had. The closures it replaced were
+unreachable — both canvas files export only `{ init }` — where a factory with an injected config
+runs under `node` against a stubbed DOM. See `CANVAS_SELECTION.md` §8.
+
+The pattern's boundary is therefore the same in all three cases and worth stating once: **the
+gesture is shared, what it means is not.** The one piece of *meaning* that turned out to be shared went into
+`graph_canvas.js` as a pure function instead — `continuationPort(names)`, which decides which of a
+spliced block's ports inherits the connection. It exists because the obvious rule is wrong: a loop
+declares `["body", "done"]`, and wiring the old target to `body` moves it inside the loop and runs it
+once per item rather than once. All three canvases need that same answer, and none of them needs to
+know how the others reach it.
 
 Two decisions make it safe to drop into three working pages:
 

@@ -133,7 +133,38 @@ window.GraphSelection = (function () {
                 if (el) el.classList.toggle(config.classes.edge, marksEdge(edge.id));
             });
 
+            paintSelectAllButton();
+
             if (config.onSelectionChange) config.onSelectionChange();
+        }
+
+        /**
+         * Keep the header's **Select all** / **Clear (n)** button in step.
+         *
+         * Here rather than in each canvas because all three had the same fourteen lines,
+         * differing only in the button's id and one noun. It is the selection's own count on
+         * the selection's own button, so this is where it belongs — and unlike the connector
+         * runtime the two top-down canvases share, Integrations gets this one too.
+         *
+         * Silent when `selectAllButtonId` is not configured, so a canvas without such a
+         * button needs no opt-out.
+         */
+        function paintSelectAllButton() {
+            if (!config.selectAllButtonId) return;
+
+            const btn = document.getElementById(config.selectAllButtonId);
+            if (!btn) return;
+
+            const n = count();
+            btn.classList.toggle("btn-outline-primary", n > 0);
+            btn.classList.toggle("btn-outline-secondary", n === 0);
+            btn.innerHTML = n > 0
+                ? '<i class="las la-times-circle"></i> Clear (' + n + ")"
+                : '<i class="las la-object-group"></i> Select all';
+            btn.title = n > 0
+                ? "Clear the move selection"
+                : "Select every " + (config.selectAllNoun || "block and connector") +
+                  ", so they can be moved together";
         }
 
         /**

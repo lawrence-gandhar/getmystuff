@@ -237,6 +237,30 @@ class ChatbotFlowSession(Base):
         JSONB, nullable=False, default=dict, server_default="{}",
     )
 
+    # One rolling turn of context for a dead-end AI Fallback node — one with no
+    # outgoing edge — that the visitor keeps talking to after the flow itself has
+    # finished: {"<node id>": "<that node's last answer, as text>"}. See
+    # `engine_service._continue_dead_end_ai_fallback` and `_step_ai_fallback`.
+    #
+    # Keyed by node id like `node_results`, though in practice at most one key is ever
+    # populated per session: `current_node_id` cannot move to a different node once
+    # `status` is "completed" except via a restart, which clears this too.
+    #
+    # A column of its own rather than a key in `variables` or a value in `node_results`,
+    # for two different reasons. `variables` is the visitor's own interpolated
+    # namespace — the same reason `awaiting_graph_run` and `call_stack` above give.
+    # `node_results[node_id]` already means "what this block produced, for a Create
+    # File block to read" — written only when there is a table, and read by
+    # `file_delivery.row_source`'s strict kind-dispatch — which is a different concern
+    # from "conversational memory that must persist even when there is no table".
+    # Keeping them separate means a Create File block naming this node can never see
+    # (or be confused by) what the dead-end loop remembers.
+    #
+    # Plain JSONB, replaced wholesale on every write like `variables`.
+    dead_end_ai_context: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default="{}",
+    )
+
     # "active" | "completed"
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
 

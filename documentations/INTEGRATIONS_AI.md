@@ -222,13 +222,19 @@ refused — with nothing written.
 | the JSON schema `_json_only_instruction` appends | **971** |
 | the system prompt | 710 |
 | the catalogue and the user's sentence together | ~100 |
-| **available** (`OLLAMA_NUM_CTX` 2048 − `OLLAMA_NUM_PREDICT` 512) | **1536** |
+| **available at the time** (`OLLAMA_NUM_CTX` 2048 − `OLLAMA_NUM_PREDICT` 512) | **1536** |
 
-The generated `WorkflowDraft` schema costs more than everything else combined. **This task is out
-of reach for a 1.7B model at a 2048-token context**, and trimming this module's own prompt does
-not change that — a deployment that wants the local path has to raise `OLLAMA_NUM_CTX`. Ollama
-truncates from the *end*, which is where the user's own sentence goes, so an over-long prompt
-does not crowd the request out, it deletes it and the model answers the catalogue.
+The generated `WorkflowDraft` schema costs more than everything else combined, so **this task was
+out of reach for a 1.7B model at a 2048-token context**, and trimming this module's own prompt did
+not change that. Ollama truncates from the *end*, which is where the user's own sentence goes, so
+an over-long prompt does not crowd the request out, it deletes it and the model answers the
+catalogue.
+
+`OLLAMA_NUM_CTX` has since been raised to 4096 (see [AI_INBUILT.md](AI_INBUILT.md) — an unrelated
+AI Fallback truncation issue forced the same knob up). That puts the available budget at 3584,
+which the ~1781-token total above now fits inside on paper — but this has not been re-verified with
+a live run against the current code, so treat the local path here as *possibly* unblocked rather
+than confirmed working.
 
 The catalogue is still capped harder for the local path, because twenty connections with fifteen
 operations each really would be 12,000 characters. But that cap bounds the *variable* part, and

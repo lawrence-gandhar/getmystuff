@@ -96,9 +96,20 @@ Three things about how a node is drawn are worth knowing:
   because none of them says the node did or did not do its work. The Success and Failure
   nodes' discs are the same green and red, and the Failure red is the one the Flow Builder
   now ends a flow in.
-* **A connector's ✕ and its two end handles appear on hover.** They used to be on every
-  connector at all times, which on a twelve-connector pipeline meant thirty-six
-  controls competing with the nodes.
+* **A connector carries a red ✕ and a blue + on its midpoint.** The ✕ deletes it; the +
+  inserts a node *into* it, so `A → B` becomes `A → new → B` with the original connector
+  replaced by two. Which of the new node's ports carries the connection onward is
+  `GC.continuationPort`'s decision, and a **For each** is the case that makes it matter: it
+  must leave by `done`, because wiring the old target to `body` would move that node inside
+  the loop and run it once per item. Success and Failure are not offered on a connector that
+  already leads to one — see [CANVAS_SELECTION.md](CANVAS_SELECTION.md) §5.
+* **A connector's ✕ and its two end handles are visible at all times**, as they always
+  were. They were briefly made hover-only, on the argument that a twelve-connector
+  pipeline carries thirty-six controls competing with the nodes. That reasoning was sound
+  and the change was still wrong: nobody had asked for it, and an operator who had learned
+  where the delete button was now saw a connector with no way to remove it. A control you
+  cannot see has been removed, whatever the stylesheet says. Only the **bends** a hand
+  places are hover-revealed, because they are new and a wire can carry four of them.
 * **A connector that runs back up the canvas takes a lane to the right of every node.**
   A `for each` or `do until` body sending the run round again has no downward step to
   take — its target is above it, which is what makes it a loop — so it is routed round
@@ -1154,10 +1165,10 @@ from there covers the navigation.
 
 ---
 
-# Four things can run a published graph
+# Five things can run a published graph
 
-A graph starts life as something you draw and run yourself. Once published, four other
-things can run it, and the interesting part is that all four need the same three questions
+A graph starts life as something you draw and run yourself. Once published, five other
+things can run it, and the interesting part is that all five need the same three questions
 answered — did it finish, did it stop to ask something, or did it fail — while only the
 *wording* differs between them.
 
@@ -1167,18 +1178,20 @@ answered — did it finish, did it stop to ask something, or did it fail — whi
 | Every agent in a **workspace** | `tool_graphs.workspace_id` | the same; the graph is simply reached by a different route |
 | A **tool config**, as a nested child | `tool_config_links.child_graph_id` | the question becomes the *tool's* output, and answering finishes the tool |
 | A **flow builder** step | a `run_graph` node | the turn ends with the question; the visitor's next message answers it |
+| An **AI Fallback** node's knowledge base | `data.kb_pipeline_ids` | the odd one out — there is no visitor turn to hand a question to, so a pause is treated the same as a failure: omitted from the answer's context and logged, not resumed. See `ai_fallback_service._one_pipeline_text`. |
 
 So the answering happens **once**, in `graph_runner`, as a `GraphOutcome` — and each owner
-phrases it for its own audience. That module is where the decision that shapes all four is
+phrases it for its own audience. That module is where the decision that shapes all five is
 written down:
 
 > **A pause is an outcome, not an error.**
 
-None of the four can treat it as a failure, because nothing failed; and none can ignore it,
-because the rows they wanted do not exist yet. Every failure is likewise *returned* rather
-than raised, because each owner is mid-something — a conversation turn, a parent tool's
-query, a flow — and raising would hand somebody a 500 for a state that could have been
-explained.
+None of the five can treat it as a failure, because nothing failed; and none can ignore it,
+because the rows they wanted do not exist yet — though the AI Fallback source above is the
+one that cannot *wait* for it either, and settles for treating it the same as a failure.
+Every other failure is likewise *returned* rather than raised, because each owner is
+mid-something — a conversation turn, a parent tool's query, a flow — and raising would hand
+somebody a 500 for a state that could have been explained.
 
 | | |
 |---|---|

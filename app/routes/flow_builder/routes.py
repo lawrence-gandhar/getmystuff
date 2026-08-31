@@ -23,6 +23,7 @@ from app.services.email_dispatch import smtp_service as email_smtp_service
 from app.services.email_dispatch import template_service as email_template_service
 from app.services.flow_builder import flow_service
 from app.services.graph_designer import graph_service
+from app.services.tool_configs import tool_config_service
 
 _JSON = "application/json"
 _ROWS_TEMPLATE = "flow_builder/flow_rows.htm"
@@ -118,6 +119,13 @@ class FlowBuilderController(Controller):
         # instant a flow is chosen — the same reason the email templates above carry their
         # declared variables. This flow is excluded because a flow cannot run itself.
         flows_json = await flow_service.callable_flow_choices(db, user.id, flow.uuid)
+        # What an AI Fallback block's knowledge base panel may pick as a live tool-config
+        # source. Reused as-is from the tool configs list page — no active/enabled filter,
+        # matching how that page itself offers every tool config the user owns.
+        tool_configs_json = [
+            {"id": row["uuid"], "label": f"{row['tool_name']} ({row['agent_name']})"}
+            for row in await tool_config_service.get_tool_config_views(db, user.id)
+        ]
 
         return Template(
             template_name="flow_builder/canvas.htm",
@@ -130,6 +138,7 @@ class FlowBuilderController(Controller):
                 "email_templates_json": json.dumps(email_templates_json),
                 "smtp_configs_json": json.dumps(smtp_configs_json),
                 "flows_json": json.dumps(flows_json),
+                "tool_configs_json": json.dumps(tool_configs_json),
                 "active": "flow_builder",
             },
         )

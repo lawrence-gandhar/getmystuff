@@ -1116,15 +1116,19 @@ that lets every record through looks like it is working — so that draft could 
 saved anyway. All three are added on the canvas, by somebody who can see where each side of the
 split goes.
 
-**Reconciled — the in-built model cannot do this task at the current context size.** Measured
-against `qwen3:1.7b` with one connection and two operations: the JSON schema
+**Reconciled — the in-built model could not do this task at the context size then configured.**
+Measured against `qwen3:1.7b` with one connection and two operations: the JSON schema
 `_json_only_instruction` appends is 971 tokens, the system prompt is 710, and the catalogue plus
 the request are about 100 — against a 1536-token budget (`OLLAMA_NUM_CTX` 2048 minus
-`OLLAMA_NUM_PREDICT` 512). The irreducible cost exceeds the budget before any catalogue exists,
-so the local path needs `OLLAMA_NUM_CTX` raised to be usable at all; a smaller catalogue does
-not fix it, and the constant that caps the catalogue for the local path says so in as many
-words. The feature degrades correctly — a sentence in the panel, nothing saved, the canvas
-untouched.
+`OLLAMA_NUM_PREDICT` 512) that was in effect at the time. The irreducible cost exceeded that
+budget before any catalogue existed, and a smaller catalogue would not have fixed it — the
+constant that caps the catalogue for the local path says so in as many words. The feature
+degrades correctly regardless — a sentence in the panel, nothing saved, the canvas untouched.
+
+`OLLAMA_NUM_CTX` has since been raised to 4096 for an unrelated reason (an AI Fallback node's
+truncation issue — see [AI_INBUILT.md](AI_INBUILT.md)), putting the budget at 3584 tokens, which
+the ~1781-token total above fits on paper. Not re-verified with a live run, so treat the local
+path as possibly unblocked rather than confirmed.
 
 That live attempt is also the best evidence the validation layer works. The model produced a
 draft containing three hallucinations — an operation id in the connection field and two forward
@@ -1271,12 +1275,13 @@ Each of these is a decision, not an oversight.
    under `SKIP LOCKED`, but the scheduler's tick rate multiplies by the worker count. Four of
    the five are running as of Phase 1; the webhook drain arrives with Phase 3.
 
-9. **The in-built local model cannot draft a workflow at the shipped context size.** Measured,
-   not estimated — see §How generation is stopped from inventing things. The generated
-   `WorkflowDraft` schema alone costs 971 of the 1536 available tokens. The feature degrades
-   correctly and the hosted providers are unaffected, but a deployment that wants the local path
-   to work has to raise `OLLAMA_NUM_CTX`, and no amount of trimming this module's own prompt
-   substitutes for that.
+9. **The in-built local model could not draft a workflow at the context size shipped at the
+   time.** Measured, not estimated — see §How generation is stopped from inventing things. The
+   generated `WorkflowDraft` schema alone cost 971 of the then-1536 available tokens. The feature
+   degrades correctly and the hosted providers are unaffected either way. `OLLAMA_NUM_CTX` has
+   since been raised to 4096 for an unrelated AI Fallback truncation issue (see
+   [AI_INBUILT.md](AI_INBUILT.md)), which puts the budget at 3584 — the ~1781-token total above
+   now fits on paper, though this has not been re-verified with a live run.
 
 ---
 

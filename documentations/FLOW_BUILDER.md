@@ -133,6 +133,40 @@ Checked *before* the AI path rather than left to fail inside it: the AI path can
 that it cannot reach data, which for this chatbot describes a data source the operator never
 attached.
 
+## One terminal point never hands off: a dead-end AI Fallback
+
+A "terminal point" usually means an explicit **End** node, or a block with no outgoing
+edge because the operator simply stopped drawing. An **AI Fallback** node left
+disconnected on purpose is different in kind: the operator's intent was for *this
+node itself* to be what the visitor keeps talking to, not for the conversation to end.
+
+So `advance_flow_session`'s `session.status == "completed"` check tries
+`engine_service._continue_dead_end_ai_fallback` first. If the session completed because
+`session.current_node_id` names an `ai_fallback` node with no outgoing edge, that same
+node answers again — with its own guardrails, its own context source, its own LLM
+choice — instead of falling through to `AI_HANDOFF`. `_can_answer_off_flow` and
+`_FLOW_ONLY_MESSAGE` are never consulted for this path: the node's own configured
+context source is authoritative, independent of whether the chatbot key itself has an
+attached datasource. Every other terminal point (an explicit End node, a dead end on
+any other block type) is unaffected and still hands off exactly as above.
+
+**A rolling one-answer memory, not full conversation history.** Each time the node
+answers, its answer is kept in `ChatbotFlowSession.dead_end_ai_context` — a JSONB
+column of its own, `{"<node id>": "<that node's last answer, as text>"}`, following the
+same "not a key in `variables`, because that dict is the visitor's interpolated
+namespace" doctrine `awaiting_graph_run`/`call_stack`/`node_results` already establish
+— and handed to `ai_fallback_service.run_ai_fallback` as `previous_answer` the next time
+that same node runs. It lands as ordinary conversational context (folded into
+`action_context`, the same channel a webhook action's result already uses), never as a
+guardrail — `extra_instructions` is rendered to the model as a rule to obey, and a prior
+answer is not that. The memory is **replaced**, not accumulated: only the immediately
+prior answer is kept, not a transcript. A restart clears it, the same as `node_results`.
+
+Reachable only at the root: a dead end *inside* a Run Flow call is a normal call
+return, not a real completion (`_hop_until_the_turn_ends`'s subflow-unwind branch —
+see "The Run Flow node" below), so this path only ever fires once the call stack has
+fully unwound.
+
 ## The streamed twin, and why it declines to stream
 
 `_stream_as_agent` cannot raise once a stream has opened — the status code is already
@@ -407,9 +441,19 @@ Six things about how a block is drawn, and moved, are worth knowing:
   visitor pressing the second button has not made anything go wrong. **End Flow is red**,
   which it did not used to be — it shared Goto's grey, and "the conversation is over" and
   "carry on somewhere else" are not the same thing.
-* **A connector's ✕ and its two end handles appear on hover.** They used to be on every
-  connector at all times, which on this flow's eleven connectors meant thirty-three
-  controls competing with nine blocks.
+* **A connector carries a red ✕ and a blue + on its midpoint.** The ✕ deletes it; the +
+  inserts a block *into* it, so `A → B` becomes `A → new → B` with the original connector
+  replaced by two. End Flow and Goto are not offered, because neither has a way out and
+  splicing one would sever the rest of the flow rather than add a step to it; Menu and
+  Dropdown are not offered either, because their ports *are* their options and a new one has
+  none — see [CANVAS_SELECTION.md](CANVAS_SELECTION.md) §5.
+* **A connector's ✕ and its two end handles are visible at all times**, as they always
+  were. They were briefly made hover-only, on the argument that this flow's eleven
+  connectors carry thirty-three controls competing with nine blocks. That reasoning was
+  sound and the change was still wrong: nobody had asked for it, and an operator who had
+  learned where the delete button was now saw a connector with no way to remove it. A
+  control you cannot see has been removed, whatever the stylesheet says. Only the **bends**
+  a hand places are hover-revealed, because they are new and a wire can carry four of them.
 * **A Goto's jump is drawn**, dashed, round a lane to the right of every block. Before
   this it was drawn nowhere, so a flow that loops back to its own menu looked like a flow
   that stopped. It carries no ✕ and no handles — the way to change it is to edit the Goto
@@ -581,10 +625,20 @@ the header.
   variable name because a Create File block points at one particular box on the canvas —
   which is a different question from "what is the current value of X", and two blocks may
   share a name.
+* **ChatbotFlowSession.dead_end_ai_context** — `{"<node id>": "<last answer, as text>"}`, a
+  rolling one-answer memory for a dead-end AI Fallback node the visitor keeps talking to
+  after the flow itself has finished (see "One terminal point never hands off" above). A
+  column of its own rather than reusing `node_results` for the same node id: that slot means
+  "what this block produced, for a Create File block to read" — written only when there's a
+  table — which is a different concern from conversational memory that must persist even
+  when there is no table. Cleared on restart, like `node_results`.
 * **FlowNodeKnowledgeBase** — one AI Fallback node's knowledge base. Scoped per node (not per
   flow or per chatbot key) via a string `node_id` pointer into the owning flow's
   `graph_data["nodes"]` — not a FK, since nodes are JSONB entries, not rows. Status is one of
-  `untrained` / `trained` / `failed`.
+  `untrained` / `trained` / `failed`. Unaffected by the node's two live source kinds below —
+  a pipeline or tool config attached to the same knowledge base panel never becomes a
+  `FlowNodeKnowledgeDocument` and is not part of what "training" embeds, so there is no
+  migration to look for here on their account.
 * **FlowNodeKnowledgeDocument** — one supporting document (uploaded pdf/txt/docx, or typed
   text) belonging to a `FlowNodeKnowledgeBase`.
 
@@ -598,8 +652,8 @@ Three services, deliberately split by concern:
 |---|---|
 | `flow_service.py` | Builder CRUD/ownership — creating, editing, publishing (`set_flow_active`) and attaching (`attach_flow`) flows, all checked against `user_id`. `attach_flow` is the single write path for the agent dropdown: it refuses a draft or a flow already used elsewhere, and detaches whatever the agent currently runs before claiming the unique slot. |
 | `engine_service.py` | Runtime graph interpretation — given a saved flow and one visitor session, decides what to send back on each turn. Stateless-looking; has the same relationship to `flow_service.py` that `ai_analytics_service.py` has to `chatbot_service.py`. |
-| `ai_fallback_service.py` | One AI Fallback node's answer orchestration — reads the node's guardrails/prompt, context source (attached datasource, its own knowledge base, or prompt-only), and LLM choice (the user's AI Settings key, or the in-built default), then asks the right provider. The chatbot's own configured system prompt is the base persona it layers onto, and the chatbot's actions can still run for the turn, but the node's **LLM choice wins** over the chatbot-level one — see [CHATBOT_AI_SETTINGS.md](CHATBOT_AI_SETTINGS.md). Has the same relationship to `engine_service.py` that `knowledge_base_service.py` has to `flow_service.py`. |
-| `knowledge_base_service.py` | One AI Fallback node's knowledge base — uploading documents/text, "training" (extract → chunk → embed via the in-built local Ollama model → store vectors in pgvector, see [AI_INBUILT.md](AI_INBUILT.md)), and retrieving grounding context via vector similarity search. |
+| `ai_fallback_service.py` | One AI Fallback node's answer orchestration — reads the node's guardrails/prompt, context source (attached datasource, its own knowledge base, or prompt-only), and LLM choice (the user's AI Settings key, or the in-built default), then asks the right provider. The chatbot's own configured system prompt is the base persona it layers onto, and the chatbot's actions can still run for the turn, but the node's **LLM choice wins** over the chatbot-level one — see [CHATBOT_AI_SETTINGS.md](CHATBOT_AI_SETTINGS.md). Has the same relationship to `engine_service.py` that `knowledge_base_service.py` has to `flow_service.py`. When the context source is a knowledge base, this module also composes in the node's attached **pipelines** and **tool configs** (`data.kb_pipeline_ids` / `data.kb_tool_config_ids`) — both run live on every visitor message (a pipeline via `graph_designer.graph_runner`, a tool config via its own stored query or chain) and are injected as plain text, **never** embedded into pgvector. Pipelines run concurrently (`asyncio.gather`); tool configs run one at a time, since they share the caller's database session. Either kind failing, timing out, or asking a question omits it and logs a warning rather than failing the whole answer. |
+| `knowledge_base_service.py` | One AI Fallback node's knowledge base — uploading documents/text, "training" (extract → chunk → embed via the in-built local Ollama model → store vectors in pgvector, see [AI_INBUILT.md](AI_INBUILT.md)), and retrieving grounding context via vector similarity search. Only covers the uploaded/typed-text source; the pipeline and tool config sources are composed by `ai_fallback_service.py` itself and never reach this module. |
 
 ---
 

@@ -203,10 +203,12 @@ graph, and the failure from forgetting one is confusing rather than obvious.
 
 Two things in this application are not reachable from pytest, and both have bitten:
 
-**JavaScript.** There is no JS test harness. The three canvases and the two shared modules —
-`static/js/graph_canvas.js` and `static/js/graph_selection.js` — are therefore verified
-outside pytest, and it is worth recording how, because every method used has found real bugs
-that every Python test passed straight through:
+**JavaScript.** There is no JS test *runner* — no `package.json`, no Jest, no Vitest. The three
+canvases and the four shared modules — `graph_canvas.js`, `graph_selection.js`,
+`graph_insert.js` and `graph_edges.js` — are mostly verified outside pytest as a result, and it
+is worth recording how, because every method used has found real bugs that every Python test
+passed straight through. The last bullet below is the exception: `graph_edges.js` and
+`graph_insert.js` now have committed `pytest` coverage, described there.
 
 * the shared primitives were compared against the arithmetic they replaced, copied verbatim
   out of git — 83 assertions, all identical. That found two id generators created in the same
@@ -226,10 +228,30 @@ that every Python test passed straight through:
   without deforming, and Escape restoring a move. One expectation in that run was wrong rather
   than the code, which is its own kind of useful.
 
-None of these is in the repository as a runnable check, which is the honest summary: the
-highest-value follow-up for this part of the codebase is a JS runner, because three
-near-duplicate canvas files of a few thousand lines each currently have no automated coverage
-at all.
+* the **deduplication of the two top-down canvases** into `graph_edges.js` changed this
+  picture, and it is the reason it was worth doing beyond the line count. The connector layer —
+  the anchor cache, the animation frame, the edge chrome, the bend gesture, the group-move
+  callbacks — used to be closures inside two files whose only export is `{ init }`, so it was
+  unreachable by any test. As `window.GraphEdges.create(config)` it is reachable, and unlike the
+  bullets above this one is not a one-off session's notes: `tests/unit/static_js/` holds it as a
+  committed, runnable `pytest` suite that shells out to `node` — the same pattern
+  `tests/unit/services/chatbot/test_widget_markdown.py` already uses for the widget's renderer,
+  skipped rather than failed when `node` is absent. 77 assertions across three files: 36 on the
+  connector runtime itself (`test_graph_edges.py`) — the anchor cache measuring a stationary end
+  once and a moving one *never* after the first, a node deleted mid-drag returning `null`
+  instead of throwing, the ✕ and the + landing 22px apart with the Graph Designer's 10px offset
+  applied to both, a press-and-release leaving no bend behind, the fifth bend refused with its
+  sentence, a derived connector refusing a bend outright, and a group move carrying only the
+  bends whose *both* ends moved; 25 on the shared "+" menu (`test_graph_insert.py`) — rendering,
+  arrow-key wrap, Escape, an outside press, and the menu closing before its callback runs; and
+  16 on `GC.continuationPort` and the splice recipe against real port tables
+  (`test_port_splice.py`), including the catalogue filter's exact exclusion list.
+
+The remaining gap is honest and worth stating: what is still unreachable is genuinely
+per-canvas — `renderNode`, `renderEdge`, `init`, the palette, save and load — plus the layout
+family the deduplication deliberately left alone. A JS runner is still the highest-value
+follow-up for that; there is simply less behind the gap than there was, and what came out
+through the seam is now checked on every change **and** runs under plain `pytest`.
 
 What the suite *can* assert about the canvases is asserted from the route tests and the schema
 tests:

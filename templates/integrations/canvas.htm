@@ -5,6 +5,8 @@
 {# The rubber-band box, shared with the Graph Designer and the Flow Builder. Only the box:
    what a selected step looks like is this canvas's business and is in its own sheet. #}
 <link href="/static/css/graph_selection.css" rel="stylesheet">
+{# The "+" menu that opens from a connection, shared with the other two canvases. #}
+<link href="/static/css/graph_insert.css" rel="stylesheet">
 <link href="/static/css/integrations.css" rel="stylesheet">
 {% endblock %}
 
@@ -214,6 +216,8 @@
 <script src="/static/js/graph_canvas.js"></script>
 {# After graph_canvas.js, which it uses, and before integrations.js, which uses it. #}
 <script src="/static/js/graph_selection.js"></script>
+{# Same rule: integrations.js reads window.GraphInsert when it builds the canvas. #}
+<script src="/static/js/graph_insert.js"></script>
 <script src="/static/js/integrations.js"></script>
 <script>
     IntegrationsCanvas.init({

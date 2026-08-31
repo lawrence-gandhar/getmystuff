@@ -493,6 +493,91 @@ window.GraphCanvas = (function () {
      * @param {number} tolerance
      * @returns {number}
      */
+    /**
+     * A connector's hand-placed bends, or an empty list.
+     *
+     * The `derived` guard is universal rather than per-canvas, and that is deliberate: a
+     * derived connector — the Flow Builder's Goto jump is the only one today — is rebuilt
+     * from its block's settings on every render, so a bend written onto one would vanish
+     * without a word. Two of the three canvases never set `derived` at all, which makes the
+     * check a no-op there and correct in advance if either ever grows one.
+     *
+     * @param {object} edge
+     * @returns {Array<{x: number, y: number}>}
+     */
+    function waypointsOf(edge) {
+        if (!edge || edge.derived) return [];
+        return Array.isArray(edge.waypoints) ? edge.waypoints : [];
+    }
+
+    /**
+     * Bends read off a stored document, keeping only the ones that are usable.
+     *
+     * This is the client-side twin of `validate_edge_waypoints` in `app/schemas/base.py`,
+     * and it exists for the same reason that one does. The save schemas are `extra="allow"`,
+     * which is what makes `waypoints` possible with no migration — and it means a document
+     * can arrive hand-edited, or written by an older version of the page. A bend that is not
+     * two finite numbers is dropped rather than drawn, because `NaN` in a coordinate does
+     * not fail here: it fails silently in the SVG, and then again at the database, which
+     * refuses it as JSON.
+     *
+     * `max` is the caller's cap because the canvases genuinely disagree — four bends on the
+     * two top-down canvases, one on Integrations, whose curve takes a single control point.
+     *
+     * @param {*} raw
+     * @param {number} max
+     * @returns {Array<{x: number, y: number}>}
+     */
+    function readWaypoints(raw, max) {
+        if (!Array.isArray(raw)) return [];
+
+        return raw
+            .filter(function (point) {
+                return point && isFinite(point.x) && isFinite(point.y);
+            })
+            .slice(0, max)
+            .map(function (point) {
+                return { x: Math.max(0, Number(point.x)), y: Math.max(0, Number(point.y)) };
+            });
+    }
+
+    /**
+     * Which of a node's ways out should carry an existing connection onward.
+     *
+     * Used when a node is spliced into a connector: `A → B` becomes `A → new → B`, and this
+     * decides which of `new`'s ports the second half leaves by. Taking the *first* port is
+     * the obvious rule and it is wrong, because two of the shapes on these canvases put
+     * something other than "carry on" first:
+     *
+     *   for_each / do_until  →  ["body", "done"]
+     *
+     * `body` is the inside of the loop. Wiring B there does not insert a step before B, it
+     * moves B *into* the loop and runs it once per item — a silent change to what B means,
+     * on a canvas with no undo. `done` is the port that means what the original connector
+     * meant, so it is the one that inherits it.
+     *
+     * The order, therefore: an explicit `default`, else `done`, else whatever comes first.
+     * The last case is a fresh Branch, whose only port is `else` — which is genuinely where
+     * a branch with no conditions yet sends everything.
+     *
+     * Names only, so the three canvases can call it: a Flow Builder port is
+     * `{port, label, kind}`, a Graph Designer port is `{port, label}`, and an Integrations
+     * port is a bare string.
+     *
+     * @param {Array<string>} names - port names, in the order the node declares them
+     * @returns {string|null} the name to use, or null when there is no way out at all
+     */
+    function continuationPort(names) {
+        const usable = (names || []).filter(function (name) {
+            return typeof name === "string" && name.length > 0;
+        });
+
+        if (!usable.length) return null;
+        if (usable.indexOf("default") !== -1) return "default";
+        if (usable.indexOf("done") !== -1) return "done";
+        return usable[0];
+    }
+
     function snapToAny(value, candidates, tolerance) {
         let best = value;
         let bestGap = tolerance;
@@ -809,6 +894,11 @@ window.GraphCanvas = (function () {
         waypointPoints: waypointPoints,
         nearestSegment: nearestSegment,
         snapToAny: snapToAny,
+        // Hand-routed connectors' stored bends: reading them, and reading them safely.
+        waypointsOf: waypointsOf,
+        readWaypoints: readWaypoints,
+        // Splicing a node into a connector: which of its ports inherits the connection.
+        continuationPort: continuationPort,
         elbowPathD: elbowPathD,
         pointAlongPolyline: pointAlongPolyline,
         // Selection boxes. Geometry only — which of a canvas's things a box has caught is

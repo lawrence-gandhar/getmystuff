@@ -169,6 +169,7 @@ class TestTheCanvasScripts:
 
         assert 'src="/static/js/graph_canvas.js"' in body
         assert 'src="/static/js/graph_selection.js"' in body
+        assert 'src="/static/js/graph_insert.js"' in body
         assert 'src="/static/js/flow_builder.js"' in body
 
     async def test_they_are_loaded_in_dependency_order(
@@ -183,9 +184,15 @@ class TestTheCanvasScripts:
         # instead — a test that passes or fails on prose.
         canvas_tag = body.index('src="/static/js/graph_canvas.js"')
         selection_tag = body.index('src="/static/js/graph_selection.js"')
+        insert_tag = body.index('src="/static/js/graph_insert.js"')
+        edges_tag = body.index('src="/static/js/graph_edges.js"')
         builder_tag = body.index('src="/static/js/flow_builder.js"')
 
+        # Both shared modules read `window.GraphCanvas`, and flow_builder.js reads both
+        # of them, so either one landing after it is a blank canvas.
         assert canvas_tag < selection_tag < builder_tag
+        assert canvas_tag < insert_tag < builder_tag
+        assert canvas_tag < edges_tag < builder_tag
 
     async def test_the_selection_stylesheet_is_linked(
         self, client, user, make_flow,

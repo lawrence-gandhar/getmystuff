@@ -36,8 +36,11 @@ kb_document_crud = CRUDQueryBuilder(FlowNodeKnowledgeDocument)
 
 _MAX_EXTRACTED_CHARS = 200_000
 _MAX_MANUAL_TEXT_CHARS = 50_000
-_MAX_CONTEXT_CHARS = 6000
-_MAX_CONTEXT_CHUNKS = 8
+# Kept well under ai_fallback_service._MAX_KB_CONTEXT_CHARS (the cap on this text
+# plus live pipeline/tool config text combined) so the composed prompt has room
+# left for those other blocks without needing OLLAMA_NUM_CTX raised further.
+_MAX_CONTEXT_CHARS = 4000
+_MAX_CONTEXT_CHUNKS = 5
 
 _MIME_TYPES = {
     "pdf": "application/pdf",

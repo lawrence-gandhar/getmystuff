@@ -611,13 +611,17 @@ class TestCanvas:
         # and compare those instead — which is a test that passes or fails on prose.
         canvas_tag = body.index('src="/static/js/graph_canvas.js"')
         selection_tag = body.index('src="/static/js/graph_selection.js"')
+        insert_tag = body.index('src="/static/js/graph_insert.js"')
+        edges_tag = body.index('src="/static/js/graph_edges.js"')
         designer_tag = body.index('src="/static/js/graph_designer.js"')
 
-        # graph_selection.js reads ``window.GraphCanvas`` at module scope, and
-        # graph_designer.js reads ``window.GraphSelection`` in ``init`` — so all three
-        # have to arrive in this order or the canvas comes up blank with a single
-        # "undefined" in the console.
+        # Both shared modules read ``window.GraphCanvas`` at module scope, and
+        # graph_designer.js reads ``window.GraphSelection`` and ``window.GraphInsert`` in
+        # ``init`` — so all four have to arrive in this order or the canvas comes up blank
+        # with a single "undefined" in the console.
         assert canvas_tag < selection_tag < designer_tag
+        assert canvas_tag < insert_tag < designer_tag
+        assert canvas_tag < edges_tag < designer_tag
 
     async def test_the_selection_stylesheet_is_linked(
         self, client, user, make_graph,

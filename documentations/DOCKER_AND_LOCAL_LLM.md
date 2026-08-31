@@ -224,7 +224,7 @@ never heard of should be able to try it.
 
 | Setting | `.env` value | Deep Agent floor | Why the floor |
 |---|---|---|---|
-| `OLLAMA_NUM_CTX` | 2048 | **8192** | An over-long prompt is silently cut. A truncated tool *result* is a wrong answer, not an error. |
+| `OLLAMA_NUM_CTX` | 4096 | **8192** | An over-long prompt is silently cut. A truncated tool *result* is a wrong answer, not an error. |
 | `OLLAMA_NUM_PREDICT` | 512 | **1024** | A truncated tool *call* arrives as malformed JSON — the graph sees a broken call rather than a cut-off answer. |
 
 Both `.env` values are correctly sized for the short single-shot prompts they were
@@ -318,15 +318,19 @@ localhost — a host-level change with a security consequence, so the self-conta
 container is the default. The alternative is documented in `docker-compose.yml` for
 anyone who wants it.
 
-### 8. Pre-existing `.env` tuning, left alone
+### 8. Pre-existing `.env` tuning
 
-These were already measured for this host and are unchanged:
+`OLLAMA_NUM_THREAD` and `OLLAMA_KEEP_ALIVE` were measured for this host and are unchanged.
+`OLLAMA_NUM_CTX` was later raised from 2048 to 4096 — see [AI_INBUILT.md](AI_INBUILT.md) for
+why (an AI Fallback node's composed context could exceed the 2048 budget and get silently
+truncated):
 
 ```
 OLLAMA_NUM_THREAD=6     # physical cores, NOT the 12 hyperthreads:
                         # 6.0 tok/s at 6 threads vs 2.0 tok/s at 12 — oversubscribing contends
 OLLAMA_KEEP_ALIVE=-1    # keep the small model resident
-OLLAMA_NUM_CTX=2048     # fits the ~1270-token worst-case KB prompt with headroom
+OLLAMA_NUM_CTX=4096     # fits the composed AI Fallback worst case (~5500 real tokens measured
+                        # in production) with headroom; see AI_INBUILT.md's retrieval-breadth note
 ```
 
 ---

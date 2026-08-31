@@ -1,0 +1,78 @@
+/* ===== THE INSERT MENU =====
+   The list of blocks that opens from a connector's "+", on all three canvases.
+
+   Shared for the same reason `graph_selection.css` is: what a *node* looks like belongs to
+   each canvas, but this is a small floating list of buttons drawn over the top for as long
+   as a hand is choosing, and writing it three times — once of them into a template's inline
+   <style> — would be three copies of something nobody would ever want to differ.
+
+   Parented to `document.body` by graph_insert.js, not to the canvas, so `position: fixed`
+   here is load-bearing rather than a preference: both the wrapper and the canvas scroll, and
+   a menu inside either is clipped by whichever edge it opens near. */
+
+.gc-insert-menu {
+    position: fixed;
+    z-index: 1080;   /* over a Bootstrap offcanvas backdrop (1040) and its panel (1045) */
+
+    min-width: 190px;
+    max-width: 260px;
+
+    /* A canvas can offer a dozen block types and the viewport may be short. The list
+       scrolls rather than the menu growing past the bottom of the screen — graph_insert.js
+       pins it to the top edge in that case and relies on this to make the rest reachable. */
+    max-height: 60vh;
+    overflow-y: auto;
+
+    padding: 4px;
+    background: #fff;
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, .16);
+}
+
+.gc-insert-item {
+    display: block;
+    width: 100%;
+    padding: 5px 10px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+
+    text-align: left;
+    font-size: 0.75rem;
+    line-height: 1.35;
+    color: #212529;
+    white-space: normal;   /* a Pipelines label is a server sentence, not a keyword */
+
+    cursor: pointer;
+}
+
+.gc-insert-item:hover,
+.gc-insert-item:focus {
+    background: #e7f1ff;
+    /* Focus is how the arrow keys show where they are, so it gets a ring of its own rather
+       than borrowing the hover colour alone. */
+    outline: 2px solid #0d6efd;
+    outline-offset: -2px;
+}
+
+.gc-insert-item i {
+    width: 1.1em;
+    text-align: center;
+    color: #6c757d;
+}
+
+.gc-insert-item:hover i,
+.gc-insert-item:focus i {
+    color: #0d6efd;
+}
+
+/* An empty catalogue says why. A menu that opens blank reads as broken, and on these
+   canvases empty is a real state — every insertable type can be excluded at once. */
+.gc-insert-empty {
+    margin: 0;
+    padding: 6px 10px;
+    font-size: 0.72rem;
+    line-height: 1.4;
+    color: #6c757d;
+}

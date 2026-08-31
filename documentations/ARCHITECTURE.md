@@ -168,9 +168,19 @@ somebody dragged),
 Ctrl-click or Ctrl+A and moving them as one across all three canvases, plus routing a
 connector by hand — the gesture is shared in `static/js/graph_selection.js` while what a
 selection *means* stays with each canvas, which is where the stateless-primitives rule in
-`graph_canvas.js` had to move rather than blur; also the drag-repaint fix that made a group
+`graph_canvas.js` had to move rather than blur; the map of the four shared front-end modules
+and which of them Integrations deliberately does not use, since measuring the three canvases
+put the two top-down ones at 93–100% identical on the connector layer and the third at 19–40%;
+also the drag-repaint fix that made a group
 move possible at all, since the old loop measured every port after writing every position
-and forced the browser to lay the canvas out again a dozen times a frame),
+and forced the browser to lay the canvas out again a dozen times a frame; and the **+** that
+splices a block into a connector, `A → B` becoming `A → new → B`, whose one hard decision is
+which of the new block's ports inherits the connection — a loop's `done` and never its
+`body`, or the block that used to follow starts running once per item instead of once. Worth
+reading too for the specificity defect it uncovered on the Flow Builder: `#flow-edges path`
+beat a lone `.fb-edge-hit`, so `pointer-events: none` won and the connector layer received no
+events at all — a wire that could not be hovered, pressed or clicked, which surfaced as three
+unrelated-looking missing features and was one lost cascade),
 [DEEP_AGENTS.md](DEEP_AGENTS.md) (running a data agent's tool configs as real queries so a
 chatbot answers from tool results and the language model never reads the database),
 [DOWNLOADER_AGENTS.md](DOWNLOADER_AGENTS.md) (an answer capped at 100 printed rows plus the

@@ -105,16 +105,17 @@
     pointer-events: none;
 }
 
-/* The wide invisible twin of each connector, and the only part of it that can be hovered
-   or clicked. A 2px line is not a control anybody can hit, and the ✕ and the handles only
-   appear on hover — so without this they would be unreachable. `stroke: transparent`
-   rather than `opacity: 0`: an opacity-0 path still paints and can dim the line under it
-   in some renderers. */
+/* The wide invisible twin of each connector, and the only part of it that can be hovered,
+   clicked or dragged. A 2px line is not something a hand can land on, which matters more
+   now that pressing the wire and moving is how a bend is put in it — that gesture has to
+   be reachable without precision. `stroke: transparent` rather than `opacity: 0`: an
+   opacity-0 path still paints and can dim the line under it in some renderers. */
 #gd-edges path.gd-edge-hit {
     stroke: transparent;
     stroke-width: 16;
     pointer-events: stroke;
-    cursor: pointer;
+    /* Both a click and a drag land here — the drag is the one nothing else hints at. */
+    cursor: grab;
 }
 
 .gd-edge-group:hover path:not(.gd-edge-hit) { stroke: #0d6efd; }
@@ -135,13 +136,21 @@
     stroke: #6f42c1;
 }
 
-/* ---------- connector controls, revealed on hover ----------
-   Every connector used to carry a red ✕ and two handles at all times, which on a
-   twelve-connector pipeline meant thirty-six controls competing with the nodes. They are
-   the same controls, shown when a reader is asking about that one line. `visibility`
-   rather than `display` so their geometry is still updated in place while hidden. */
-/* A hand-placed bend. Smaller than a reattach handle and drawn under it, so that where the
-   two land close together on a heavily routed wire the reattach handle wins the press —
+/* ---------- connector controls ----------
+   The red ✕ and the two end handles are visible on every connector, at all times. They
+   were briefly hover-only, on the argument that a twelve-connector pipeline carries
+   thirty-six controls competing with the nodes. That argument is not wrong, but it traded
+   away a control an operator had already learned to look for, and a delete button you
+   cannot see is a delete button that has been removed. Tidiness does not outrank an
+   affordance somebody is already using.
+
+   A hand-placed bend is the exception, and only because it is new: a wire can carry four
+   of them, they appear exactly where a hand put them, and nobody is looking for one on a
+   wire they have not bent. `visibility` rather than `display` so a hidden handle's
+   geometry is still updated in place — see `updateEdgeGeometry`.
+
+   The bend handle is smaller than a reattach handle and drawn under it, so where the two
+   land close together on a heavily routed wire the reattach handle wins the press —
    reattaching is the more destructive of the two. The wire's own fat hit path takes the
    press, so this is never a target itself. */
 .gd-edge-waypoint {
@@ -150,30 +159,30 @@
     stroke-width: 1.5;
     cursor: move;
     pointer-events: none;
-}
-
-.gd-edge-delete-btn,
-.gd-edge-handle,
-.gd-edge-waypoint {
     visibility: hidden;
     opacity: 0;
     transition: opacity .12s ease-in-out;
 }
-.gd-edge-group:hover .gd-edge-delete-btn,
-.gd-edge-group:hover .gd-edge-handle,
 .gd-edge-group:hover .gd-edge-waypoint,
-.gd-edge-group-selected .gd-edge-delete-btn,
-.gd-edge-group-selected .gd-edge-handle,
 .gd-edge-group-selected .gd-edge-waypoint {
     visibility: visible;
     opacity: 1;
 }
 
+/* The two controls on a connector's midpoint. The ✕ is red because it destroys something;
+   the + is blue because it is the ordinary, safe half of the pair — and the pair sits close
+   enough together that colour is what separates them at a glance rather than position. */
 .gd-edge-delete-btn { cursor: pointer; pointer-events: auto; }
 .gd-edge-delete-btn circle { fill: #fff; stroke: #dc3545; stroke-width: 1.5; }
 .gd-edge-delete-btn text { fill: #dc3545; font-size: 11px; font-weight: 700; }
 .gd-edge-delete-btn:hover circle { fill: #dc3545; }
 .gd-edge-delete-btn:hover text { fill: #fff; }
+
+.gd-edge-insert-btn { cursor: pointer; pointer-events: auto; }
+.gd-edge-insert-btn circle { fill: #fff; stroke: #0d6efd; stroke-width: 1.5; }
+.gd-edge-insert-btn text { fill: #0d6efd; font-size: 13px; font-weight: 700; }
+.gd-edge-insert-btn:hover circle { fill: #0d6efd; }
+.gd-edge-insert-btn:hover text { fill: #fff; }
 
 .gd-edge-handle {
     fill: #fff;

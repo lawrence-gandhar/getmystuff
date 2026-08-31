@@ -683,8 +683,9 @@ a visitor pressing the second button has not made anything go wrong.
 | Delete a block | Hover it and use the bin button that appears |
 | Move a block yourself | Drag it. The canvas then leaves your layout alone |
 | Get the tidy layout back | **Tidy up** in the toolbar |
-| Delete a connector | Hover it and click the **×** that appears |
-| Re-point a connector | Hover it and drag either small end handle onto another block |
+| Delete a connector | The red **×** on its middle |
+| Insert a block into a connector | The blue **+** beside the ×. What was A → B becomes A → new → B, wired for you |
+| Re-point a connector | Drag either small end handle onto another block |
 | Select several blocks | Drag a box on empty canvas — anything it touches is selected |
 | Add or remove one | **Ctrl-click** it (**Cmd-click** on a Mac) |
 | Select everything | **Ctrl+A**, or the **Select all** button |
@@ -881,6 +882,52 @@ a pure loss of recall, not a trim of waste.
 
 The node's **model choice wins** over the chatbot-level one for the turns it handles. Your
 chatbot's persona is still the base it layers onto.
+
+### Grounding a knowledge base in a live pipeline or tool config
+
+Uploaded documents are not the only thing a knowledge base panel can hold. Two more source
+kinds sit alongside **Upload files** / **Type text**: **From a pipeline** and **From a tool
+config**. Tick any published Graph Designer pipeline or any tool config you own, and it is
+added to what the AI reads.
+
+The difference from a document is what "adding" means:
+
+- A document is **trained once**, ahead of time — extracted, chunked, embedded, and searched
+  by similarity at answer time.
+- A pipeline or tool config runs **live, on every single visitor message** — its own query or
+  drawing, fresh each time — and its result is dropped straight into the answer's context as
+  plain text. It is **never** embedded or stored in the vector database.
+
+That trade-off is the point: a document answers "what does this text say," while a pipeline
+or tool config answers "what is true right now" — today's order count, this week's open
+tickets — without a re-train step every time the underlying data changes. Both a pipeline and
+a tool config receive the conversation's own variables as input, the same way a **Run Graph**
+block does, so a value collected earlier in the flow (a city, an account number) can shape
+what they return.
+
+Tick as many of each kind as you like — every one attached is queried, every turn. Unlike
+Download File's "whichever ran most recently," these are not alternatives: each contributes
+its own paragraph, and the answer draws on all of them together.
+
+If one is slow to respond, stops to ask a question, or fails, it is quietly left out of that
+turn's answer rather than breaking it — the rest of the context (documents, other pipelines,
+other tool configs) still reaches the AI. Deleting a pipeline or tool config after attaching
+it degrades the same way on the next turn, rather than an error the visitor sees.
+
+### Leaving an AI Fallback block disconnected, on purpose
+
+Drawing nothing after an AI Fallback block is a legitimate way to end a flow — it means
+"this block is the last thing the visitor talks to." When a conversation reaches a block
+like that, every message the visitor sends from then on keeps being answered by that same
+block, with its own guardrails, knowledge base and model choice — not a generic reply,
+and not the "that's everything I can help with here" message a flow-only chatbot would
+otherwise show once its flow is done.
+
+The AI is told what it answered last time, so a follow-up like *"what about opened
+items?"* is understood as a continuation of the same conversation rather than a question
+out of nowhere. Only the **one most recent** answer is remembered this way, not a full
+transcript — each new answer replaces the last. Restarting the conversation (the widget's
+restart button) clears it, the same as everything else about that visit.
 
 ### Keeping the AI's answer — "email me the data"
 
@@ -1498,6 +1545,8 @@ the drawing never says one thing while the run does another.
 | Put a move back | **Escape** while you are still dragging |
 | Route a wire round something | Drag the line itself — it bends through where you drop it |
 | Straighten a wire | Double-click it, or drop the bend back onto the straight line |
+| Delete a wire | The red **×** on its middle |
+| Insert a node into a wire | The blue **+** beside the ×. What was A → B becomes A → new → B, wired for you |
 
 **Two different kinds of picking, and it is worth keeping them straight.**
 **Shift-click** picks boxes to *test* — that is the set **Test selection** runs, and the
@@ -1800,6 +1849,11 @@ selection moves with its connections following, and selecting a connection picks
 steps it joins. Drag a connection itself to curve it round something in the way, and
 double-click it to let the canvas draw it again. This canvas does not arrange itself, so
 nothing here has an arrangement to hand back.
+
+Every connection also carries two controls on its middle: a red **×** that deletes it, and a
+blue **+** that puts a step *inside* it — what was A → B becomes A → new → B, already wired,
+with the new step's settings open. Because this canvas does not re-arrange itself, the new
+step stays exactly midway between the two it now sits between.
 
 ### The mapping grid
 

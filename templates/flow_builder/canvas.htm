@@ -5,6 +5,8 @@
 {# The rubber-band box, shared with the Graph Designer and the Integrations canvas. Only
    the box: what a selected block looks like is this canvas's business and is below. #}
 <link href="/static/css/graph_selection.css" rel="stylesheet">
+{# The "+" menu that opens from a connector, shared with the other two canvases. #}
+<link href="/static/css/graph_insert.css" rel="stylesheet">
 <style>
 /* ============================================================================
    The Flow Builder canvas.
@@ -43,16 +45,32 @@
     stroke-linecap: round;
     pointer-events: none;
 }
-/* The wide invisible twin of each connector, and the only part of it that can be
-   hovered or clicked. A 2px line is not a control anybody can hit, and the ✕ and
-   the handles only appear on hover — so without this they would be unreachable.
-   `stroke: transparent` rather than `opacity: 0`: an opacity-0 path still paints
-   and can dim the line under it in some renderers. */
-.fb-edge-hit {
-    stroke: transparent !important;
-    stroke-width: 16 !important;
+/* The wide invisible twin of each connector, and the only part of it that can be hovered,
+   clicked or dragged. A 2px line is not something a hand can land on, which matters more
+   now that pressing the wire and moving is how a bend is put in it — that gesture has to
+   be reachable without precision. `stroke: transparent` rather than `opacity: 0`: an
+   opacity-0 path still paints and can dim the line under it in some renderers.
+
+   Written as `#flow-edges path.fb-edge-hit`, not as a bare class, and that is the whole
+   reason this connector layer works at all.
+
+   `#flow-edges path` above is specificity (1,0,1). A lone `.fb-edge-hit` is (0,1,0), so
+   the id rule beat it on every property they share — including `pointer-events: none`.
+   The hit path therefore received no events whatsoever: the wire could not be hovered, so
+   its ✕ never appeared; could not be pressed, so it could not be bent; and could not be
+   clicked, so it could not be selected. All three read as separate missing features and
+   were one lost cascade.
+
+   The two `!important`s that used to be here are the fingerprint of it. Whoever wrote them
+   hit the same fight for `stroke` and `stroke-width` and patched those, because a 2px grey
+   line where a 16px transparent one belongs is *visible*. A lost `pointer-events` is not,
+   so it survived. Raising the selector fixes the properties together and lets both
+   `!important`s go, rather than adding a third. */
+#flow-edges path.fb-edge-hit {
+    stroke: transparent;
+    stroke-width: 16;
     pointer-events: stroke;
-    cursor: pointer;
+    cursor: grab;   /* a drag bends it; a click selects it */
 }
 #flow-edges path.fb-edge-selected {
     stroke: #0d6efd;
@@ -70,56 +88,70 @@
 /* A Goto block's return jump. Dashed because it is not a step of the flow — nothing
    travels down it in order — and grey-blue so it reads as machinery rather than as a
    fault. Derived from the block's settings, so it carries no controls of its own. */
-.fb-edge-derived path {
+/* Both of these are id-scoped for the reason spelled out on `.fb-edge-hit` above: a bare
+   class loses to `#flow-edges path` on any property that rule also sets, and both of these
+   set `stroke`. Unscoped, the jump below drew grey rather than blue (its dashes survived,
+   because the base rule sets no `stroke-dasharray`, which is what made it look deliberate),
+   and hovering a connector highlighted nothing at all. */
+#flow-edges .fb-edge-derived path {
     stroke: #748ffc;
     stroke-width: 2;
     stroke-dasharray: 5 5;
 }
-.flow-edge-group:hover path:not(.fb-edge-hit) {
+#flow-edges .flow-edge-group:hover path:not(.fb-edge-hit) {
     stroke: #0d6efd;
 }
 
 /* ---------------------------------------------------------------------------
-   Connector controls — hidden until the connector is hovered or selected.
+   Connector controls.
 
-   Previously every connector carried a red ✕ and two handles at all times, which
-   on a ten-connector flow meant thirty controls competing with fourteen blocks.
-   They are the same controls, revealed when a reader is asking about that one
-   line. `visibility` rather than `display` so their geometry is still updated in
-   place while they are hidden — see `updateEdgeGeometry`.
+   The red ✕ and the two end handles are visible on every connector, at all times.
+   They were briefly hover-only, on the argument that a ten-connector flow carries
+   thirty controls competing with fourteen blocks. That argument is not wrong, but
+   it traded away a control an operator had already learned to look for, and a
+   delete button you cannot see is a delete button that has been removed.
+   Tidiness does not outrank an affordance somebody is already using.
+
+   A hand-placed bend is the exception, and only because it is new: a wire can
+   carry four of them, they sit exactly where a hand put them, and nobody is
+   looking for one on a wire they have not bent. `visibility` rather than
+   `display` so a hidden handle's geometry is still updated in place — see
+   `updateEdgeGeometry`.
+
+   The bend handle is smaller than a reattach handle and drawn under it, so where
+   the two land close together on a heavily routed wire the reattach handle wins
+   the press — reattaching is the more destructive of the two.
    --------------------------------------------------------------------------- */
-/* A hand-placed bend. Smaller than a reattach handle and drawn under it, so that where the
-   two land close together on a heavily routed wire the reattach handle wins the press —
-   reattaching is the more destructive of the two. */
 .fb-edge-waypoint {
     fill: #fff;
     stroke: #0d6efd;
     stroke-width: 1.5;
     cursor: move;
     pointer-events: none;   /* the wire's own fat hit path takes the press */
-}
-
-.fb-edge-delete-btn,
-.fb-edge-handle,
-.fb-edge-waypoint {
     visibility: hidden;
     opacity: 0;
     transition: opacity .12s ease-in-out;
 }
 .flow-edge-group:hover .fb-edge-waypoint,
-.fb-edge-group-selected .fb-edge-waypoint,
-.flow-edge-group:hover .fb-edge-delete-btn,
-.flow-edge-group:hover .fb-edge-handle,
-.fb-edge-group-selected .fb-edge-delete-btn,
-.fb-edge-group-selected .fb-edge-handle {
+.fb-edge-group-selected .fb-edge-waypoint {
     visibility: visible;
     opacity: 1;
 }
+/* The two controls on a connector's midpoint. The ✕ is red because it destroys
+   something; the + is blue because it is the ordinary, safe half of the pair, and
+   the pair sits close enough together that colour is what separates them at a
+   glance rather than position. */
 .fb-edge-delete-btn { cursor: pointer; pointer-events: auto; }
 .fb-edge-delete-btn circle { fill: #fff; stroke: #dc3545; stroke-width: 1.5; }
 .fb-edge-delete-btn text { fill: #dc3545; font-size: 11px; font-weight: 700; }
 .fb-edge-delete-btn:hover circle { fill: #dc3545; }
 .fb-edge-delete-btn:hover text { fill: #fff; }
+.fb-edge-insert-btn { cursor: pointer; pointer-events: auto; }
+.fb-edge-insert-btn circle { fill: #fff; stroke: #0d6efd; stroke-width: 1.5; }
+.fb-edge-insert-btn text { fill: #0d6efd; font-size: 13px; font-weight: 700; }
+.fb-edge-insert-btn:hover circle { fill: #0d6efd; }
+.fb-edge-insert-btn:hover text { fill: #fff; }
+
 .fb-edge-handle {
     fill: #fff;
     stroke: #0d6efd;
@@ -506,6 +538,11 @@
 <script src="/static/js/graph_canvas.js"></script>
 {# After graph_canvas.js, which it uses, and before flow_builder.js, which uses it. #}
 <script src="/static/js/graph_selection.js"></script>
+{# Same rule: flow_builder.js reads window.GraphInsert when it builds the canvas. #}
+<script src="/static/js/graph_insert.js"></script>
+{# The connector runtime shared with the Graph Designer — anchors, chrome, bends. Reads
+   window.GraphCanvas at module scope, and flow_builder.js reads it in `init`. #}
+<script src="/static/js/graph_edges.js"></script>
 <script src="/static/js/flow_builder.js"></script>
 <script>
     FlowBuilder.init({
@@ -520,6 +557,7 @@
         emailTemplates: {{ email_templates_json | safe }},
         smtpConfigs: {{ smtp_configs_json | safe }},
         flows: {{ flows_json | safe }},
+        toolConfigs: {{ tool_configs_json | safe }},
     });
 </script>
 {% endblock %}

@@ -285,14 +285,24 @@ window.GraphDesigner = (function () {
     // How near a line-up a dragged bend has to get before it snaps onto it.
     const WAYPOINT_SNAP_PX = 6;
 
+    // How far the ✕ and the + sit either side of a connector's midpoint. Both are r=8, so
+    // 11 leaves a 6px gap: close enough to read as one pair of controls belonging to this
+    // wire, far enough that neither is pressed by aiming at the other.
+    const EDGE_BTN_GAP_PX = 11;
+
+    // The shared "+" menu that inserts a node into a connector. Built in `init`.
+    let insertMenu = null;
+
+    // The shared connector runtime — the anchor cache, the edge-chrome repaint and the
+    // return lane. Built in `init`, because it needs the canvas elements.
+    let edges = null;
+
     // Drop a bend this close to where the wire would run without it and it is removed.
     const WAYPOINT_DISCARD_PX = 6;
 
     // The pending repaint of a drag, and the return lane it was computed against. Both are
     // per-frame: a mousemove only records where the cursor is, and one animation frame does
     // the drawing, however many mousemoves arrived in between. See `scheduleDragFrame`.
-    let dragFrame = null;
-    let laneXCache = null;
 
     // -----------------------------------------------------------------
     // Dirty tracking
@@ -752,115 +762,6 @@ window.GraphDesigner = (function () {
     // stylesheet changes the border or moves a dot.
     // -----------------------------------------------------------------
 
-    let dragAnchors = null;
-
-    function measuredAnchor(nodeId, portSelector) {
-        return GC.portAnchor(wrapperEl, document.getElementById("node-" + nodeId), portSelector);
-    }
-
-    function portAnchor(nodeId, portSelector) {
-        if (!dragAnchors) return measuredAnchor(nodeId, portSelector);
-
-        const key = nodeId + "|" + (portSelector || "");
-
-        // A stationary end. Nothing about it can change while the drag runs, so it is
-        // measured once and then remembered outright.
-        if (!dragAnchors.moving[nodeId]) {
-            if (!(key in dragAnchors.frozen)) {
-                dragAnchors.frozen[key] = measuredAnchor(nodeId, portSelector);
-            }
-            return dragAnchors.frozen[key];
-        }
-
-        const node = findNode(nodeId);
-        if (!node) return null;
-        const x = (node.position || {}).x || 0;
-        const y = (node.position || {}).y || 0;
-
-        if (!(key in dragAnchors.offsets)) {
-            const measured = measuredAnchor(nodeId, portSelector);
-            dragAnchors.offsets[key] = measured
-                ? { dx: measured.x - x, dy: measured.y - y }
-                : null;
-        }
-
-        const offset = dragAnchors.offsets[key];
-        return offset ? { x: x + offset.dx, y: y + offset.dy } : null;
-    }
-
-    /**
-     * Open the anchor cache for a drag, and warm it while the canvas is still settled.
-     *
-     * Warming matters: measuring lazily on the first moved frame would take one forced
-     * layout, which is harmless, but it would also measure a node the frame had already
-     * moved. Doing it here, before anything has been written, keeps the whole gesture
-     * free of layout reads.
-     *
-     * @param {Array<string>} movingIds - the nodes this drag will move
-     * @param {Array<object>} chrome - the resolved connectors it will repaint
-     */
-    function beginDragAnchors(movingIds, chrome) {
-        dragAnchors = { moving: {}, offsets: {}, frozen: {} };
-        movingIds.forEach(function (id) { dragAnchors.moving[id] = true; });
-        chrome.forEach(function (record) { edgeRoute(record.edge); });
-    }
-
-    function endDragAnchors() {
-        dragAnchors = null;
-    }
-
-    /**
-     * Where the cursor is, in canvas coordinates.
-     *
-     * The same three lines were written inline at four sites. Named, because the bend
-     * gesture needs to agree with the drag gesture about them exactly.
-     *
-     * @param {{clientX: number, clientY: number}} e
-     * @returns {{x: number, y: number}}
-     */
-    function cursorPoint(e) {
-        const rect = wrapperEl.getBoundingClientRect();
-        return {
-            x: e.clientX + wrapperEl.scrollLeft - rect.left,
-            y: e.clientY + wrapperEl.scrollTop - rect.top,
-        };
-    }
-
-    /**
-     * A connector's hand-placed bends, as a list that is always safe to route through.
-     *
-     * @param {object} edge
-     * @returns {Array<{x: number, y: number}>}
-     */
-    function waypointsOf(edge) {
-        if (!edge) return [];
-        return Array.isArray(edge.waypoints) ? edge.waypoints : [];
-    }
-
-    /**
-     * Bends read off a stored document, keeping only the ones that are usable.
-     *
-     * The save schema lets the canvas add keys to its own drawing, which is what makes
-     * `waypoints` possible without a migration — and means this is where a hand-edited or
-     * older document is made safe. A bend that is not two finite numbers is dropped rather
-     * than drawn: `NaN` in a coordinate does not fail here, it fails silently in the SVG and
-     * then again at the database, which refuses it as JSON.
-     *
-     * @param {*} raw
-     * @returns {Array<{x: number, y: number}>}
-     */
-    function readWaypoints(raw) {
-        if (!Array.isArray(raw)) return [];
-
-        return raw
-            .filter(function (point) {
-                return point && isFinite(point.x) && isFinite(point.y);
-            })
-            .slice(0, MAX_EDGE_WAYPOINTS)
-            .map(function (point) {
-                return { x: Math.max(0, Number(point.x)), y: Math.max(0, Number(point.y)) };
-            });
-    }
 
     /**
      * The selector for the port a connector leaves by.
@@ -877,28 +778,6 @@ window.GraphDesigner = (function () {
     }
 
     /**
-     * How far right the lane sits that a connector running back up the canvas uses.
-     * Measured off the nodes, because the canvas is as wide as the pipeline drawn on it.
-     */
-    function returnLaneX() {
-        // Memoised for the duration of one drag frame only. It reduces over every node,
-        // and `edgeRoute` asks for it once per back edge, so on a canvas with a loop this
-        // was O(nodes x edges) per frame. Guarded on the anchor cache, which exists for
-        // exactly as long as a drag — single or group — is running, so the memo cannot
-        // outlive the gesture that justified it. Outside one this is the plain reduce it
-        // always was.
-        if (dragAnchors && laneXCache !== null) return laneXCache;
-
-        const rightmost = state.nodes.reduce(function (widest, node) {
-            return Math.max(widest, (node.position || {}).x || 0);
-        }, 0);
-
-        const lane = rightmost + canvasMetrics().stepWidth + GC.ELBOW_LANE;
-        if (dragAnchors) laneXCache = lane;
-        return lane;
-    }
-
-    /**
      * The corner points one connector runs through.
      *
      * A connector the server reported as a back edge — a `for each` or `do until` sending
@@ -906,12 +785,12 @@ window.GraphDesigner = (function () {
      * downward step available: its target is above it, which is what makes it a loop.
      */
     function edgeRoute(edge) {
-        const from = portAnchor(edge.source, sourceSelectorFor(edge));
-        const to = portAnchor(edge.target, '[data-port-role="in"]') || portAnchor(edge.target, null);
+        const from = edges.portAnchor(edge.source, sourceSelectorFor(edge));
+        const to = edges.portAnchor(edge.target, '[data-port-role="in"]') || edges.portAnchor(edge.target, null);
 
         if (!from || !to) return null;
 
-        const bends = waypointsOf(edge);
+        const bends = GC.waypointsOf(edge);
 
         // A hand-placed bend beats the return lane. The lane is a fallback — `elbowPoints`
         // says why it exists: there is no way down to a target that is up. A waypoint is a
@@ -919,7 +798,7 @@ window.GraphDesigner = (function () {
         // failure mode of the other order is worse: you bend a wire, nothing visible
         // happens, and you bend it again.
         return (state.backEdges[edge.id] && !bends.length)
-            ? GC.backEdgePoints(from, to, returnLaneX())
+            ? GC.backEdgePoints(from, to, edges.returnLaneX())
             : GC.waypointPoints(from, to, bends);
     }
 
@@ -959,18 +838,18 @@ window.GraphDesigner = (function () {
         hit.addEventListener("click", function (e) {
             // Not the click that trailed a bend: a wire that was just routed must not also
             // become the selected one.
-            if (suppressEdgeClick) return;
+            if (edges.swallowedEdgeClick()) return;
             select(e);
         });
         // Press and move to bend it; press and release to select it. The same split
         // `wireOutPort` documents for a port, which is why the click listener stays: under
         // the threshold nothing happens here and the click does its job.
-        hit.addEventListener("mousedown", function (e) { startBend(edge.id, e); });
+        hit.addEventListener("mousedown", function (e) { edges.startBend(edge.id, e); });
         // Straightening it. This canvas has no connector properties panel, so this is the
         // only affordance there is — which is why it is the one both canvases share.
         hit.addEventListener("dblclick", function (e) {
             e.stopPropagation();
-            straightenEdge(edge.id);
+            edges.straightenEdge(edge.id);
         });
         group.appendChild(hit);
 
@@ -994,15 +873,56 @@ window.GraphDesigner = (function () {
         // that where two of them land close together on a heavily routed wire the reattach
         // handle paints on top and wins the press. Reattaching is the more destructive
         // gesture and should not be taken by accident.
-        waypointsOf(edge).forEach(function (bend, index) {
+        GC.waypointsOf(edge).forEach(function (bend, index) {
             group.appendChild(waypointHandle(index, bend));
         });
 
-        group.appendChild(deleteButton(edge.id, GC.pointAlongPolyline(route, 0.5)));
+        const mid = GC.pointAlongPolyline(route, 0.5);
+        group.appendChild(deleteButton(edge.id, { x: mid.x - EDGE_BTN_GAP_PX, y: mid.y }));
+        group.appendChild(insertButton(edge.id, { x: mid.x + EDGE_BTN_GAP_PX, y: mid.y }));
         group.appendChild(endHandle(edge.id, "source", GC.pointAlongPolyline(route, 0.15)));
         group.appendChild(endHandle(edge.id, "target", GC.pointAlongPolyline(route, 0.85)));
 
         edgesGroupEl.appendChild(group);
+    }
+
+    /**
+     * The "+" that inserts a node into this connector.
+     *
+     * The `mousedown` stopper is not decoration: without it the press reaches the wire's
+     * own hit path underneath and starts a bend, so pressing the + would put a corner in
+     * the line as a side effect of opening a menu.
+     *
+     * @param {string} edgeId
+     * @param {{x: number, y: number}} pt
+     * @returns {SVGElement}
+     */
+    function insertButton(edgeId, pt) {
+        const g = GC.svg("g");
+        g.setAttribute("class", "gd-edge-insert-btn");
+        g.setAttribute("transform", "translate(" + pt.x + "," + (pt.y + 10) + ")");
+        g.setAttribute("role", "button");
+
+        const title = GC.svg("title");
+        title.textContent = "Insert a node here";
+        g.appendChild(title);
+
+        const circle = GC.svg("circle");
+        circle.setAttribute("r", "8");
+        g.appendChild(circle);
+
+        const text = GC.svg("text");
+        text.setAttribute("text-anchor", "middle");
+        text.setAttribute("dy", "3");
+        text.textContent = "+";
+        g.appendChild(text);
+
+        g.addEventListener("mousedown", function (e) { e.stopPropagation(); });
+        g.addEventListener("click", function (e) {
+            e.stopPropagation();
+            if (insertMenu) insertMenu.openFor(edgeId, e.clientX, e.clientY);
+        });
+        return g;
     }
 
     function deleteButton(edgeId, pt) {
@@ -1059,123 +979,6 @@ window.GraphDesigner = (function () {
             startReattach(edgeId, end, e);
         });
         return circle;
-    }
-
-    /**
-     * The elements one connector's geometry is written to.
-     *
-     * Resolved once and carried through a drag rather than looked up per frame: the six
-     * queries below were being re-run for every connector on every mousemove to find the
-     * same elements again.
-     *
-     * @param {object} record - `{edge}` at minimum; filled in place and returned
-     * @returns {object}
-     */
-    function resolveEdgeChrome(record) {
-        const group = document.getElementById("edge-group-" + record.edge.id);
-        record.group = group;
-        record.path = document.getElementById("edge-" + record.edge.id);
-        record.hit = group ? group.querySelector(".gd-edge-hit") : null;
-        record.deleteBtn = group ? group.querySelector(".gd-edge-delete-btn") : null;
-        record.sourceHandle = group ? group.querySelector(".gd-edge-handle-source") : null;
-        record.targetHandle = group ? group.querySelector(".gd-edge-handle-target") : null;
-        record.waypointHandles = group
-            ? Array.prototype.slice.call(group.querySelectorAll(".gd-edge-waypoint"))
-            : [];
-        return record;
-    }
-
-    function edgeChrome(edge) {
-        return resolveEdgeChrome({ edge: edge });
-    }
-
-    /**
-     * Rebuild one connector's DOM, replacing whatever was there.
-     *
-     * `renderEdge` appends. Every other caller reaches it through `renderAllEdges`, which
-     * has just emptied the group — so calling it on its own without this would leave two
-     * elements sharing one id, and `getElementById` would keep finding the stale one.
-     *
-     * @param {object} edge
-     */
-    function reRenderEdge(edge) {
-        const existing = document.getElementById("edge-group-" + edge.id);
-        if (existing) existing.remove();
-        renderEdge(edge);
-    }
-
-    /**
-     * Move an already-drawn connector to where its nodes are now.
-     *
-     * In place. This used to remove the whole `<g>` and call `renderEdge` again, which
-     * rebuilt two paths, the ✕ with its two children, both end handles and all five of
-     * their listeners — every frame, for every connector attached to a moving node. That
-     * is what made a dragged line flicker: the group was briefly not in the document at
-     * all. Setting four attributes leaves the listeners alone and never unparents
-     * anything.
-     *
-     * @param {object} record - from `edgeChrome`
-     */
-    function updateEdgeGeometry(record) {
-        // A connector whose group was never built — `renderEdge` returns early when
-        // neither end could be measured — is built now rather than silently left out of
-        // the drawing, and its freshly created elements picked up for the next frame.
-        if (!record.group || !record.group.isConnected) {
-            reRenderEdge(record.edge);
-            resolveEdgeChrome(record);
-            return;
-        }
-
-        const route = edgeRoute(record.edge);
-        const d = route ? GC.elbowPathD(route) : "";
-        if (record.path) record.path.setAttribute("d", d);
-        if (record.hit) record.hit.setAttribute("d", d);
-        if (!route) return;
-
-        if (record.deleteBtn) {
-            const mid = GC.pointAlongPolyline(route, 0.5);
-            record.deleteBtn.setAttribute("transform", "translate(" + mid.x + "," + (mid.y + 10) + ")");
-        }
-        if (record.sourceHandle) {
-            const pt = GC.pointAlongPolyline(route, 0.15);
-            record.sourceHandle.setAttribute("cx", pt.x);
-            record.sourceHandle.setAttribute("cy", pt.y);
-        }
-        if (record.targetHandle) {
-            const pt = GC.pointAlongPolyline(route, 0.85);
-            record.targetHandle.setAttribute("cx", pt.x);
-            record.targetHandle.setAttribute("cy", pt.y);
-        }
-
-        // The bend handles follow the stored points, not the line — see `waypointHandle`.
-        if (record.waypointHandles.length) {
-            const bends = waypointsOf(record.edge);
-            record.waypointHandles.forEach(function (handle) {
-                const bend = bends[Number(handle.getAttribute("data-waypoint"))];
-                if (!bend) return;
-                handle.setAttribute("cx", bend.x);
-                handle.setAttribute("cy", bend.y);
-            });
-        }
-    }
-
-    /**
-     * The connectors a move of these nodes will disturb, resolved ready to repaint.
-     *
-     * Built once at the start of a drag. Doing it per frame meant walking every edge and
-     * re-querying the DOM for each one, which is work that cannot have changed while the
-     * mouse is down.
-     *
-     * @param {Array<string>} movingIds
-     * @returns {Array<object>}
-     */
-    function chromeForMovingNodes(movingIds) {
-        const moving = {};
-        movingIds.forEach(function (id) { moving[id] = true; });
-
-        return state.edges
-            .filter(function (edge) { return moving[edge.source] || moving[edge.target]; })
-            .map(edgeChrome);
     }
 
     // -----------------------------------------------------------------
@@ -1455,7 +1258,7 @@ window.GraphDesigner = (function () {
         // bends would give a drawing that is neither arranged nor hand-drawn, with no button
         // that fixes it. But it destroys work somebody did by hand, so it asks — with the
         // count, so the question is answerable.
-        const bent = state.edges.filter(function (edge) { return waypointsOf(edge).length; });
+        const bent = state.edges.filter(function (edge) { return GC.waypointsOf(edge).length; });
         if (bent.length) {
             const wires = bent.length === 1 ? "1 connector" : bent.length + " connectors";
             if (!window.confirm("Tidying up will straighten " + wires +
@@ -1513,9 +1316,9 @@ window.GraphDesigner = (function () {
             shift: e.shiftKey,
             // Which connectors this move disturbs, and where their geometry is written.
             // Resolved now, while nothing has moved and the DOM is settled.
-            chrome: chromeForMovingNodes([nodeId]),
+            chrome: edges.chromeForMovingNodes([nodeId]),
         };
-        beginDragAnchors([nodeId], state.dragging.chrome);
+        edges.beginDragAnchors([nodeId], state.dragging.chrome);
         document.addEventListener("mousemove", onDragMove);
         document.addEventListener("mouseup", onDragEnd);
     }
@@ -1548,68 +1351,7 @@ window.GraphDesigner = (function () {
 
         state.dragging.clientX = e.clientX;
         state.dragging.clientY = e.clientY;
-        scheduleDragFrame();
-    }
-
-    function scheduleDragFrame() {
-        if (dragFrame !== null) return;
-        dragFrame = requestAnimationFrame(runDragFrame);
-    }
-
-    function cancelDragFrame() {
-        if (dragFrame === null) return;
-        cancelAnimationFrame(dragFrame);
-        dragFrame = null;
-    }
-
-    /**
-     * Drop a drag in progress without committing it.
-     *
-     * Called from the deletion paths. A drag carries resolved elements for the connectors
-     * it is repainting, and deleting a node or an edge detaches some of them; continuing
-     * would write attributes into a group that is no longer in the document.
-     */
-    function abandonDrag() {
-        if (!state.dragging) return;
-        cancelDragFrame();
-        state.dragging = null;
-        laneXCache = null;
-        endDragAnchors();
-        document.removeEventListener("mousemove", onDragMove);
-        document.removeEventListener("mouseup", onDragEnd);
-    }
-
-    /**
-     * One frame of a node drag: place the node, then move its connectors onto it.
-     */
-    function runDragFrame() {
-        dragFrame = null;
-
-        // A bend and a node move both use this frame, and only one of them is ever live.
-        if (bending) {
-            if (bending.moved) runBendFrame();
-            return;
-        }
-
-        const drag = state.dragging;
-        if (!drag || !drag.moved) return;
-
-        const node = findNode(drag.nodeId);
-        if (!node) return;
-
-        const rect = wrapperEl.getBoundingClientRect();
-        const x = drag.clientX + wrapperEl.scrollLeft - rect.left - drag.offsetX;
-        const y = drag.clientY + wrapperEl.scrollTop - rect.top - drag.offsetY;
-        node.position = { x: Math.max(0, x), y: Math.max(0, y) };
-
-        const el = document.getElementById("node-" + node.id);
-        if (el) {
-            el.style.left = node.position.x + "px";
-            el.style.top = node.position.y + "px";
-        }
-
-        laneXCache = null;
-        drag.chrome.forEach(updateEdgeGeometry);
+        edges.scheduleFrame();
     }
 
     /**
@@ -1626,10 +1368,10 @@ window.GraphDesigner = (function () {
      */
     function onDragEnd() {
         const drag = state.dragging;
-        cancelDragFrame();
+        edges.cancelFrame();
         state.dragging = null;
-        laneXCache = null;
-        endDragAnchors();
+        edges.invalidateLane();
+        edges.endDragAnchors();
         document.removeEventListener("mousemove", onDragMove);
         document.removeEventListener("mouseup", onDragEnd);
 
@@ -1676,256 +1418,8 @@ window.GraphDesigner = (function () {
 
     // True for one tick after a bend, so the click that trails it does not also select the
     // connector. The same device as `suppressNodeClick`.
-    let suppressEdgeClick = false;
 
     // {edgeId, index, inserted, fromX, fromY, clientX, clientY, moved, chrome}
-    let bending = null;
-
-    /**
-     * Whether a press on a connector is a bend, a group move, or nothing.
-     *
-     * One named decision, because this is the seam the selection layer meets: a connector
-     * that is part of a **multi**-item selection drags the whole selection instead of
-     * bending.
-     *
-     * Multi-item, not merely selected. Clicking a wire selects it, so if "selected" alone
-     * meant group-drag, the ordinary sequence of clicking a wire and then dragging it would
-     * move two nodes instead of putting a bend in it.
-     *
-     * @param {string} edgeId
-     * @param {MouseEvent} e
-     * @returns {"group"|"bend"|"ignore"}
-     */
-    function edgeGrabIntent(edgeId, e) {
-        if (e.button !== 0) return "ignore";
-        // Modifiers belong to the selection: the click that follows extends it.
-        if (e.shiftKey || e.ctrlKey || e.metaKey) return "ignore";
-        if (state.connecting || state.reattaching || state.dragging) return "ignore";
-        if (selection && selection.isMulti() && selection.hasEdge(edgeId)) return "group";
-        return "bend";
-    }
-
-    /**
-     * Begin a bend: either move the bend that was grabbed, or put a new one in.
-     *
-     * @param {string} edgeId
-     * @param {MouseEvent} e
-     */
-    function startBend(edgeId, e) {
-        const intent = edgeGrabIntent(edgeId, e);
-        if (intent === "ignore") return;
-        if (intent === "group") {
-            // The selection owns this press. It needs a node to hang the move on, and
-            // either end will do — the connector being in the selection is what brings both
-            // of them along.
-            const edge = findEdge(edgeId);
-            if (edge) selection.beginNodePress(edge.source, e);
-            return;
-        }
-
-        const edge = findEdge(edgeId);
-        if (!edge) return;
-
-        e.preventDefault();
-        e.stopPropagation();
-
-        const bends = waypointsOf(edge).map(function (bend) {
-            return { x: bend.x, y: bend.y };
-        });
-        const at = cursorPoint(e);
-
-        let index = -1;
-        bends.forEach(function (bend, i) {
-            if (index === -1 &&
-                Math.abs(bend.x - at.x) <= WAYPOINT_GRAB_PX &&
-                Math.abs(bend.y - at.y) <= WAYPOINT_GRAB_PX) {
-                index = i;
-            }
-        });
-        let inserted = false;
-
-        if (index === -1) {
-            if (bends.length >= MAX_EDGE_WAYPOINTS) {
-                // Refused, with a sentence rather than by doing nothing.
-                noteLayoutFailure("A connector can have at most " + MAX_EDGE_WAYPOINTS +
-                    " bends. Drag one of the bends it already has instead.");
-                return;
-            }
-
-            const route = edgeRoute(edge);
-            const segment = route ? GC.nearestSegment(route, at) : null;
-            if (!segment) return;
-
-            // Where in the list the new bend goes: after every existing bend that is on an
-            // earlier leg, so the order of the list stays the order of the wire.
-            const detail = GC.waypointRoute(
-                portAnchor(edge.source, sourceSelectorFor(edge)),
-                portAnchor(edge.target, '[data-port-role="in"]') || portAnchor(edge.target, null),
-                bends,
-            );
-            const marks = detail ? detail.waypointAt : [];
-            index = marks.filter(function (mark) { return mark <= segment.index; }).length;
-            // Started at the cursor's foot on the leg that was grabbed, so the wire does not
-            // jump the instant it is taken hold of.
-            bends.splice(index, 0, { x: segment.projection.x, y: segment.projection.y });
-            inserted = true;
-        }
-
-        edge.waypoints = bends;
-        // A handle has to exist for the new bend, so this connector is rebuilt once — and
-        // only this one.
-        reRenderEdge(edge);
-
-        bending = {
-            edgeId: edgeId,
-            index: index,
-            inserted: inserted,
-            fromX: e.clientX,
-            fromY: e.clientY,
-            clientX: e.clientX,
-            clientY: e.clientY,
-            moved: false,
-            chrome: edgeChrome(edge),
-        };
-        // Both ends are still, so the anchor cache freezes them and the whole gesture is
-        // arithmetic — the frame reads nothing.
-        beginDragAnchors([], [bending.chrome]);
-
-        document.addEventListener("mousemove", onBendMove);
-        document.addEventListener("mouseup", onBendEnd);
-    }
-
-    function onBendMove(e) {
-        if (!bending) return;
-
-        if (!bending.moved) {
-            const travelled = Math.abs(e.clientX - bending.fromX) +
-                Math.abs(e.clientY - bending.fromY);
-            if (travelled < DRAG_THRESHOLD_PX) return;
-            bending.moved = true;
-        }
-
-        bending.clientX = e.clientX;
-        bending.clientY = e.clientY;
-        scheduleDragFrame();
-    }
-
-    /** One frame of a bend. Shares the drag frame, so only one gesture repaints per tick. */
-    function runBendFrame() {
-        const edge = findEdge(bending.edgeId);
-        if (!edge) return;
-
-        const bends = waypointsOf(edge);
-        const bend = bends[bending.index];
-        if (!bend) return;
-
-        const at = cursorPoint({ clientX: bending.clientX, clientY: bending.clientY });
-
-        // Lines to snap to: the two ends of the wire, and the neighbouring bends. This is
-        // what makes a hand-routed wire look drawn rather than approximately placed.
-        const from = portAnchor(edge.source, sourceSelectorFor(edge));
-        const to = portAnchor(edge.target, '[data-port-role="in"]') || portAnchor(edge.target, null);
-        const xs = [];
-        const ys = [];
-        if (from) { xs.push(from.x); ys.push(from.y); }
-        if (to) { xs.push(to.x); ys.push(to.y); }
-        bends.forEach(function (other, i) {
-            if (i === bending.index) return;
-            xs.push(other.x);
-            ys.push(other.y);
-        });
-
-        bend.x = Math.max(0, GC.snapToAny(at.x, xs, WAYPOINT_SNAP_PX));
-        bend.y = Math.max(0, GC.snapToAny(at.y, ys, WAYPOINT_SNAP_PX));
-
-        laneXCache = null;
-        updateEdgeGeometry(bending.chrome);
-    }
-
-    function onBendEnd() {
-        const gesture = bending;
-        cancelDragFrame();
-        bending = null;
-        endDragAnchors();
-        laneXCache = null;
-        document.removeEventListener("mousemove", onBendMove);
-        document.removeEventListener("mouseup", onBendEnd);
-
-        if (!gesture) return;
-
-        const edge = findEdge(gesture.edgeId);
-        if (!edge) return;
-
-        // A press that never moved is a click, and the click listener on the hit path will
-        // select the connector. A bend inserted for it is taken back out — clicking a wire
-        // must not leave a bend behind.
-        if (!gesture.moved) {
-            if (gesture.inserted) {
-                edge.waypoints.splice(gesture.index, 1);
-                if (!edge.waypoints.length) delete edge.waypoints;
-                reRenderEdge(edge);
-            }
-            return;
-        }
-
-        // Dropped back onto the line it would take without this bend: the bend is bending
-        // nothing, so it goes and the wire straightens itself.
-        discardRedundantWaypoint(edge, gesture.index);
-
-        reRenderEdge(edge);
-        markDirty();
-        // Manual, for the same reason a moved node switches: a hand-routed wire is only
-        // meaningful against a known arrangement, and an auto-arrange is free to move both
-        // of its ends out from under it.
-        state.layout = "manual";
-        updateLayoutButton();
-
-        suppressEdgeClick = true;
-        setTimeout(function () { suppressEdgeClick = false; }, 0);
-    }
-
-    /**
-     * Remove a bend dropped onto the route the wire would take without it.
-     *
-     * @param {object} edge
-     * @param {number} index
-     */
-    function discardRedundantWaypoint(edge, index) {
-        const bends = waypointsOf(edge);
-        const bend = bends[index];
-        if (!bend) return;
-
-        const without = bends.slice();
-        without.splice(index, 1);
-
-        const from = portAnchor(edge.source, sourceSelectorFor(edge));
-        const to = portAnchor(edge.target, '[data-port-role="in"]') || portAnchor(edge.target, null);
-        if (!from || !to) return;
-
-        const plain = state.backEdges[edge.id] && !without.length
-            ? GC.backEdgePoints(from, to, returnLaneX())
-            : GC.waypointPoints(from, to, without);
-        const segment = plain ? GC.nearestSegment(plain, bend) : null;
-
-        if (segment && segment.distance <= WAYPOINT_DISCARD_PX) {
-            edge.waypoints = without;
-            if (!edge.waypoints.length) delete edge.waypoints;
-        }
-    }
-
-    /**
-     * Throw away every bend on one connector.
-     *
-     * @param {string} edgeId
-     */
-    function straightenEdge(edgeId) {
-        const edge = findEdge(edgeId);
-        if (!edge || !waypointsOf(edge).length) return;
-
-        delete edge.waypoints;
-        reRenderEdge(edge);
-        markDirty();
-    }
 
     // -----------------------------------------------------------------
     // Moving several nodes at once
@@ -1937,82 +1431,6 @@ window.GraphDesigner = (function () {
 
     // The connectors a group move is repainting, resolved once when it starts, and the
     // hand-placed bends it is carrying with it.
-    let groupChrome = null;
-    let groupBends = null;
-
-    function onGroupMoveBegin(ids) {
-        // Manual from the first frame that really moves, exactly as a single drag switches
-        // then and for the same reason: the layout request is debounced, so its answer can
-        // arrive while the mouse is still down and re-place every node under the cursor.
-        state.layout = "manual";
-        updateLayoutButton();
-
-        groupChrome = chromeForMovingNodes(ids);
-        beginDragAnchors(ids, groupChrome);
-        groupBends = captureCarriedBends(ids);
-    }
-
-    /**
-     * A group move carries the bends of any connector it is moving *both* ends of.
-     *
-     * Bends are canvas coordinates, so picking up two nodes and their wire has to move the
-     * wire's hand-routing with them or the route is left behind, dodging nothing. A wire
-     * with only one end in the move keeps its bends exactly where they are, which is the
-     * other half of the same rule: the bend was put there to avoid something on the canvas,
-     * and that something has not moved.
-     *
-     * @param {Array<string>} ids
-     * @returns {Array<{edge: object, starts: Array<{x: number, y: number}>}>}
-     */
-    function captureCarriedBends(ids) {
-        const moving = {};
-        ids.forEach(function (id) { moving[id] = true; });
-
-        return state.edges
-            .filter(function (edge) {
-                return moving[edge.source] && moving[edge.target] && waypointsOf(edge).length;
-            })
-            .map(function (edge) {
-                return {
-                    edge: edge,
-                    starts: waypointsOf(edge).map(function (bend) {
-                        return { x: bend.x, y: bend.y };
-                    }),
-                };
-            });
-    }
-
-    function onGroupMoveFrame(ids, dx, dy) {
-        // From the captured start plus the delta, never by accumulating — the same reason
-        // the nodes themselves are placed that way.
-        if (groupBends) {
-            groupBends.forEach(function (carried) {
-                carried.edge.waypoints = carried.starts.map(function (start) {
-                    return { x: Math.max(0, start.x + dx), y: Math.max(0, start.y + dy) };
-                });
-            });
-        }
-
-        laneXCache = null;
-        if (groupChrome) groupChrome.forEach(updateEdgeGeometry);
-    }
-
-    /**
-     * A group move has finished — committed, or put back by Escape.
-     *
-     * @param {Array<string>} ids
-     * @param {boolean} committed
-     */
-    function onGroupMoveEnd(ids, committed) {
-        endDragAnchors();
-        groupChrome = null;
-        groupBends = null;
-        laneXCache = null;
-
-        if (!committed) return;
-        fitCanvas();
-        markDirty();
-    }
 
     /**
      * Keep the properties panel honest about a selection that is no longer one thing.
@@ -2023,8 +1441,6 @@ window.GraphDesigner = (function () {
      * is as surprising as opening one they did not.
      */
     function onSelectionChange() {
-        updateSelectAllButton();
-
         if (selection.count() === 1) return;
         if (!state.selectedNodeId && !state.selectedEdgeId) return;
 
@@ -2035,27 +1451,6 @@ window.GraphDesigner = (function () {
         renderAllEdges();
         propertiesBodyEl.innerHTML =
             '<p class="text-muted small">Select a node to edit it here.</p>';
-    }
-
-    /**
-     * The Select all button doubles as Clear, and says which it is.
-     *
-     * Its title says **move**, deliberately: `Test selection (n)` is already in this
-     * header and means the picked set. Two counts side by side need telling apart.
-     */
-    function updateSelectAllButton() {
-        const btn = document.getElementById("gdSelectAllBtn");
-        if (!btn) return;
-
-        const count = selection.count();
-        btn.classList.toggle("btn-outline-primary", count > 0);
-        btn.classList.toggle("btn-outline-secondary", count === 0);
-        btn.innerHTML = count > 0
-            ? '<i class="las la-times-circle"></i> Clear (' + count + ")"
-            : '<i class="las la-object-group"></i> Select all';
-        btn.title = count > 0
-            ? "Clear the move selection"
-            : "Select every node and connector, so they can be moved together";
     }
 
     // -----------------------------------------------------------------
@@ -2376,7 +1771,7 @@ window.GraphDesigner = (function () {
         // A live drag holds resolved elements for the connectors it is repainting. Those
         // are about to be detached, so the gesture is abandoned rather than left writing
         // attributes into a group that is no longer in the document.
-        abandonDrag();
+        edges.abandonDrag();
         if (selection) selection.abandon();
         state.nodes = state.nodes.filter(function (n) { return n.id !== nodeId; });
         // Its connectors go with it: an edge naming a node that is not there is refused
@@ -2395,8 +1790,141 @@ window.GraphDesigner = (function () {
         renderAllEdges();
     }
 
+    /**
+     * The node types a connector's "+" offers, for this connector.
+     *
+     * Filtered per edge rather than once, so a choice that would be refused the moment it
+     * is made is simply not offered. Three exclusions:
+     *
+     * `start` has no inlet, so nothing can lead into it.
+     *
+     * A type with **no way out** cannot carry the connection onward, and splicing one would
+     * leave the connector's target with nothing leading to it — not a step added but the
+     * rest of the pipeline severed, discovered later by a run that stops early.
+     *
+     * **Success and Failure, when the target is already one of them.** Both have a `then`
+     * port, so ports alone do not rule them out, but an outcome node decides how the run is
+     * reported and a second one after it decides nothing — which is the rule
+     * `OUTCOME_CHAIN_REFUSAL` states for the two gestures that can already draw such an
+     * edge. Offering it here and refusing it a moment later would be a third.
+     *
+     * @param {string} edgeId
+     * @returns {Array<{type: string, label: string, icon: string}>}
+     */
+    function insertableTypes(edgeId) {
+        const edge = findEdge(edgeId);
+        const targetIsOutcome = isOutcome(findNode((edge || {}).target));
+
+        return (state.vocabulary.node_types || [])
+            .filter(function (entry) {
+                if (entry.type === "start") return false;
+                if (targetIsOutcome && (entry.type === "success" || entry.type === "failure")) {
+                    return false;
+                }
+                return !!GC.continuationPort(
+                    portsOf({ type: entry.type, data: defaultData(entry.type) })
+                        .map(function (spec) { return spec.port; }));
+            })
+            .map(function (entry) {
+                return {
+                    type: entry.type,
+                    label: entry.label || entry.type,
+                    icon: ICONS[entry.type] || "la-question-circle",
+                };
+            });
+    }
+
+    /**
+     * Put a new node in the middle of an existing connector.
+     *
+     * `A → B` becomes `A → new → B`. The connector is replaced by two, so the node arrives
+     * already wired — otherwise this is three gestures, one of which is remembering to
+     * delete the connector you have just bypassed.
+     *
+     * Which port carries the connection onward is `GC.continuationPort`'s decision, and it
+     * matters most here: a For each spliced into a connector must leave by `done`, not by
+     * `body`, or the node that used to follow it becomes the loop's body and runs once per
+     * item instead of once.
+     *
+     * @param {string} type
+     * @param {string} edgeId
+     */
+    function insertOnEdge(type, edgeId) {
+        const edge = findEdge(edgeId);
+        if (!edge) return;
+
+        const data = defaultData(type);
+        const onward = GC.continuationPort(
+            portsOf({ type: type, data: data }).map(function (spec) { return spec.port; }));
+
+        if (!onward) {
+            flash("That node has no way out until it is configured, so it cannot be put " +
+                "inside a connector. Add it from the palette instead.");
+            return;
+        }
+
+        if ((type === "success" || type === "failure") && isOutcome(findNode(edge.target))) {
+            flash(OUTCOME_CHAIN_REFUSAL);
+            return;
+        }
+
+        const node = {
+            id: genId("n"),
+            type: type,
+            position: betweenNodes(findNode(edge.source), findNode(edge.target)),
+            data: data,
+        };
+
+        state.nodes.push(node);
+        // One connector out, two in — as a filter plus two pushes rather than a mutation
+        // plus one, so a half-applied splice cannot exist: either both new connectors are
+        // there or the original still is.
+        state.edges = state.edges.filter(function (other) { return other.id !== edge.id; });
+        state.edges.push({
+            id: genId("e"), source: edge.source, source_port: edge.source_port, target: node.id,
+        });
+        state.edges.push({
+            id: genId("e"), source: node.id, source_port: onward, target: edge.target,
+        });
+
+        // The connector that was selected no longer exists, and a drag or a selection still
+        // holding its id would be holding a dead one.
+        edges.abandonDrag();
+        if (selection) selection.abandon();
+        state.selectedEdgeId = null;
+        if (selection) selection.prune();
+
+        wiringChanged();
+        renderAllNodes();
+        renderAllEdges();
+        // Opened straight away: a spliced node is almost never useful with its defaults, and
+        // this is the one moment the operator is certainly looking at it.
+        openProperties(node.id);
+    }
+
+    /**
+     * Where a spliced node first appears: midway between the two it now sits between.
+     *
+     * In `auto` this lasts a moment — the arrange that follows puts it wherever its new
+     * connections say. It is worth getting right anyway, because in `manual` it is final,
+     * and a node that appeared at the origin and jumped would read as a glitch.
+     *
+     * @param {object|null} source
+     * @param {object|null} target
+     * @returns {{x: number, y: number}}
+     */
+    function betweenNodes(source, target) {
+        const a = (source || {}).position || null;
+        const b = (target || {}).position || null;
+
+        if (a && b) return { x: Math.round((a.x + b.x) / 2), y: Math.round((a.y + b.y) / 2) };
+        if (a) return { x: a.x, y: a.y + canvasMetrics().rowGap };
+        if (b) return { x: b.x, y: Math.max(0, b.y - canvasMetrics().rowGap) };
+        return placementForNewNode();
+    }
+
     function deleteEdge(edgeId) {
-        abandonDrag();
+        edges.abandonDrag();
         if (selection) selection.abandon();
         state.edges = state.edges.filter(function (e) { return e.id !== edgeId; });
         if (state.selectedEdgeId === edgeId) state.selectedEdgeId = null;
@@ -3703,7 +3231,7 @@ window.GraphDesigner = (function () {
                 };
                 // Only when there are any, so a drawing nobody hand-routed saves exactly
                 // the document it always did.
-                if (waypointsOf(e).length) edge.waypoints = e.waypoints;
+                if (GC.waypointsOf(e).length) edge.waypoints = e.waypoints;
                 return edge;
             }),
             // Whether this canvas arranges itself. Stored with the drawing because it is a
@@ -3729,7 +3257,7 @@ window.GraphDesigner = (function () {
             // Sanitised on the way in as well as on the way out: this loader is the one
             // place that decides what a connector *is* here, so a stored document with a
             // malformed bend draws as an unbent wire rather than throwing inside a render.
-            const bends = readWaypoints(e.waypoints);
+            const bends = GC.readWaypoints(e.waypoints, MAX_EDGE_WAYPOINTS);
             if (bends.length) edge.waypoints = bends;
             return edge;
         });
@@ -3747,7 +3275,7 @@ window.GraphDesigner = (function () {
         state.selection.nodes = {};
         state.selection.edges = {};
         updatePickedCount();
-        updateSelectAllButton();
+        selection.repaint();
         renderAllNodes();
         renderAllEdges();
         updateLayoutButton();
@@ -4361,6 +3889,62 @@ window.GraphDesigner = (function () {
 
         state.vocabulary = readJsonScript("gdVocabulary", state.vocabulary);
 
+        // First, because `edgeRoute` — which almost everything below reaches through —
+        // measures its anchors with it.
+        edges = window.GraphEdges.create({
+            state: state,
+            wrapperEl: wrapperEl,
+            chromePrefix: "gd",
+            // The ✕ and the + sit 10px below the line here, where the Flow Builder puts
+            // them on it: a node's label hangs under its disc on this canvas and the
+            // controls would land on the text.
+            chromeYOffset: 10,
+            buttonGapPx: EDGE_BTN_GAP_PX,
+            nodeElementId: function (id) { return "node-" + id; },
+            edgeElementId: function (id) { return "edge-group-" + id; },
+            edgePathId: function (id) { return "edge-" + id; },
+            // No derived connectors on this canvas, so the plain list is the drawn list.
+            edgeRoute: edgeRoute,
+            renderEdge: renderEdge,
+            metrics: canvasMetrics,
+            // Both ends of a connector, as this canvas measures them. No fallback: a node
+            // here always has its port elements, and the Flow Builder's `|| null` would mask
+            // a genuinely missing one.
+            sourceAnchor: function (edge) {
+                return edges.portAnchor(edge.source, sourceSelectorFor(edge));
+            },
+            targetAnchor: function (edge) {
+                return edges.portAnchor(edge.target, '[data-port-role="in"]') ||
+                    edges.portAnchor(edge.target, null);
+            },
+            // Every connector here is real, so all of them can be bent.
+            isRoutable: function () { return true; },
+            // `state.connecting` as well: this canvas drags a connector out of a port, and a
+            // press on a wire mid-wiring must not become a bend.
+            isBusy: function () {
+                return !!(state.connecting || state.reattaching || state.dragging);
+            },
+            // Manhattan distance, which is what this canvas has always used. The Flow
+            // Builder uses Chebyshev. Preserved per canvas rather than unified.
+            travelled: function (dx, dy) { return Math.abs(dx) + Math.abs(dy); },
+            thresholdPx: DRAG_THRESHOLD_PX,
+            maxWaypoints: MAX_EDGE_WAYPOINTS,
+            waypointGrabPx: WAYPOINT_GRAB_PX,
+            waypointSnapPx: WAYPOINT_SNAP_PX,
+            waypointDiscardPx: WAYPOINT_DISCARD_PX,
+            flash: flash,
+            markDirty: markDirty,
+            updateLayoutButton: updateLayoutButton,
+            fitCanvas: fitCanvas,
+            detachNodeDrag: function () {
+                document.removeEventListener("mousemove", onDragMove);
+                document.removeEventListener("mouseup", onDragEnd);
+            },
+            // Late-bound: the selection is built after this, and the bend gesture only asks
+            // for it when a press arrives.
+            getSelection: function () { return selection; },
+        });
+
         // Before `loadGraph`, which paints the selection as part of rendering.
         selection = window.GraphSelection.create({
             wrapperEl: wrapperEl,
@@ -4383,10 +3967,14 @@ window.GraphDesigner = (function () {
                 return !!(state.pending || state.connecting || state.reattaching || state.dragging);
             },
             classes: { node: "gd-node-multi", edge: "gd-edge-multi" },
+            // The header's Select all / Clear (n) button is the selection's own, so the
+            // selection keeps it in step — see `paintSelectAllButton`.
+            selectAllButtonId: "gdSelectAllBtn",
+            selectAllNoun: "node and connector",
             onSelectionChange: onSelectionChange,
-            onGroupMoveBegin: onGroupMoveBegin,
-            onGroupMoveFrame: onGroupMoveFrame,
-            onGroupMoveEnd: onGroupMoveEnd,
+            onGroupMoveBegin: edges.onGroupMoveBegin,
+            onGroupMoveFrame: edges.onGroupMoveFrame,
+            onGroupMoveEnd: edges.onGroupMoveEnd,
             onEscape: function () {
                 if (!state.pending) return false;
                 state.pending = null;
@@ -4403,6 +3991,16 @@ window.GraphDesigner = (function () {
             },
         });
         selection.attach();
+
+        // The "+" menu on a connector. Built after the selection controller only because
+        // both need the canvas elements; they are independent of one another.
+        insertMenu = window.GraphInsert.create({
+            wrapperEl: wrapperEl,
+            getChoices: insertableTypes,
+            onChoose: insertOnEdge,
+            emptyMessage: "Nothing can be inserted into this connector — what it leads to " +
+                "already decides how the run ends.",
+        });
 
         renderPalette();
         loadGraph(readJsonScript("gdGraphData", { nodes: [], edges: [] }));
@@ -4442,7 +4040,7 @@ window.GraphDesigner = (function () {
             // who has just pressed this button is about to want both.
             wrapperEl.focus();
         });
-        updateSelectAllButton();
+        selection.repaint();
 
         // A node's height depends on its font, and the layout stacks layers by measured
         // height — so a zoom or a font swap invalidates the cached spacing with it.

@@ -49,6 +49,11 @@ var IntegrationsCanvas = (function () {
      *  second bend would mean splitting it into two curves, which is a different drawing. */
     var MAX_EDGE_WAYPOINTS = 1;
 
+    // How far the ✕ and the + sit either side of a connection's midpoint. Both are r=8, so
+    // 11 leaves a 6px gap: close enough to read as one pair of controls belonging to this
+    // connection, far enough that neither is pressed by aiming at the other.
+    var EDGE_BTN_GAP_PX = 11;
+
     /** How near a line-up a dragged bend snaps. */
     var WAYPOINT_SNAP_PX = 6;
 
@@ -102,6 +107,9 @@ var IntegrationsCanvas = (function () {
     // Built in `init`, because it needs the canvas elements.
     var selection = null;
 
+    // The shared "+" menu that inserts a step into a connection. Built in `init`.
+    var insertMenu = null;
+
     // =====================================================================
     // BOOT
     // =====================================================================
@@ -139,7 +147,7 @@ var IntegrationsCanvas = (function () {
         var graph = readJson("intGraphData", { nodes: [], edges: [] });
         state.nodes = Array.isArray(graph.nodes) ? graph.nodes : [];
         state.edges = (Array.isArray(graph.edges) ? graph.edges : []).map(function (edge) {
-            var bends = readWaypoints(edge.waypoints);
+            var bends = GC.readWaypoints(edge.waypoints, MAX_EDGE_WAYPOINTS);
             if (bends.length) { edge.waypoints = bends; } else { delete edge.waypoints; }
             return edge;
         });
@@ -180,12 +188,24 @@ var IntegrationsCanvas = (function () {
             // strand the user there.
             isBusy: function () { return !!(state.armedPort || nodeDrag); },
             classes: { node: "int-node-multi", edge: "int-edge-multi" },
-            onSelectionChange: updateSelectAllButton,
+            // The header's Select all / Clear (n) button is the selection's own, so the
+            // selection keeps it in step — see `paintSelectAllButton`.
+            selectAllButtonId: "intSelectAllBtn",
+            selectAllNoun: "step and connection",
             onGroupMoveBegin: onGroupMoveBegin,
             onGroupMoveFrame: onGroupMoveFrame,
             onGroupMoveEnd: onGroupMoveEnd,
         });
         selection.attach();
+
+        // The "+" menu on a connection. Built after the selection controller only because
+        // both need the canvas elements; they are independent of one another.
+        insertMenu = window.GraphInsert.create({
+            wrapperEl: el.wrap,
+            getChoices: insertableTypes,
+            onChoose: insertOnEdge,
+            emptyMessage: "No step can be inserted into a connection on its own.",
+        });
 
         buildPalette();
         buildSchedule();
@@ -406,7 +426,7 @@ var IntegrationsCanvas = (function () {
         g.appendChild(path);
 
         // The bend handle, when there is one.
-        if (waypointsOf(edge).length) {
+        if (GC.waypointsOf(edge).length) {
             var handle = GC.svg("circle");
             handle.setAttribute("class", "int-edge-waypoint");
             handle.setAttribute("r", 4);
@@ -427,6 +447,25 @@ var IntegrationsCanvas = (function () {
         cross.setAttribute("class", "int-edge-delete-x");
         cross.textContent = "×";
         g.appendChild(cross);
+
+        // The + that inserts a step into this connection, beside the ✕. The `pointerdown`
+        // stopper is not decoration: without it the press reaches the connection's own hit
+        // path underneath and starts a bend, so opening the menu would also curve the line.
+        var plus = GC.svg("circle");
+        plus.setAttribute("r", 8);
+        plus.setAttribute("class", "int-edge-insert");
+        plus.addEventListener("pointerdown", function (event) { event.stopPropagation(); });
+        plus.addEventListener("click", function (event) {
+            event.stopPropagation();
+            if (insertMenu) { insertMenu.openFor(edge.id, event.clientX, event.clientY); }
+        });
+        g.appendChild(plus);
+
+        var plusGlyph = GC.svg("text");
+        plusGlyph.setAttribute("text-anchor", "middle");
+        plusGlyph.setAttribute("class", "int-edge-insert-x");
+        plusGlyph.textContent = "+";
+        g.appendChild(plusGlyph);
 
         // The port's name, when it is not the plain one. Which branch a connector
         // leaves by is the whole meaning of a validate or a branch step, and reading
@@ -453,6 +492,8 @@ var IntegrationsCanvas = (function () {
         record.waypointHandle = group ? group.querySelector(".int-edge-waypoint") : null;
         record.deleteBtn = group ? group.querySelector(".int-edge-delete") : null;
         record.deleteCross = group ? group.querySelector(".int-edge-delete-x") : null;
+        record.insertBtn = group ? group.querySelector(".int-edge-insert") : null;
+        record.insertGlyph = group ? group.querySelector(".int-edge-insert-x") : null;
         record.label = group ? group.querySelector(".int-edge-label") : null;
         return record;
     }
@@ -477,7 +518,7 @@ var IntegrationsCanvas = (function () {
         }
         record.group.removeAttribute("visibility");
 
-        var g = GC.geometryWithBend(from, to, waypointsOf(record.edge)[0]);
+        var g = GC.geometryWithBend(from, to, GC.waypointsOf(record.edge)[0]);
         var mid = GC.pointAt(g, 0.5);
         var d = GC.pathD(g);
 
@@ -486,19 +527,27 @@ var IntegrationsCanvas = (function () {
         // Drawn at the stored point, which for these curves is also exactly the midpoint —
         // `geometryWithBend` puts the curve through it.
         if (record.waypointHandle) {
-            var bend = waypointsOf(record.edge)[0];
+            var bend = GC.waypointsOf(record.edge)[0];
             if (bend) {
                 record.waypointHandle.setAttribute("cx", bend.x);
                 record.waypointHandle.setAttribute("cy", bend.y);
             }
         }
         if (record.deleteBtn) {
-            record.deleteBtn.setAttribute("cx", mid.x);
+            record.deleteBtn.setAttribute("cx", mid.x - EDGE_BTN_GAP_PX);
             record.deleteBtn.setAttribute("cy", mid.y);
         }
         if (record.deleteCross) {
-            record.deleteCross.setAttribute("x", mid.x);
+            record.deleteCross.setAttribute("x", mid.x - EDGE_BTN_GAP_PX);
             record.deleteCross.setAttribute("y", mid.y + 4);
+        }
+        if (record.insertBtn) {
+            record.insertBtn.setAttribute("cx", mid.x + EDGE_BTN_GAP_PX);
+            record.insertBtn.setAttribute("cy", mid.y);
+        }
+        if (record.insertGlyph) {
+            record.insertGlyph.setAttribute("x", mid.x + EDGE_BTN_GAP_PX);
+            record.insertGlyph.setAttribute("y", mid.y + 5);
         }
         if (record.label) {
             record.label.setAttribute("x", mid.x);
@@ -516,38 +565,12 @@ var IntegrationsCanvas = (function () {
             .map(edgeChrome);
     }
 
-    /** A connection's hand-placed bends. */
-    function waypointsOf(edge) {
-        if (!edge) { return []; }
-        return Array.isArray(edge.waypoints) ? edge.waypoints : [];
-    }
-
-    /** Bends read off a stored drawing, keeping only the ones that are usable.
-     *
-     *  The save schema takes this drawing as an opaque object, which is what let `waypoints`
-     *  be added without a schema change — and means this is where a hand-edited or older
-     *  document is made safe. A bend that is not two finite numbers is dropped rather than
-     *  drawn: `NaN` in a coordinate fails silently in the SVG and then again at the
-     *  database, which refuses it as JSON. */
-    function readWaypoints(raw) {
-        if (!Array.isArray(raw)) { return []; }
-
-        return raw
-            .filter(function (point) {
-                return point && isFinite(point.x) && isFinite(point.y);
-            })
-            .slice(0, MAX_EDGE_WAYPOINTS)
-            .map(function (point) {
-                return { x: Math.max(0, Number(point.x)), y: Math.max(0, Number(point.y)) };
-            });
-    }
-
     /** The curve one connection runs along, hand-routed or not. */
     function edgeGeometry(edge) {
         var from = portAnchorFor(edge.source, sourcePortOf(edge));
         var to = targetAnchorFor(edge.target);
         if (!from || !to) { return null; }
-        return GC.geometryWithBend(from, to, waypointsOf(edge)[0]);
+        return GC.geometryWithBend(from, to, GC.waypointsOf(edge)[0]);
     }
 
     function edgeClass(edge) {
@@ -843,8 +866,8 @@ var IntegrationsCanvas = (function () {
         // Read before the bend is written, not after: this is what decides whether a press
         // that turns out to be a click leaves a bend behind on a connection that never had
         // one.
-        var hadBend = waypointsOf(edge).length > 0;
-        var start = waypointsOf(edge)[0] || GC.pointAt(geometry, 0.5);
+        var hadBend = GC.waypointsOf(edge).length > 0;
+        var start = GC.waypointsOf(edge)[0] || GC.pointAt(geometry, 0.5);
 
         edge.waypoints = [{ x: start.x, y: start.y }];
         renderEdges();
@@ -942,7 +965,7 @@ var IntegrationsCanvas = (function () {
     /** Throw the bend away, so the connection is drawn for you again. */
     function straightenEdge(edgeId) {
         var edge = findEdge(edgeId);
-        if (!edge || !waypointsOf(edge).length) { return; }
+        if (!edge || !GC.waypointsOf(edge).length) { return; }
 
         delete edge.waypoints;
         markDirty();
@@ -983,22 +1006,6 @@ var IntegrationsCanvas = (function () {
         // No auto-layout on this canvas, so there is no "manual" to switch to — a move is
         // simply an unsaved change.
         if (committed) { markDirty(); }
-    }
-
-    /** The Select all button doubles as Clear, and says which it is. */
-    function updateSelectAllButton() {
-        var btn = document.getElementById("intSelectAllBtn");
-        if (!btn) { return; }
-
-        var count = selection.count();
-        btn.classList.toggle("btn-outline-primary", count > 0);
-        btn.classList.toggle("btn-outline-secondary", count === 0);
-        btn.innerHTML = count > 0
-            ? '<i class="las la-times-circle"></i> Clear (' + count + ")"
-            : '<i class="las la-object-group"></i> Select all';
-        btn.title = count > 0
-            ? "Clear the move selection"
-            : "Select every step and connection, so they can be moved together";
     }
 
     function startConnectorDrag(event, portEl) {
@@ -1091,6 +1098,103 @@ var IntegrationsCanvas = (function () {
 
         markDirty();
         render();
+    }
+
+    /**
+     * The step types a connection's "+" offers.
+     *
+     * `trigger` is excluded because a workflow has exactly one and nothing may lead into
+     * it — the validator refuses anything else, so offering it would offer a save that
+     * cannot succeed. Anything with no way out is excluded too: splicing one would leave
+     * the connection's target with nothing leading to it, which is not a step added but
+     * the rest of the workflow severed.
+     *
+     * @returns {Array<{type: string, label: string}>}
+     */
+    function insertableTypes() {
+        return (state.vocabulary.nodes || [])
+            .filter(function (spec) {
+                if (spec.type === "trigger") { return false; }
+                return !!GC.continuationPort(spec.ports || []);
+            })
+            .map(function (spec) {
+                return { type: spec.type, label: spec.label || spec.type };
+            });
+    }
+
+    /**
+     * Put a new step in the middle of an existing connection.
+     *
+     * `A → B` becomes `A → new → B`. The connection is replaced by two, so the step
+     * arrives already wired rather than needing three gestures — one of which is
+     * remembering to delete the connection just bypassed.
+     *
+     * Unlike the other two canvases this one has no `state.layout` and no auto-arrange, so
+     * the position computed here is where the step stays. That is why it is the midpoint of
+     * the two it now sits between rather than the palette's drop origin: on this canvas
+     * there is no later pass to tidy it up.
+     *
+     * @param {string} type
+     * @param {string} edgeId
+     */
+    function insertOnEdge(type, edgeId) {
+        var edge = findEdge(edgeId);
+        if (!edge) { return; }
+
+        var onward = GC.continuationPort(portsFor(type));
+        if (!onward) {
+            banner("warning", "That step has no way out, so it cannot be put inside a " +
+                "connection. Add it from the palette instead.");
+            return;
+        }
+
+        var source = findNode(edge.source);
+        var target = findNode(edge.target);
+        var node = {
+            id: state.genId(type),
+            type: type,
+            position: betweenSteps(source, target),
+            data: { label: specFor(type).label || type }
+        };
+
+        if (type === "batch") { node.data.batch_size = state.defaultBatchSize; }
+
+        state.nodes.push(node);
+        // One connection out, two in — as a filter plus two pushes rather than a mutation
+        // plus one, so a half-applied splice cannot exist.
+        state.edges = state.edges.filter(function (other) { return other.id !== edge.id; });
+        state.edges.push({
+            id: state.genId("edge"),
+            source: edge.source,
+            source_port: edge.source_port,
+            target: node.id
+        });
+        state.edges.push({
+            id: state.genId("edge"),
+            source: node.id,
+            source_port: onward,
+            target: edge.target
+        });
+
+        endNodeDrag();
+        if (selection) { selection.abandon(); }
+        if (selection) { selection.prune(); }
+        markDirty();
+        render();
+        // Opened straight away: a spliced step is almost never useful with its
+        // defaults, and this is the one moment the operator is certainly looking at it.
+        select(node.id);
+    }
+
+    /** Midway between the two steps a spliced one now sits between. */
+    function betweenSteps(source, target) {
+        var a = (source || {}).position || null;
+        var b = (target || {}).position || null;
+
+        if (a && b) { return { x: Math.round((a.x + b.x) / 2), y: Math.round((a.y + b.y) / 2) }; }
+        if (a) { return { x: a.x + DROP_STEP, y: a.y + DROP_STEP }; }
+        if (b) { return { x: Math.max(0, b.x - DROP_STEP), y: Math.max(0, b.y - DROP_STEP) }; }
+        return { x: DROP_ORIGIN.x, y: DROP_ORIGIN.y };
     }
 
     function removeEdge(edgeId) {
@@ -1539,7 +1643,7 @@ var IntegrationsCanvas = (function () {
             // who has just pressed this button is about to want both.
             el.wrap.focus();
         });
-        updateSelectAllButton();
+        selection.repaint();
         el.stopBtn.addEventListener("click", stop);
     }
 

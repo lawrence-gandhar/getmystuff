@@ -489,6 +489,22 @@ Dictionary       {"region": "north", "cap": 50}   an object. Named values</code>
                                     </td>
                                 </tr>
                                 <tr>
+                                    <th scope="row" class="fw-normal">Insert a node into a connector</th>
+                                    <td>
+                                        The blue <strong>+</strong> on the connector's
+                                        midpoint, beside the red <strong>&times;</strong> that
+                                        deletes it. Pick a node and it is spliced in: what was
+                                        <em>A &rarr; B</em> becomes
+                                        <em>A &rarr; new &rarr; B</em>, wired for you, and its
+                                        Settings panel opens. A <strong>For each</strong> or
+                                        <strong>Do until</strong> is joined on by its
+                                        <strong>done</strong> port, so the node that used to
+                                        follow still runs once rather than once per item.
+                                        Success and Failure are not offered on a connector that
+                                        already leads to one.
+                                    </td>
+                                </tr>
+                                <tr>
                                     <th scope="row" class="fw-normal">Route a connector by hand</th>
                                     <td>
                                         <strong>Drag the line itself</strong> and it bends

@@ -133,6 +133,7 @@ async def _load_or_create_session(
             "variables": {},
             "call_stack": [],
             "node_results": {},
+            "dead_end_ai_context": {},
             "status": "active",
         })
 
@@ -146,6 +147,9 @@ async def _load_or_create_session(
         # conversation that is being started over, so keeping them would let a Create File
         # block in the *new* run write a file out of the old one's data.
         session.node_results = {}
+        # Same reason: a dead-end AI Fallback's last answer belongs to the conversation
+        # that is being started over, not the new one.
+        session.dead_end_ai_context = {}
         # Any Run Flow call in progress goes with them: a frame points into a call that
         # began under the graph being replaced, and returning a visitor into the middle of a
         # flow they never entered is worse than starting them over.
@@ -248,6 +252,7 @@ async def _persist_session(db: AsyncSession, session: ChatbotFlowSession) -> Non
         # block that resolved against a result the turn then failed to save would write a
         # file out of data the conversation does not have.
         "node_results": session.node_results,
+        "dead_end_ai_context": session.dead_end_ai_context,
         "status": session.status,
         "flow_id": session.flow_id,
         "updated_at": datetime.now(timezone.utc),
@@ -269,6 +274,41 @@ async def _persist_session(db: AsyncSession, session: ChatbotFlowSession) -> Non
         flow_builder_runner.wake_worker()
 
 
+async def _continue_dead_end_ai_fallback(
+    db: AsyncSession,
+    chatbot_key: ChatbotApiKey,
+    flow: ChatbotFlow,
+    session: ChatbotFlowSession,
+    incoming_message: Optional[str],
+) -> Optional[FlowEngineResult]:
+    """
+    If this visitor's session is "completed" because it dead-ended on an AI Fallback
+    node (one with no outgoing edge), answer this message with that same node — again
+    — instead of handing off. Returns None for every other terminal point (an explicit
+    End node, a dead end on any other block type), which leaves AI_HANDOFF exactly as
+    it was.
+
+    Only reachable with an empty call stack: a dead end reached *inside* a Run Flow
+    call is converted back into a normal call return before `advance_flow_session`'s
+    top-level `status == "completed"` check can ever see it (see
+    `_hop_until_the_turn_ends`'s subflow-unwind branch). The `in_subflow` check below
+    is a defensive guard against the one gap in that invariant — the
+    `_MAX_INTERNAL_HOPS` bailout sets `status = "completed"` directly without going
+    through the unwind — rather than resting entirely on it holding.
+    """
+    if subflow_service.in_subflow(session):
+        return None
+
+    node = _find_node(flow.graph_data, session.current_node_id)
+    if node is None or node.get("type") != "ai_fallback":
+        return None
+
+    return await _step_ai_fallback(
+        db, chatbot_key, flow.id, flow.graph_data, session, node,
+        incoming_message, from_selection=False,
+    )
+
+
 # --------------------------------------------------------------------------
 # Entry point
 # --------------------------------------------------------------------------
@@ -285,10 +325,21 @@ async def advance_flow_session(
 
     if session.status == "completed":
         # This visitor already reached the end of the flow, and
-        # _load_or_create_session found no reason to re-run it. Report the
-        # handoff instead of answering: the caller switches this turn (and
-        # every later one, until the flow changes or the session ages out) to
-        # plain AI answering. Nothing is persisted — the session is untouched.
+        # _load_or_create_session found no reason to re-run it. Usually that means
+        # handing off instead of answering — but if they finished on a dead-end AI
+        # Fallback node (one with no outgoing edge, drawn that way on purpose), that
+        # node keeps answering rather than going quiet or falling back to a generic
+        # off-flow reply. See _continue_dead_end_ai_fallback.
+        dead_end_result = await _continue_dead_end_ai_fallback(
+            db, chatbot_key, flow, session, incoming_message,
+        )
+        if dead_end_result is not None:
+            await _persist_session(db, session)
+            return dead_end_result
+
+        # Every other terminal point: the caller switches this turn (and every later
+        # one, until the flow changes or the session ages out) to plain AI answering.
+        # Nothing is persisted — the session is untouched.
         return FlowEngineResult(type=AI_HANDOFF)
 
     # Which flow this visitor is actually standing in, which is `flow` unless they are
@@ -513,6 +564,24 @@ def _store_node_result(session: ChatbotFlowSession, node: dict, record: dict) ->
         return
 
     session.node_results = {**(session.node_results or {}), node_id: record}
+
+
+def _next_file_sequence(session: ChatbotFlowSession) -> int:
+    """
+    The next value for a Create File result's ``sequence``, one higher than any seen yet.
+
+    Only file results carry this — see :func:`_step_download_file` for why: a Download
+    File block may now name *several* Create File blocks (a menu of formats, each its own
+    branch, sharing one hand-over block), and when more than one has run in the
+    conversation, the most recently written file is the right one to offer. ``node_results``
+    is a plain dict with no ordering guarantee once it has round-tripped through JSONB, so
+    "most recent" is a number stored on the record rather than dict position.
+    """
+    existing = session.node_results or {}
+    return max(
+        (int(r.get("sequence", 0)) for r in existing.values() if isinstance(r, dict)),
+        default=0,
+    ) + 1
 
 
 def _table_result(table) -> dict:  # noqa: ANN001 — AnalyticsTable
@@ -905,13 +974,27 @@ async def _step_ai_fallback(
     What gets stored is the whole answer as text — see :func:`_ai_answer_text` — not the
     ``AnalyticsResult``: a flow variable is a string, and the insights and table are the
     part somebody asking to be emailed the data actually wanted.
+
+    A node with no outgoing edge is a deliberate dead end, and this is the one place
+    that matters: it is not just where the turn completes, it is also where the visitor's
+    *next* message comes back to (see ``_continue_dead_end_ai_fallback``). On a dead-end
+    turn only, this also reads and updates ``session.dead_end_ai_context`` — a rolling
+    one-answer memory so the conversation past the dead end stays coherent instead of
+    every message being answered from scratch. A connected node never touches that field.
     """
     edge = _find_edge(graph_data, node["id"], "default")
+    is_dead_end = edge is None
     _advance_or_complete(session, edge, node["id"])
+
+    previous_answer = (
+        (session.dead_end_ai_context or {}).get(node["id"]) if is_dead_end else None
+    )
     try:
         ai_result = await ai_fallback_service.run_ai_fallback(
             db, chatbot_key, flow_id, node["id"], node.get("data") or {}, incoming_message or "",
             from_selection=from_selection,
+            session_variables=dict(session.variables or {}),
+            previous_answer=previous_answer,
         )
     except HTTPException as exc:
         # Nothing is stored. The variable stays *absent* rather than being set to the
@@ -919,7 +1002,8 @@ async def _step_ai_fallback(
         # default (or refuses the send if the variable was required) instead of mailing
         # a customer an internal failure message as though it were the answer. An
         # If/Else on the variable reads absent as empty, so "did the AI answer?" still
-        # branches correctly.
+        # branches correctly. `dead_end_ai_context` is left untouched for the same
+        # reason — a failed turn has nothing worth remembering for the next one.
         logger.warning(
             "AI Fallback node %s in flow session %s could not answer: %s",
             node.get("id"),
@@ -928,7 +1012,13 @@ async def _step_ai_fallback(
         )
         return FlowEngineResult(type="text", text=str(exc.detail))
 
-    _store_answer(session, node, _ai_answer_text(ai_result))
+    answer_text = _ai_answer_text(ai_result)
+    _store_answer(session, node, answer_text)
+
+    if is_dead_end:
+        session.dead_end_ai_context = {
+            **(session.dead_end_ai_context or {}), node["id"]: answer_text,
+        }
 
     # And the table separately, in its own shape. The variable holds the whole answer as
     # *text* — which is what an email or a chat bubble wants — and a CSV wants columns and
@@ -1363,7 +1453,12 @@ async def _step_create_file(
     # every other block result, so the Download File block finds it by pointing at the box
     # rather than by guessing at a variable name.
     _store_node_result(
-        session, node, {"kind": "file", "file_uuid": written["file_uuid"]},
+        session, node,
+        {
+            "kind": "file",
+            "file_uuid": written["file_uuid"],
+            "sequence": _next_file_sequence(session),
+        },
     )
 
     edge = _find_edge(graph_data, node["id"], "default")
@@ -1398,27 +1493,52 @@ async def _step_download_file(
     Which file is handed over comes from the *named* Create File block, not from the wire:
     an operator may put a Send Message between the two, and a named reference survives that
     while "the block wired into me" does not.
+
+    **More than one Create File block may be named.** A menu offering CSV / XLSX / Parquet,
+    each option running its own Create File block, can share one Download File block rather
+    than needing one per branch — the alternative is a Download File block per format,
+    which is both more drawing and more to keep in sync. When several of the named blocks
+    have run in the conversation, the one whose file was written **most recently** —
+    `sequence` on its stored result, not dict order, which a JSONB round trip does not
+    guarantee — is the one handed over.
     """
     from app.services.file_delivery.nodes import flow_builder_runner
 
     data = node.get("data") or {}
-    source_id = str(data.get("create_file_node_id") or "").strip()
-    record = (session.node_results or {}).get(source_id) or {}
-    file_uuid = str(record.get("file_uuid") or "")
+    raw_source = data.get("create_file_node_id")
+    # A single id is the older shape, still saved by flows from before a Download File
+    # block could name more than one — read as a one-item list rather than migrated, so
+    # those flows keep working untouched.
+    source_ids = (
+        [str(s).strip() for s in raw_source if str(s or "").strip()]
+        if isinstance(raw_source, list)
+        else ([str(raw_source).strip()] if str(raw_source or "").strip() else [])
+    )
 
-    if not file_uuid:
-        # The Create File block it names has not run in this conversation — a branch took
-        # another route, or the blocks are wired the wrong way round. Said out loud on the
-        # failure port rather than skipped: a Download File block that quietly does nothing
-        # is a button an operator drew and never sees, with nothing to explain why.
+    results = session.node_results or {}
+    candidates = [
+        (source_id, results[source_id])
+        for source_id in source_ids
+        if isinstance(results.get(source_id), dict) and results[source_id].get("file_uuid")
+    ]
+
+    if not candidates:
+        # None of the Create File blocks it names has run in this conversation — every
+        # branch took another route, or the blocks are wired the wrong way round. Said out
+        # loud on the failure port rather than skipped: a Download File block that quietly
+        # does nothing is a button an operator drew and never sees, with nothing to explain
+        # why.
         logger.warning(
-            "Download File node %s in flow session %s has no file: the Create File "
-            "block %r has not run in this conversation",
+            "Download File node %s in flow session %s has no file: none of the named "
+            "Create File blocks %r has run in this conversation",
             node.get("id"),
             session.id,
-            source_id,
+            source_ids,
         )
         return await _failed_step(db, session, graph_data, node, root_flow, flow_cache)
+
+    _source_id, record = max(candidates, key=lambda pair: pair[1].get("sequence", 0))
+    file_uuid = str(record.get("file_uuid") or "")
 
     prepared = dict(node)
     prepared["data"] = {

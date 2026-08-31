@@ -59,6 +59,24 @@ def _graph(*, variable_name: str = "") -> dict:
     }
 
 
+def _dead_end_graph(*, variable_name: str = "") -> dict:
+    """An AI Fallback node with no outgoing edge at all — a deliberate dead end."""
+    data: dict = {"context_source": "datasource", "llm_mode": "in_built"}
+
+    if variable_name:
+        data["variable_name"] = variable_name
+
+    return {
+        "nodes": [
+            {"id": "start", "type": "start", "data": {}},
+            {"id": AI_NODE_ID, "type": "ai_fallback", "data": data},
+        ],
+        "edges": [
+            {"source": "start", "target": AI_NODE_ID, "source_port": "default"},
+        ],
+    }
+
+
 def _node(graph: dict) -> dict:
     return graph["nodes"][1]
 
@@ -84,12 +102,14 @@ def fallback(monkeypatch: pytest.MonkeyPatch) -> dict:
     A stub ``run_ai_fallback`` returning whatever ``calls["result"]`` holds, or raising it
     when that is an exception.
     """
-    calls: dict = {"result": AnalyticsResult(summary=SUMMARY), "asked": []}
+    calls: dict = {"result": AnalyticsResult(summary=SUMMARY), "asked": [], "previous_answers": []}
 
     async def run_ai_fallback(  # noqa: ANN202
         db, chatbot_key, flow_id, node_id, node_data, message, from_selection=False,  # noqa: ANN001
+        session_variables=None, previous_answer=None,  # noqa: ANN001
     ):
         calls["asked"].append((node_id, message, from_selection))
+        calls["previous_answers"].append(previous_answer)
         result = calls["result"]
         if isinstance(result, Exception):
             raise result
@@ -248,3 +268,73 @@ class TestAFailedAnswerIsNotStored:
 
         assert result.type == "text"
         assert result.text == "No datasource is attached to this chatbot."
+
+
+class TestDeadEndContinuation:
+    """
+    An AI Fallback node with no outgoing edge is a deliberate dead end — the operator
+    drew it that way on purpose. What it leaves behind for the *next* time this same
+    node runs (a visitor's follow-up message; see ``engine_service
+    ._continue_dead_end_ai_fallback``) is a rolling one-answer memory in
+    ``session.dead_end_ai_context``, gated strictly on there being no edge so a
+    normally-connected node's behavior never changes.
+    """
+
+    async def test_the_first_dead_end_turn_has_no_previous_answer(self, fallback) -> None:  # noqa: ANN001
+        session = _session()
+
+        await _run(_dead_end_graph(), session)
+
+        assert fallback["previous_answers"] == [None]
+
+    async def test_the_first_dead_end_turn_records_its_answer(self, fallback) -> None:  # noqa: ANN001
+        session = _session()
+
+        await _run(_dead_end_graph(), session)
+
+        assert session.dead_end_ai_context[AI_NODE_ID] == engine_service._ai_answer_text(
+            fallback["result"],
+        )
+
+    async def test_a_second_dead_end_turn_is_given_the_first_answer(self, fallback) -> None:  # noqa: ANN001
+        session = _session()
+        graph = _dead_end_graph()
+
+        await _run(graph, session, "how many orders?")
+        first_answer = session.dead_end_ai_context[AI_NODE_ID]
+
+        fallback["result"] = AnalyticsResult(summary="A different answer.")
+        await _run(graph, session, "and last month?")
+
+        assert fallback["previous_answers"] == [None, first_answer]
+
+    async def test_the_remembered_answer_is_replaced_not_accumulated(self, fallback) -> None:  # noqa: ANN001
+        session = _session()
+        graph = _dead_end_graph()
+
+        await _run(graph, session, "how many orders?")
+        fallback["result"] = AnalyticsResult(summary="A different answer.")
+        await _run(graph, session, "and last month?")
+
+        assert session.dead_end_ai_context[AI_NODE_ID] == "A different answer."
+
+    async def test_a_connected_node_never_reads_or_writes_dead_end_context(
+        self, fallback,
+    ) -> None:  # noqa: ANN001
+        """Proves the ``edge is None`` gate is airtight: even with stale context
+        already sitting under this node's id, a connected node ignores it."""
+        session = _session()
+        session.dead_end_ai_context = {AI_NODE_ID: "stale answer from a different node"}
+
+        await _run(_graph(), session)
+
+        assert fallback["previous_answers"] == [None]
+        assert session.dead_end_ai_context == {AI_NODE_ID: "stale answer from a different node"}
+
+    async def test_a_failed_dead_end_turn_does_not_record_anything(self, fallback) -> None:  # noqa: ANN001
+        fallback["result"] = HTTPException(status_code=400, detail="No datasource attached.")
+        session = _session()
+
+        await _run(_dead_end_graph(), session)
+
+        assert session.dead_end_ai_context in ({}, None)

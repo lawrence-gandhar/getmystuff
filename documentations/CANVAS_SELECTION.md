@@ -24,6 +24,8 @@ This page covers what changed, and — more usefully — why each decision went 
 | Route a connector by hand | Drag the line itself. It bends through the point you drop it at |
 | Remove one bend | Drop it back onto the line the connector would take without it |
 | Straighten a connector | **Double-click** it, or use **Straighten connector** in the Flow Builder's panel |
+| Delete a connector | The red **✕** on its midpoint |
+| Insert a block into a connector | The blue **+** beside the ✕. `A → B` becomes `A → new → B` |
 
 Two things are deliberately **not** bound.
 
@@ -47,12 +49,55 @@ which.
 
 ```
 static/js/graph_canvas.js      stateless maths — shared, and was already shared
-static/js/graph_selection.js   the gesture and the selection set — shared, and new
-static/js/graph_selection.css  the rubber band — shared
-static/js/graph_designer.js    what a selection *means* here
-static/js/flow_builder.js      what a selection *means* here
-static/js/integrations.js      what a selection *means* here
+static/js/graph_selection.js   the gesture and the selection set — shared
+static/css/graph_selection.css the rubber band — shared
+static/js/graph_insert.js      the "+" menu on a connector — shared
+static/css/graph_insert.css    that menu's appearance — shared
+static/js/graph_edges.js       the connector runtime — shared by the two top-down canvases
+static/js/graph_designer.js    what all of the above *means* here
+static/js/flow_builder.js      what all of the above *means* here
+static/js/integrations.js      the same, and its own connector runtime — see below
 ```
+
+Four shared files, and the boundary between them is worth stating once, because "shared canvas
+code" is not a useful distinction:
+
+| | owns |
+|---|---|
+| `graph_canvas.js` | **maths**, and nothing stateful. Routes, rectangles, path strings |
+| `graph_selection.js` | **a selection** — what is picked, and moving it as one |
+| `graph_insert.js` | **a menu** — what a "+" offers, and where it appears |
+| `graph_edges.js` | **connectors** — measuring anchors, repainting chrome, bending |
+
+`graph_edges.js` is the only one of the four that is *not* shared with Integrations, and that
+is a measurement rather than an oversight. Comparing the same-named functions across the three
+canvases put the Flow Builder and the Graph Designer at 93–100% identical on this cluster —
+`startBend` at 99%, `onBendEnd` at 100% — and Integrations at 19–40%. It draws a different
+picture: steps side by side, Bézier curves, one control point rather than four waypoints.
+Forcing it in would mean abstracting elbow-versus-curve behind a flag, which is how a shared
+module becomes a worse copy of two working ones. It keeps its own runtime and shares only what
+is genuinely common: `GC.waypointsOf`, `GC.readWaypoints`, and the selection's button painter.
+
+### Every difference is a named config key
+
+That was a requirement of the extraction, not a happy accident: it had to be behaviour-neutral
+on two canvases already verified by hand. Where the two disagreed, neither won — the difference
+became a config value:
+
+| key | Flow Builder | Graph Designer |
+|---|---|---|
+| `chromePrefix` | `fb` | `gd` |
+| `chromeYOffset` | `0` — the ✕ sits on the line | `10` — a node's label hangs under its disc |
+| `isBusy()` | `reattaching \|\| dragging` | also `connecting` — it drags out of ports |
+| `isRoutable(edge)` | excludes derived Goto jumps | everything is real |
+| `sourceAnchor(edge)` | falls back to the node's own box | no fallback |
+| `travelled(dx, dy)` | Chebyshev, `max(\|dx\|,\|dy\|)` | Manhattan, `\|dx\|+\|dy\|` |
+| `getDrawableEdges()` | `drawableEdges()`, jumps included | omitted — `state.edges` |
+
+The last-but-one is the interesting one: **the two canvases measure "has it moved yet"
+differently**, and have since before this refactor. Preserved per canvas rather than unified,
+because unifying it changes how one of them feels and this change was not allowed to do that.
+Worth reconciling one day; not silently.
 
 `graph_canvas.js` states at the top of the file that it holds nothing stateful, and it named
 the selection model as one of the things that stays per-feature. That sentence is now wrong,
@@ -240,7 +285,11 @@ deleted bend is neither.
 
 ### The gesture
 
-The grab target is the fat invisible twin of the line that already existed for hovering it.
+The grab target is a fat invisible twin of the line, added to all three canvases here — none
+of them had one before, and a 2px stroke is not something a hand can land on when the press
+has to be held and dragged. It carries `cursor: grab`, because a wire that reads as clickable
+gives no hint that it can also be pulled.
+
 Press-and-move bends; press-and-release still selects — the same split the ports already used,
 which is why the click handler stays and the bend arms a one-tick suppression on release.
 
@@ -284,7 +333,73 @@ auto-arrange is free to move both of a wire's ends out from under it.
 
 ---
 
-## 5. The drag was slow, and why
+## 5. The "+" — inserting a block into a connector
+
+Every connector carries two controls on its midpoint: the red **✕** that deletes it, and a
+blue **+** that puts a block *inside* it. `A → B` becomes `A → new → B` — the original
+connector is replaced by two, so the block arrives already wired.
+
+The alternative was three gestures: add the block from the palette, wire it up twice, and
+remember to delete the connector you have just bypassed. Forgetting the last one leaves a
+drawing where two paths leave the same port, which the save then refuses.
+
+### The menu is shared; what may be inserted is not
+
+`static/js/graph_insert.js` owns the menu: where it opens, how it is dismissed, arrow-key
+navigation, and what an empty catalogue says. It owns nothing about blocks. The three canvases
+genuinely disagree about those — a Flow Builder block's ports come from a local registry, a
+Graph Designer node's from a server vocabulary, an Integrations step's from a spec whose ports
+are bare strings — so each canvas supplies its own list and does its own splice. That is the
+same line `graph_selection.js` draws, for the same reason.
+
+The menu is parented to `document.body` rather than to the canvas, and that is load-bearing
+rather than tidy: both the wrapper and the canvas scroll, so a menu inside either is clipped
+by whichever edge it opens near — which is exactly where a connector in a long pipeline sits.
+
+### Which port carries the connection onward
+
+This is the one decision in the feature that is easy to get quietly wrong. `A → B` becomes
+`A → new → B`, and `new` may have several ways out. Taking the first is the obvious rule:
+
+```
+for_each  →  ["body", "done"]
+```
+
+`body` is the *inside* of the loop. Wiring `B` there does not insert a step before `B`, it
+moves `B` into the loop and runs it once per item — a silent change to what `B` means, on a
+canvas with no undo. `done` is the port that means what the original connector meant.
+
+So `GC.continuationPort(names)` decides, and it is shared because all three canvases need the
+same answer: an explicit `default`, else `done`, else whatever is first. The last case is a
+fresh Branch, whose only port is `else`, which is genuinely where a branch with no conditions
+yet sends everything.
+
+### What is not offered, and why each exclusion is correctness
+
+A type with **no way out** — End Flow, Goto — cannot carry the connection onward. Splicing one
+does not add a step, it severs the rest of the drawing, and the first clue is a run that stops
+early or a conversation that dies. A **Start** or **trigger** is excluded from the other side:
+nothing may lead into it, and there is only ever one.
+
+**Menu and Dropdown** look like an oversight and are not. Their ports *are* their options, so a
+freshly added one has none and there is no port for the flow to continue through. They stay in
+the main palette, where you add one, give it options, and wire it deliberately.
+
+The Graph Designer filters **per connector** rather than once, which is why `getChoices`
+receives the edge id: **Success** and **Failure** both have a `then` port, so ports alone do
+not rule them out, but an outcome node after another outcome node decides nothing. That rule
+already exists as `OUTCOME_CHAIN_REFUSAL` for the two gestures that can draw such an edge;
+offering it here and refusing it a moment later would have been a third copy of it.
+
+### Two smaller decisions
+
+**The splice is a filter plus two pushes**, never a mutation plus one push, so a half-applied
+splice cannot exist: either both new connectors are there or the original still is.
+
+**The `+` stops `mousedown`/`pointerdown` from reaching the wire underneath.** Without that the
+press starts a bend, and opening the menu would put a corner in the line as a side effect.
+
+## 6. The drag was slow, and why
 
 This shipped first, on its own, because it is worth having with no new UI attached and because a
 group move is exactly the workload the old drag loop was worst at.
@@ -344,7 +459,7 @@ lands mid-drag and re-places every box under the cursor.
 
 ---
 
-## 6. What the server had to do
+## 7. What the server had to do
 
 Almost nothing, and that is by design: every canvas save schema deliberately allows keys it does
 not declare, because the drawing's shape belongs to the client. `waypoints` rides on that the
@@ -379,11 +494,16 @@ connector, so it bounds the new field proportionally without reversing that.
 
 ---
 
-## 7. Tests
+## 8. Tests
 
-**There is no JavaScript test runner in this repository**, so most of this feature cannot be unit
-tested, and saying so is more useful than implying otherwise. Standing one up is the highest-value
-follow-up for this part of the codebase.
+**There is no JavaScript test *runner* in this repository** — no `package.json`, no Jest, no
+Vitest — so most of this feature cannot be unit tested from its own tooling, and saying so is
+more useful than implying otherwise. What exists instead, for the part of this feature that can
+be reached at all, is `tests/unit/static_js/`: real `pytest` tests that shell out to `node`,
+exactly the way `tests/unit/services/chatbot/test_widget_markdown.py` already runs the widget's
+Markdown renderer. Skipped, not failed, when `node` is absent — the app container has none, so
+these do not run there, and that gap is the same one `test_widget_markdown.py` already lives
+with.
 
 What Python covers:
 
@@ -393,11 +513,49 @@ What Python covers:
 | `tests/unit/schemas/flow_builder/test_flow_schemas.py` | bends survive a round trip; the cap is inclusive at four; non-finite, malformed, out-of-range and non-list bends are refused with their sentences |
 | `tests/unit/schemas/graph_designer/test_graph_designer_schemas.py` | the same, plus that the bend cap does **not** quietly bound the drawing |
 | `tests/unit/schemas/integrations/test_integration_schemas.py` | the same through an opaque `graph_data` |
-| `tests/unit/routes/*/` | **script order** — `graph_canvas.js` before `graph_selection.js` before the canvas file, on all three pages, plus the shared stylesheet being linked |
+| `tests/unit/routes/*/` | **script order** — `graph_canvas.js` before both shared modules before the canvas file, on all three pages, plus both shared stylesheets being linked |
 
 The script-order tests are the one place a Python test catches a real JavaScript failure. Get the
 order wrong and the page comes up with an empty canvas and one `undefined` in the console, with
 nothing in any server log — and it is exactly the sort of thing an edit reorders without noticing.
+
+**The extraction of `graph_edges.js` bought the first real coverage this code has ever had**,
+and that is the strongest argument for having done it. A factory with an injected config can be
+driven from `node` against a stubbed DOM — `tests/unit/static_js/test_graph_edges.py`, with the
+stub itself in `tests/unit/static_js/support/dom_stub.js`; the closures it replaced could not be
+reached at all, because `flow_builder.js` and `graph_designer.js` export only `{ init }`. The
+suite asserts the things that were previously only assertable by hand:
+
+- the anchor cache measures a **stationary** end once and never again, and tracks a **moving**
+  end by arithmetic with *zero* measurements after the first — which is the whole point of it;
+- a node deleted mid-drag yields `null` rather than throwing;
+- `returnLaneX` memoises inside a gesture and re-reads outside one;
+- `updateEdgeGeometry` puts the ✕ and the + 22px apart, and `chromeYOffset` moves both by
+  exactly 10 — the one visual difference between the two canvases;
+- a connector whose group has gone is re-rendered rather than skipped;
+- the bend machine: press-and-release leaves no bend behind, press-and-move past the threshold
+  keeps one, the fifth bend is refused *with its sentence*, a derived jump cannot be bent;
+- group move carries the bends of connectors whose **both** ends move and leaves the others
+  alone, works from the captured start rather than accumulating, and clamps at zero.
+
+Three pieces of the insert feature are covered for the same reason, in
+`tests/unit/static_js/test_port_splice.py` and `tests/unit/static_js/test_graph_insert.py`.
+`GC.continuationPort` has assertions for every port shape the three canvases declare — the
+`["body", "done"]` loop case above especially. The splice itself is reproduced against the real
+port tables — transcribed from each canvas's own vocabulary, not loaded from the multi-thousand-
+line canvas files, which have no `module.exports` to load — to check that the original connector
+is gone, that exactly two replace it, that the source's own port is preserved rather than reset
+to `default`, that splicing twice in the same place nests correctly, and that the catalogue
+filter excludes Start, End Flow, Goto, Menu and Dropdown and offers the other nine. And
+`graph_insert.js`'s menu itself is driven directly: the choices it renders, arrow-key navigation
+that wraps, Escape and an outside press both closing it, the menu closing *before* `onChoose`
+runs, and placement staying clear of the viewport's edges.
+
+None of this reaches `flow_builder.js`, `graph_designer.js` or `integrations.js` themselves —
+`renderNode`, `renderEdge`, `init`, the palette, save and load stay exactly as unreachable as
+the rest of this section says, and a real JS test runner remains the honest follow-up for that.
+What changed is that the connector layer and the insert menu no longer have to be that follow-up
+too.
 
 ### The manual checklist
 
@@ -430,3 +588,18 @@ Run these per canvas. They are the interactions that will break.
 14. Box-select, Save, Reload — the boxes stayed put and the selection is empty, holding no ids
     that no longer exist.
 15. Escape mid-move puts everything back and marks nothing unsaved.
+16. Press the **+** on a connector — a menu opens beside it, arrow keys move through it, Escape
+    closes it, and a click anywhere else closes it without inserting anything.
+17. Insert a block into a connector — the original connector is **gone**, two replace it, and the
+    new block's properties panel is open.
+18. Insert into a connector leaving a **failure** port — the first half still leaves by `failed`,
+    not by the success port.
+19. Graph Designer: insert a **For each** — the block that used to follow is wired to `done`, not
+    to `body`, so it runs once rather than once per item.
+20. Graph Designer: press the + on a connector that leads into **Success** or **Failure** — no
+    outcome node is offered in the menu.
+21. Press the + on a connector near the **bottom or right edge** of the window — the menu stays
+    on screen rather than being clipped.
+22. Press the + and *do not move* — no bend appears in the wire. The + must not fall through to
+    the hit path underneath.
+23. Insert a block, Save, Reload — both new connectors are there and the old one is not.

@@ -32,6 +32,8 @@ from app.models.file_delivery import (
 )
 from app.models.flow_builder import ChatbotFlow
 from app.services.chatbot import chatbot_service
+from app.services.graph_designer import graph_service
+from app.services.tool_configs import tool_config_service
 
 flow_crud = CRUDQueryBuilder(ChatbotFlow)
 
@@ -363,6 +365,7 @@ async def update_flow_graph(
     # field the operator has not filled in yet.
     _validate_graph(graph_data, self_uuid=flow.uuid)
     await _assert_run_flow_targets(db, user_id, graph_data)
+    await _assert_ai_fallback_kb_sources(db, user_id, graph_data)
     return await flow_crud.update(db, flow.id, {"graph_data": graph_data})
 
 
@@ -422,6 +425,59 @@ async def _assert_run_flow_targets(db: AsyncSession, user_id: int, graph_data: d
                     "here. Publish it first."
                 ),
             )
+
+
+async def _assert_ai_fallback_kb_sources(
+    db: AsyncSession, user_id: int, graph_data: dict,
+) -> None:
+    """
+    Every pipeline and tool config an AI Fallback block's knowledge base names belongs to
+    this user — the same ownership doctrine ``_assert_run_flow_targets`` documents, and for
+    the same reason: without it a saved block could name someone else's pipeline or tool
+    config, and the runtime lookups those live sources use (``graph_runner.run_graph``,
+    ``tool_config_service.get_tool_config``) are ownership-scoped by design, so the answer
+    would simply run nothing rather than leaking another user's data — but the operator
+    deserves to be told that at save time, not discover a silently empty answer later.
+
+    Existence is checked here as a courtesy, not a hard requirement the runtime depends on:
+    ``_one_pipeline_text``/``_one_tool_config_text`` (``ai_fallback_service.py``) skip and
+    log a source that has since been deleted rather than failing the whole answer, exactly
+    the "checked at save time and again at run time, neither makes the other redundant"
+    doctrine ``_assert_run_flow_targets`` follows. No active/published gate is applied here
+    either, matching how a Run Graph node's ``graph_id`` has no save-time check at all today.
+    """
+    for node in (graph_data or {}).get("nodes") or []:
+        if node.get("type") != "ai_fallback":
+            continue
+
+        data = node.get("data") or {}
+        label = str(data.get("label") or "").strip() or "This AI Fallback block"
+
+        for raw in data.get("kb_pipeline_ids") or []:
+            try:
+                graph_uuid = uuid.UUID(str(raw))
+                await graph_service.get_graph(db, user_id, graph_uuid)
+            except (ValueError, HTTPException):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"{label}'s knowledge base names a pipeline you don't have "
+                        "access to."
+                    ),
+                ) from None
+
+        for raw in data.get("kb_tool_config_ids") or []:
+            try:
+                tool_config_uuid = uuid.UUID(str(raw))
+                await tool_config_service.get_tool_config(db, user_id, tool_config_uuid)
+            except (ValueError, HTTPException):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"{label}'s knowledge base names a tool config you don't have "
+                        "access to."
+                    ),
+                ) from None
 
 
 async def set_flow_kind(
@@ -749,13 +805,19 @@ def _validate_create_file_data(data: dict) -> None:
 
 def _validate_download_file_data(data: dict, node_by_id: dict) -> None:
     """
-    A Download File block: a Create File block on this canvas, and a legal button.
+    A Download File block: one or more Create File blocks on this canvas, and a legal
+    button.
 
-    **The named block must exist and must be a Create File block**, checked here rather
+    **Every named block must exist and must be a Create File block**, checked here rather
     than left to the runtime. A Goto node's target is checked the same way and for the same
     reason: a reference to a block that is not there is a mistake at the keyboard, and
     saying so while the operator is looking at it is worth more than a failed conversation
     later.
+
+    ``create_file_node_id`` may be a single id — the shape a flow saved before this block
+    could name more than one still carries — or a list, when several branches (a menu of
+    file formats, say) share one Download File block. Either way it becomes a list here, so
+    the rest of this function does not have to know which one it was handed.
 
     The **colour** is the security-relevant field. It reaches the widget and lands in an
     inline ``style`` attribute on a page this application does not own, so anything that is
@@ -764,26 +826,32 @@ def _validate_download_file_data(data: dict, node_by_id: dict) -> None:
     """
     from app.services.file_delivery.nodes.flow_builder_runner import COLOUR_PATTERN
 
-    source_id = str(data.get("create_file_node_id") or "").strip()
+    raw_source = data.get("create_file_node_id")
+    source_ids = (
+        [str(s).strip() for s in raw_source if str(s or "").strip()]
+        if isinstance(raw_source, list)
+        else ([str(raw_source).strip()] if str(raw_source or "").strip() else [])
+    )
 
-    if not source_id:
+    if not source_ids:
         raise HTTPException(
             status_code=400,
             detail=(
-                "Download File block must name the Create File block whose file it "
-                "hands over"
+                "Download File block must name at least one Create File block whose "
+                "file it hands over"
             ),
         )
 
-    target = node_by_id.get(source_id)
+    for source_id in source_ids:
+        target = node_by_id.get(source_id)
 
-    if target is None or target.get("type") != "create_file":
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Download File block must point at a Create File block on this canvas"
-            ),
-        )
+        if target is None or target.get("type") != "create_file":
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Download File block must point at a Create File block on this canvas"
+                ),
+            )
 
     if not data.get("show_button"):
         # No button, nothing else to check. The block still does its work — it puts the
@@ -937,6 +1005,16 @@ def _validate_ai_fallback_data(data: dict) -> None:
             status_code=400,
             detail="AI Fallback is set to use an attached LLM API but no key is selected",
         )
+
+    for field, label in (("kb_pipeline_ids", "pipelines"), ("kb_tool_config_ids", "tool configs")):
+        value = data.get(field)
+        if value is None:
+            continue
+        if not isinstance(value, list) or not all(isinstance(x, str) and x.strip() for x in value):
+            raise HTTPException(
+                status_code=400,
+                detail=f"AI Fallback's knowledge base {label} must be a list of ids",
+            )
 
 
 def _validate_edges(edges: list, node_by_id: dict, start_id: str, end_ids: set) -> None:

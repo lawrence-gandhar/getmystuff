@@ -726,6 +726,9 @@ Eight tools, eight sentences, no overlap the model has to guess at.
 
 * [DEEP_AGENTS.md](DEEP_AGENTS.md) — how a saved tool becomes something a chatbot calls, and
   how results reach the answer
+* [FLOW_BUILDER.md](FLOW_BUILDER.md) — an AI Fallback node's knowledge base can also attach a
+  tool config as a live source: its own stored query runs fresh on every visitor message and
+  is injected as plain text, never embedded into the vector store
 * [TOOL_QUERY_MODES.md](TOOL_QUERY_MODES.md) — the two modes and the shared read-only guard
 * [QUERY_JOINS.md](QUERY_JOINS.md) — join rules, shared with the Configurations page
 * [TOOL_CHAINING.md](TOOL_CHAINING.md) / [TOOL_CHAIN_ITERATION.md](TOOL_CHAIN_ITERATION.md) —
